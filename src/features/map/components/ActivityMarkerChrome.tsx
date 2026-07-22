@@ -47,7 +47,6 @@ const SHELL_RADIUS = SHELL_H / 2; // pill ends; a circle while width ≈ height
 // single primitive draws the ring at every zoom level.
 const RING_STROKE = 2.5;
 const RING_INNER_H = SHELL_H - RING_STROKE;
-const RING_RX = RING_INNER_H / 2;
 
 const GROUP_FACE_CITY = 20;
 const GROUP_FACE_STREET = 28;
@@ -129,7 +128,14 @@ export function ActivityMarkerChrome({
   const shellW = useDerivedValue(() => interpolate(progress.value, [0, 0.5, 1], widths));
   const shellX = useDerivedValue(() => CX - shellW.value / 2);
 
-  const shellStyle = useAnimatedStyle(() => ({ left: shellX.value, width: shellW.value }));
+  // Corner radius morphs squircle (compact) → capsule ends (wide). Because the
+  // height is constant, a radius of SHELL_H/2 at the wide end rounds the caps
+  // fully into a pill, while the smaller compact radius reads as a squircle.
+  const shellStyle = useAnimatedStyle(() => ({
+    left: shellX.value,
+    width: shellW.value,
+    borderRadius: interpolate(progress.value, [0, 0.5, 1], [16, 17, SHELL_RADIUS]),
+  }));
   const shadowStyle = useAnimatedStyle(() => ({
     left: CX - (shellW.value * 0.68) / 2,
     width: shellW.value * 0.68,
@@ -158,14 +164,29 @@ export function ActivityMarkerChrome({
 
   const ringTrackProps = useAnimatedProps(() => {
     const w = shellW.value - RING_STROKE;
-    return { x: CX - w / 2, width: w };
+    const rr = Math.min(
+      RING_INNER_H / 2,
+      interpolate(progress.value, [0, 0.5, 1], [16, 17, SHELL_RADIUS]) - RING_STROKE / 2,
+    );
+    return { x: CX - w / 2, width: w, rx: rr, ry: rr };
   });
   const ringCountdownProps = useAnimatedProps(() => {
     const w = shellW.value - RING_STROKE;
-    const straight = 2 * Math.max(0, w - RING_INNER_H);
-    const perimeter = straight + Math.PI * RING_INNER_H;
+    const h = RING_INNER_H;
+    const rr = Math.min(
+      h / 2,
+      interpolate(progress.value, [0, 0.5, 1], [16, 17, SHELL_RADIUS]) - RING_STROKE / 2,
+    );
+    // General rounded-rect perimeter (four corner quarter-circles = one circle).
+    const perimeter = 2 * Math.max(0, w - 2 * rr) + 2 * Math.max(0, h - 2 * rr) + 2 * Math.PI * rr;
     const remaining = Math.max(0, Math.min(1, remainingFraction ?? 0));
-    return { x: CX - w / 2, width: w, strokeDasharray: `${perimeter * remaining} ${perimeter}` };
+    return {
+      x: CX - w / 2,
+      width: w,
+      rx: rr,
+      ry: rr,
+      strokeDasharray: `${perimeter * remaining} ${perimeter}`,
+    };
   });
 
   const showTitle = Boolean(title) && (titlePriority || detailLevel !== 'city');
@@ -194,8 +215,6 @@ export function ActivityMarkerChrome({
         <AnimatedRect
           y={SHELL_TOP + RING_STROKE / 2}
           height={RING_INNER_H}
-          rx={RING_RX}
-          ry={RING_RX}
           fill="none"
           stroke={hasCountdown ? colorWithAlpha(modeStyle.color, 0.25) : modeStyle.color}
           strokeWidth={selected ? 3 : RING_STROKE}
@@ -205,8 +224,6 @@ export function ActivityMarkerChrome({
           <AnimatedRect
             y={SHELL_TOP + RING_STROKE / 2}
             height={RING_INNER_H}
-            rx={RING_RX}
-            ry={RING_RX}
             fill="none"
             stroke={modeStyle.color}
             strokeWidth={selected ? 3 : RING_STROKE}
