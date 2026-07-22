@@ -1,0 +1,62 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "heimwege": {
+      ".indexOn": ["expiresAt", "retainUntil"],
+      "$uid": {
+        ".read": "auth != null && (auth.uid === $uid || (data.child('retainUntil').val() > now && data.child('audienceUids').child(auth.uid).val() === true))",
+        ".write": "auth != null && auth.uid === $uid && data.exists() && !newData.exists()",
+        ".validate": "newData.hasChildren(['displayName', 'status', 'startedAt', 'updatedAt', 'expiresAt', 'retainUntil', 'audienceUids']) && newData.child('status').isString() && (newData.child('status').val() === 'blue' || newData.child('status').val() === 'orange' || newData.child('status').val() === 'red') && newData.child('startedAt').isNumber() && newData.child('updatedAt').isNumber() && newData.child('expiresAt').isNumber() && newData.child('expiresAt').val() <= now + 14400000 && newData.child('retainUntil').isNumber() && newData.child('retainUntil').val() >= newData.child('expiresAt').val() && newData.child('retainUntil').val() <= newData.child('expiresAt').val() + 1800000",
+        "displayName": { ".write": false },
+        "initials": { ".write": false },
+        "startedAt": { ".write": false },
+        "expiresAt": { ".write": false },
+        "retainUntil": { ".write": false },
+        "audienceUids": { ".write": false },
+        "status": {
+          ".write": false,
+          ".validate": "newData.isString() && (newData.val() === 'blue' || newData.val() === 'orange' || newData.val() === 'red')"
+        },
+        "updatedAt": {
+          ".write": "auth != null && auth.uid === $uid && data.exists() && data.parent().child('expiresAt').val() > now && ((data.parent().child('status').val() === 'blue' && newData.val() >= data.val() + 25000) || ((data.parent().child('status').val() === 'orange' || data.parent().child('status').val() === 'red') && newData.val() >= data.val() + 4000))",
+          ".validate": "newData.isNumber() && newData.val() <= now + 60000"
+        },
+        "location": {
+          ".write": "auth != null && auth.uid === $uid && data.parent().child('expiresAt').val() > now && ((data.parent().child('status').val() === 'blue' && newData.parent().child('updatedAt').val() >= data.parent().child('updatedAt').val() + 25000) || ((data.parent().child('status').val() === 'orange' || data.parent().child('status').val() === 'red') && newData.parent().child('updatedAt').val() >= data.parent().child('updatedAt').val() + 4000))",
+          ".validate": "newData.hasChildren(['lat', 'lng', 'at']) && newData.child('lat').isNumber() && newData.child('lat').val() >= -90 && newData.child('lat').val() <= 90 && newData.child('lng').isNumber() && newData.child('lng').val() >= -180 && newData.child('lng').val() <= 180 && newData.child('at').isNumber() && newData.child('at').val() <= now + 60000"
+        },
+        "checkIn": {
+          ".write": "auth != null && auth.uid === $uid && data.parent().child('expiresAt').val() > now && data.hasChildren(['requestedAt', 'dueAt']) && newData.child('requestedAt').val() === data.child('requestedAt').val() && newData.child('dueAt').val() === data.child('dueAt').val() && !data.hasChild('answeredAt') && newData.child('answeredAt').isNumber()",
+          ".validate": "newData.hasChildren(['requestedAt', 'dueAt']) && newData.child('requestedAt').isNumber() && newData.child('dueAt').isNumber() && newData.child('dueAt').val() >= newData.child('requestedAt').val() && (!newData.hasChild('answeredAt') || newData.child('answeredAt').isNumber())"
+        },
+        "companions": { ".write": false }
+      }
+    },
+    "heimwegeIndex": {
+      "$companionUid": {
+        ".read": "auth != null && auth.uid === $companionUid",
+        ".write": false
+      }
+    },
+    "journeys": {
+      ".indexOn": ["expiresAt"],
+      "$activityId": {
+        ".read": false,
+        ".write": false,
+        "members": {
+          ".read": false,
+          ".write": false,
+          "$uid": { ".validate": "newData.isBoolean()" }
+        },
+        "locations": {
+          ".read": "auth != null && root.child('journeys').child($activityId).child('expiresAt').val() > now && root.child('journeys').child($activityId).child('members').child(auth.uid).val() === true",
+          "$uid": {
+            ".write": "auth != null && auth.uid === $uid && root.child('journeys').child($activityId).child('expiresAt').val() > now && root.child('journeys').child($activityId).child('members').child(auth.uid).val() === true",
+            ".validate": "newData.hasChildren(['lat', 'lng', 'status', 'updatedAt', 'expiresAt']) && newData.child('lat').isNumber() && newData.child('lat').val() >= -90 && newData.child('lat').val() <= 90 && newData.child('lng').isNumber() && newData.child('lng').val() >= -180 && newData.child('lng').val() <= 180 && newData.child('status').isString() && (newData.child('status').val() === 'onTheWay' || newData.child('status').val() === 'arrived') && newData.child('updatedAt').isNumber() && newData.child('updatedAt').val() <= now && (!data.exists() || newData.child('updatedAt').val() >= data.child('updatedAt').val() + 20000) && newData.child('expiresAt').isNumber() && newData.child('expiresAt').val() >= now && newData.child('expiresAt').val() <= root.child('journeys').child($activityId).child('expiresAt').val()"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #ECEAE4; }
+  @keyframes tg-rise { 0%,16%{opacity:0;transform:translateY(10px)} 25%,80%{opacity:1;transform:translateY(0)} 90%,100%{opacity:0;transform:translateY(10px)} }
+  @keyframes tg-fade { 0%,12%{opacity:0} 24%,80%{opacity:1} 90%,100%{opacity:0} }
+  @keyframes tg-bar  { 0%,8%{transform:scaleX(0)} 24%{transform:scaleX(1)} 100%{transform:scaleX(1)} }
+  @keyframes tg-barfade { 0%,6%{opacity:0} 13%,22%{opacity:1} 30%,100%{opacity:0} }
+
+  @keyframes tgA-d1 { 0%{opacity:0;transform:translate(-30px,-20px) scale(.4)} 12%{opacity:1} 24%,80%{opacity:1;transform:translate(0,-15px) scale(1)} 90%,100%{opacity:0} }
+  @keyframes tgA-d2 { 0%{opacity:0;transform:translate(30px,-14px) scale(.4)} 12%{opacity:1} 24%,80%{opacity:1;transform:translate(13px,9px) scale(1)} 90%,100%{opacity:0} }
+  @keyframes tgA-d3 { 0%{opacity:0;transform:translate(-6px,32px) scale(.4)} 12%{opacity:1} 24%,80%{opacity:1;transform:translate(-13px,9px) scale(1)} 90%,100%{opacity:0} }
+  @keyframes tgA-ring { 0%,14%{opacity:0;transform:scale(.3)} 30%{opacity:1;transform:scale(1)} 80%{opacity:1} 90%,100%{opacity:0} }
+
+  @keyframes tgB-left  { 0%{opacity:0;transform:translateX(-34px)} 14%{opacity:1} 26%,80%{opacity:1;transform:translateX(-13px)} 90%,100%{opacity:0;transform:translateX(-34px)} }
+  @keyframes tgB-right { 0%{opacity:0;transform:translateX(34px)} 14%{opacity:1} 26%,80%{opacity:1;transform:translateX(13px)} 90%,100%{opacity:0;transform:translateX(34px)} }
+  @keyframes tgB-lens  { 0%,22%{opacity:0;transform:scaleY(.4)} 34%,80%{opacity:1;transform:scaleY(1)} 90%,100%{opacity:0} }
+
+  @keyframes tgC-draw  { 0%,12%{stroke-dashoffset:277} 30%{stroke-dashoffset:0} 80%{stroke-dashoffset:0} }
+  @keyframes tgC-pulse { 0%,30%{transform:scale(.5);opacity:.3} 44%{transform:scale(1);opacity:1} 60%{transform:scale(.65);opacity:.6} 78%{transform:scale(1);opacity:1} 90%,100%{opacity:0} }
+
+  @keyframes tgD-disc  { 0%,8%{opacity:1;transform:scale(.5)} 24%{opacity:0;transform:scale(1)} 100%{opacity:0} }
+  @keyframes tgD-ring  { 0%,10%{opacity:0;transform:scale(.5)} 26%{opacity:1;transform:scale(1)} 80%{opacity:1} 90%,100%{opacity:0} }
+  @keyframes tgD-left  { 0%,22%{opacity:0;transform:translateX(12px)} 36%,80%{opacity:1;transform:translateX(0)} 90%,100%{opacity:0} }
+  @keyframes tgD-right { 0%,22%{opacity:0;transform:translateX(-12px)} 36%,80%{opacity:1;transform:translateX(0)} 90%,100%{opacity:0} }
+
+  @keyframes tg-spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+  @keyframes tg-arc  { 0%,100%{opacity:.4} 45%{opacity:1} }
+
+  @keyframes tg-ofade { 0%,80%{opacity:1} 90%,100%{opacity:0} }
+  @keyframes tg-d1 { 0%,8%{stroke-dasharray:0 276.5} 24%,100%{stroke-dasharray:80 196.5} }
+  @keyframes tg-d2 { 0%,16%{stroke-dasharray:0 276.5} 32%,100%{stroke-dasharray:80 196.5} }
+  @keyframes tg-d3 { 0%,24%{stroke-dasharray:0 276.5} 40%,100%{stroke-dasharray:80 196.5} }
+
+  @keyframes r-fade { 0%,85%{opacity:1} 94%,100%{opacity:0} }
+  @keyframes r-pop { 0%,3%{opacity:0;transform:scale(0) rotate(-30deg)} 12%{opacity:1} 20%{transform:scale(1.18) rotate(8deg)} 32%{transform:scale(1) rotate(0deg)} 85%{opacity:1;transform:scale(1) rotate(0deg)} 94%,100%{opacity:0;transform:scale(1) rotate(0deg)} }
+  @keyframes r-sweep { 0%,3%{opacity:0;transform:rotate(-140deg)} 12%{opacity:1} 34%{transform:rotate(0deg)} 85%{opacity:1;transform:rotate(0deg)} 94%,100%{opacity:0} }
+  @keyframes r-draw { 0%,3%{stroke-dasharray:0 276.5} 32%{stroke-dasharray:80 196.5} 100%{stroke-dasharray:80 196.5} }
+  @keyframes r-seq1 { 0%,3%{stroke-dasharray:0 276.5} 16%,100%{stroke-dasharray:80 196.5} }
+  @keyframes r-seq2 { 0%,11%{stroke-dasharray:0 276.5} 24%,100%{stroke-dasharray:80 196.5} }
+  @keyframes r-seq3 { 0%,19%{stroke-dasharray:0 276.5} 32%,100%{stroke-dasharray:80 196.5} }
+  @keyframes r-rot1 { 0%,3%{opacity:0;transform:rotate(-150deg)} 12%{opacity:1} 30%{transform:rotate(-84deg)} 38%,85%{opacity:1;transform:rotate(-90deg)} 94%,100%{opacity:0} }
+  @keyframes r-rot2 { 0%,3%{opacity:0;transform:rotate(-30deg)} 12%{opacity:1} 30%{transform:rotate(36deg)} 38%,85%{opacity:1;transform:rotate(30deg)} 94%,100%{opacity:0} }
+  @keyframes r-rot3 { 0%,3%{opacity:0;transform:rotate(90deg)} 12%{opacity:1} 30%{transform:rotate(156deg)} 38%,85%{opacity:1;transform:rotate(150deg)} 94%,100%{opacity:0} }
+  @keyframes r-implode { 0%,3%{opacity:0;transform:scale(1.4)} 13%{opacity:1} 24%{transform:scale(0.93)} 33%{transform:scale(1)} 85%{opacity:1;transform:scale(1)} 94%,100%{opacity:0} }
+  @keyframes r-orbit1 { 0%,3%{opacity:0;transform:rotate(-310deg) translate(20px,0) scale(.04)} 10%{opacity:1} 34%{transform:rotate(-98deg) translate(20px,0) scale(1.1)} 46%,85%{opacity:.92;transform:rotate(-90deg) translate(20px,0) scale(1)} 94%,100%{opacity:0} }
+  @keyframes r-orbit2 { 0%,3%{opacity:0;transform:rotate(-190deg) translate(20px,0) scale(.04)} 10%{opacity:1} 34%{transform:rotate(22deg) translate(20px,0) scale(1.1)} 46%,85%{opacity:.92;transform:rotate(30deg) translate(20px,0) scale(1)} 94%,100%{opacity:0} }
+  @keyframes r-orbit3 { 0%,3%{opacity:0;transform:rotate(-70deg) translate(20px,0) scale(.04)} 10%{opacity:1} 34%{transform:rotate(142deg) translate(20px,0) scale(1.1)} 46%,85%{opacity:.92;transform:rotate(150deg) translate(20px,0) scale(1)} 94%,100%{opacity:0} }
+  @keyframes tgE-orb1 { 0%,3%{opacity:0;transform:rotate(-310deg) translate(20px,0) scale(.04)} 8%{opacity:1} 30%{transform:rotate(-98deg) translate(20px,0) scale(1.1)} 40%,80%{opacity:.92;transform:rotate(-90deg) translate(20px,0) scale(1)} 90%,100%{opacity:0} }
+  @keyframes tgE-orb2 { 0%,3%{opacity:0;transform:rotate(-190deg) translate(20px,0) scale(.04)} 8%{opacity:1} 30%{transform:rotate(22deg) translate(20px,0) scale(1.1)} 40%,80%{opacity:.92;transform:rotate(30deg) translate(20px,0) scale(1)} 90%,100%{opacity:0} }
+  @keyframes tgE-orb3 { 0%,3%{opacity:0;transform:rotate(-70deg) translate(20px,0) scale(.04)} 8%{opacity:1} 30%{transform:rotate(142deg) translate(20px,0) scale(1.1)} 40%,80%{opacity:.92;transform:rotate(150deg) translate(20px,0) scale(1)} 90%,100%{opacity:0} }
+  @keyframes tgF-rot1 { 0%,3%{opacity:0;transform:rotate(-150deg)} 14%{opacity:1} 30%{transform:rotate(-84deg)} 40%,80%{opacity:1;transform:rotate(-90deg)} 90%,100%{opacity:0} }
+  @keyframes tgF-rot2 { 0%,3%{opacity:0;transform:rotate(-30deg)} 14%{opacity:1} 30%{transform:rotate(36deg)} 40%,80%{opacity:1;transform:rotate(30deg)} 90%,100%{opacity:0} }
+  @keyframes tgF-rot3 { 0%,3%{opacity:0;transform:rotate(90deg)} 14%{opacity:1} 30%{transform:rotate(156deg)} 40%,80%{opacity:1;transform:rotate(150deg)} 90%,100%{opacity:0} }
+  @keyframes tgP-dot { 0%,36%{opacity:0;transform:translateY(-42px) rotate(-30deg) scale(.4)} 42%{opacity:1} 46%{transform:translateY(7px) rotate(8deg) scale(1.15)} 50%{transform:translateY(-3px) rotate(-3deg) scale(.95)} 54%,80%{opacity:1;transform:translateY(0) rotate(0deg) scale(1)} 90%,100%{opacity:0} }
+  @keyframes tgP-dot-fast { 0%,20%{opacity:0;transform:translateY(-42px) rotate(-30deg) scale(.4)} 26%{opacity:1} 32%{transform:translateY(7px) rotate(8deg) scale(1.15)} 36%{transform:translateY(-3px) rotate(-3deg) scale(.95)} 40%,80%{opacity:1;transform:translateY(0) rotate(0deg) scale(1)} 90%,100%{opacity:0} }
+</style>
+</helmet>
+
+<div style="padding:48px 56px 70px;font-family:'Hanken Grotesk',sans-serif;">
+
+  <header style="margin-bottom:40px;max-width:760px;">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;">
+      <svg viewBox="0 0 110 110" width="30" height="30"><circle cx="55" cy="55" r="44" fill="none" stroke-width="11" stroke-linecap="round" stroke-dasharray="80 196.5" transform="rotate(-90 55 55)" stroke="#6E8BF7"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="11" stroke-linecap="round" stroke-dasharray="80 196.5" transform="rotate(30 55 55)" stroke="#E0A23E"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="11" stroke-linecap="round" stroke-dasharray="80 196.5" transform="rotate(150 55 55)" stroke="#41C08D"></circle></svg>
+      <span style="font-family:'Schibsted Grotesk',sans-serif;font-weight:600;font-size:22px;letter-spacing:-0.02em;color:#14161A;">t<span style="color:#6E8BF7;">o</span>gether</span>
+    </div>
+    <h1 style="font-family:'Schibsted Grotesk',sans-serif;font-weight:600;font-size:34px;line-height:1.1;letter-spacing:-0.03em;color:#14161A;margin:0 0 12px;">Brand &amp; Launch — Explorationen</h1>
+    <p style="font-size:15px;line-height:1.55;color:#5b5e66;margin:0;">Vier Logo-Richtungen für Together — jede als fertiger animierter Login-/Loading-Screen, mit Lockup (hell&nbsp;/&nbsp;dunkel) und SVG-Export. <span style="color:#9a9ca2;">Clean · Minimal · Premium · Schibsted Grotesk / Hanken Grotesk.</span></p>
+    <div style="display:flex;gap:8px;margin-top:18px;flex-wrap:wrap;">
+      <span style="font-size:12px;color:#7a7d84;background:#fff;border:1px solid #dcdad3;border-radius:999px;padding:6px 12px;">Klick auf eine Variante zum Referenzieren: 1a · 1b · 1c · 1d</span>
+      <span style="font-size:12px;color:#7a7d84;background:#fff;border:1px solid #dcdad3;border-radius:999px;padding:6px 12px;">Animation läuft als Loop</span>
+    </div>
+  </header>
+
+  <!-- ============ TURN 4 — MORPH-O VERGLEICH ============ -->
+  <section style="margin-bottom:46px;">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+      <span style="font-family:'Schibsted Grotesk',sans-serif;font-weight:700;font-size:13px;color:#fff;background:#6E8BF7;border-radius:7px;padding:3px 9px;">4</span>
+      <span style="font-weight:600;font-size:16px;color:#14161A;">Morph-o Vergleich — aktuell vs. Kreise</span>
+    </div>
+    <p style="font-size:13px;color:#5b5e66;margin:0 0 22px;">Gleiche Wortmarke, gleiches Timing (6s) — links dein bestehender Punkt→Ring-Build, rechts die neue Variante mit drei ineinander drehenden Kreisen, jetzt mit kleinerem Build-Radius, damit sie sich sauber ins „o" der Wortmarke einfügt. ID: <a href="#4a">4a</a> · <a href="#4b">4b</a> · <a href="#4c">4c</a></p>
+
+    <div style="display:flex;gap:18px;flex-wrap:wrap;">
+
+      <div id="4a" style="flex:1;min-width:320px;background:#0E1116;border-radius:24px;padding:38px 34px;">
+        <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#6b6e76;margin-bottom:8px;">4a · Aktuell — Assemble (3d)</div>
+        <div style="display:flex;align-items:center;justify-content:center;padding:34px 0;">
+          <div style="display:flex;align-items:center;justify-content:center;font-family:'Schibsted Grotesk',sans-serif;font-weight:600;font-size:58px;letter-spacing:-0.03em;color:#F4F5F7;">
+            <span style="animation:tgD-left 6s infinite both;">t</span>
+            <span style="position:relative;display:inline-block;width:54px;height:54px;margin:0 3px;">
+              <svg viewBox="0 0 110 110" width="54" height="54" style="display:block;overflow:visible;"><circle cx="55" cy="55" r="44" fill="none" stroke-width="10" stroke-linecap="round" stroke-dasharray="80 196.5" stroke="#6E8BF7" style="transform-box:fill-box;transform-origin:center;animation:tgF-rot1 6s infinite both;"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="10" stroke-linecap="round" stroke-dasharray="80 196.5" stroke="#E0A23E" style="transform-box:fill-box;transform-origin:center;animation:tgF-rot2 6s infinite both;"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="10" stroke-linecap="round" stroke-dasharray="80 196.5" stroke="#41C08D" style="transform-box:fill-box;transform-origin:center;animation:tgF-rot3 6s infinite both;"></circle></svg>
+            </span>
+            <span style="animation:tgD-right 6s infinite both;">gether</span>
+          </div>
+        </div>
+        <div style="font-size:12px;color:#6b6e76;text-align:center;">Ring baut sich aus drei Segmenten auf, die in Position drehen</div>
+      </div>
+
+      <div id="4b" style="flex:1;min-width:320px;background:#0E1116;border-radius:24px;padding:38px 34px;">
+        <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#6b6e76;margin-bottom:8px;">4b · Neu — drei Kreise, kompakter Radius</div>
+        <div style="display:flex;align-items:center;justify-content:center;padding:34px 0;">
+          <div style="display:flex;align-items:center;justify-content:center;font-family:'Schibsted Grotesk',sans-serif;font-weight:600;font-size:58px;letter-spacing:-0.03em;color:#F4F5F7;">
+            <span style="animation:tgD-left 6s infinite both;">t</span>
+            <span style="position:relative;display:inline-block;width:54px;height:54px;margin:0 3px;">
+              <svg viewBox="0 0 110 110" width="54" height="54" style="display:block;overflow:visible;"><g transform="translate(55 55)"><circle cx="0" cy="0" r="30" fill="#6E8BF7" style="mix-blend-mode:screen;transform-box:fill-box;transform-origin:center;animation:tgE-orb1 6s infinite both;"></circle><circle cx="0" cy="0" r="30" fill="#E0A23E" style="mix-blend-mode:screen;transform-box:fill-box;transform-origin:center;animation:tgE-orb2 6s infinite both;"></circle><circle cx="0" cy="0" r="30" fill="#41C08D" style="mix-blend-mode:screen;transform-box:fill-box;transform-origin:center;animation:tgE-orb3 6s infinite both;"></circle></g></svg>
+            </span>
+            <span style="animation:tgD-right 6s infinite both;">gether</span><span style="display:inline-block;color:#F4F5F7;animation:tgP-dot 6s infinite both;transform-origin:center;">.</span>
+          </div>
+        </div>
+        <div style="font-size:12px;color:#6b6e76;text-align:center;">Drei volle Kreise drehen aus dem Nichts ineinander, mischen sich per Screen-Blend — Punkt setzt den Schlusspunkt</div>
+      </div>
+
+      <div id="4c" style="flex:1;min-width:320px;background:#0E1116;border-radius:24px;padding:38px 34px;">
+        <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#6b6e76;margin-bottom:8px;">4c · Wie 4b — Punkt fällt früher</div>
+        <div style="display:flex;align-items:center;justify-content:center;padding:34px 0;">
+          <div style="display:flex;align-items:center;justify-content:center;font-family:'Schibsted Grotesk',sans-serif;font-weight:600;font-size:58px;letter-spacing:-0.03em;color:#F4F5F7;">
+            <span style="animation:tgD-left 6s infinite both;">t</span>
+            <span style="position:relative;display:inline-block;width:54px;height:54px;margin:0 3px;">
+              <svg viewBox="0 0 110 110" width="54" height="54" style="display:block;overflow:visible;"><g transform="translate(55 55)"><circle cx="0" cy="0" r="30" fill="#6E8BF7" style="mix-blend-mode:screen;transform-box:fill-box;transform-origin:center;animation:tgE-orb1 6s infinite both;"></circle><circle cx="0" cy="0" r="30" fill="#E0A23E" style="mix-blend-mode:screen;transform-box:fill-box;transform-origin:center;animation:tgE-orb2 6s infinite both;"></circle><circle cx="0" cy="0" r="30" fill="#41C08D" style="mix-blend-mode:screen;transform-box:fill-box;transform-origin:center;animation:tgE-orb3 6s infinite both;"></circle></g></svg>
+            </span>
+            <span style="animation:tgD-right 6s infinite both;">gether</span><span style="display:inline-block;color:#F4F5F7;animation:tgP-dot-fast 6s infinite both;transform-origin:center;">.</span>
+          </div>
+        </div>
+        <div style="font-size:12px;color:#6b6e76;text-align:center;">1:1 wie 4b — nur der Punkt fällt früher rein</div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ TURN 3 — RING-ANIMATIONEN ============ -->
+  <section style="margin-bottom:46px;">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+      <span style="font-family:'Schibsted Grotesk',sans-serif;font-weight:700;font-size:13px;color:#fff;background:#6E8BF7;border-radius:7px;padding:3px 9px;">3</span>
+      <span style="font-weight:600;font-size:16px;color:#14161A;">Ring-Build-up — Alternativen</span>
+    </div>
+    <p style="font-size:13px;color:#5b5e66;margin:0 0 22px;">Schneller, ohne Punkt in der Mitte. Jeder baut sich einmal auf und steht dann still. Sag mir die ID (3a–3e).</p>
+
+    <div style="display:flex;gap:18px;flex-wrap:wrap;">
+
+      <div id="3a" style="width:196px;">
+        <div style="background:#0E1116;border-radius:20px;height:172px;display:flex;align-items:center;justify-content:center;">
+          <svg viewBox="0 0 110 110" width="116" height="116" style="display:block;transform-origin:center;animation:r-pop 2.2s infinite both;"><circle cx="55" cy="55" r="44" fill="none" stroke-width="9" stroke-linecap="round" stroke-dasharray="80 196.5" transform="rotate(-90 55 55)" stroke="#6E8BF7"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="9" stroke-linecap="round" stroke-dasharray="80 196.5" transform="rotate(30 55 55)" stroke="#E0A23E"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="9" stroke-linecap="round" stroke-dasharray="80 196.5" transform="rotate(150 55 55)" stroke="#41C08D"></circle></svg>
+        </div>
+        <div style="display:flex;align-items:baseline;gap:8px;margin-top:12px;"><span style="font-family:'Schibsted Grotesk',sans-serif;font-weight:700;font-size:12px;color:#fff;background:#14161A;border-radius:6px;padding:2px 7px;">3a</span><span style="font-weight:600;font-size:14px;color:#14161A;">Spring</span></div>
+        <div style="font-size:12px;color:#9a9ca2;margin-top:4px;">Federnder Pop aus dem Nichts</div>
+      </div>
+
+      <div id="3b" style="width:196px;">
+        <div style="background:#0E1116;border-radius:20px;height:172px;display:flex;align-items:center;justify-content:center;">
+          <svg viewBox="0 0 110 110" width="116" height="116" style="display:block;transform-origin:center;animation:r-sweep 2.2s infinite both;"><circle cx="55" cy="55" r="44" fill="none" stroke-width="9" stroke-linecap="round" stroke-dasharray="0 276.5" transform="rotate(-90 55 55)" stroke="#6E8BF7" style="animation:r-draw 2.2s infinite both;"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="9" stroke-linecap="round" stroke-dasharray="0 276.5" transform="rotate(30 55 55)" stroke="#E0A23E" style="animation:r-draw 2.2s infinite both;"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="9" stroke-linecap="round" stroke-dasharray="0 276.5" transform="rotate(150 55 55)" stroke="#41C08D" style="animation:r-draw 2.2s infinite both;"></circle></svg>
+        </div>
+        <div style="display:flex;align-items:baseline;gap:8px;margin-top:12px;"><span style="font-family:'Schibsted Grotesk',sans-serif;font-weight:700;font-size:12px;color:#fff;background:#14161A;border-radius:6px;padding:2px 7px;">3b</span><span style="font-weight:600;font-size:14px;color:#14161A;">Sweep</span></div>
+        <div style="font-size:12px;color:#9a9ca2;margin-top:4px;">Drehend reingewischt</div>
+      </div>
+
+      <div id="3c" style="width:196px;">
+        <div style="background:#0E1116;border-radius:20px;height:172px;display:flex;align-items:center;justify-content:center;">
+          <svg viewBox="0 0 110 110" width="116" height="116" style="display:block;animation:r-fade 2.2s infinite both;"><circle cx="55" cy="55" r="44" fill="none" stroke-width="9" stroke-linecap="round" stroke-dasharray="0 276.5" transform="rotate(-90 55 55)" stroke="#6E8BF7" style="animation:r-seq1 2.2s infinite both;"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="9" stroke-linecap="round" stroke-dasharray="0 276.5" transform="rotate(30 55 55)" stroke="#E0A23E" style="animation:r-seq2 2.2s infinite both;"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="9" stroke-linecap="round" stroke-dasharray="0 276.5" transform="rotate(150 55 55)" stroke="#41C08D" style="animation:r-seq3 2.2s infinite both;"></circle></svg>
+        </div>
+        <div style="display:flex;align-items:baseline;gap:8px;margin-top:12px;"><span style="font-family:'Schibsted Grotesk',sans-serif;font-weight:700;font-size:12px;color:#fff;background:#14161A;border-radius:6px;padding:2px 7px;">3c</span><span style="font-weight:600;font-size:14px;color:#14161A;">Sequenz</span></div>
+        <div style="font-size:12px;color:#9a9ca2;margin-top:4px;">Segmente nacheinander, schnell</div>
+      </div>
+
+      <div id="3d" style="width:196px;">
+        <div style="background:#0E1116;border-radius:20px;height:172px;display:flex;align-items:center;justify-content:center;">
+          <svg viewBox="0 0 110 110" width="116" height="116" style="display:block;overflow:visible;">
+            <circle cx="55" cy="55" r="44" fill="none" stroke-width="9" stroke-linecap="round" stroke-dasharray="80 196.5" stroke="rgba(110,139,247,.62)" style="transform-box:fill-box;transform-origin:center;animation:r-rot1 2.2s infinite both;filter:blur(16px);"></circle>
+            <circle cx="55" cy="55" r="44" fill="none" stroke-width="9" stroke-linecap="round" stroke-dasharray="80 196.5" stroke="rgba(224,162,62,.62)" style="transform-box:fill-box;transform-origin:center;animation:r-rot2 2.2s infinite both;filter:blur(16px);"></circle>
+            <circle cx="55" cy="55" r="44" fill="none" stroke-width="9" stroke-linecap="round" stroke-dasharray="80 196.5" stroke="rgba(65,192,141,.62)" style="transform-box:fill-box;transform-origin:center;animation:r-rot3 2.2s infinite both;filter:blur(16px);"></circle>
+            <circle cx="55" cy="55" r="38.5" fill="#0E1116"></circle>
+            <circle cx="55" cy="55" r="44" fill="none" stroke-width="9" stroke-linecap="round" stroke-dasharray="80 196.5" stroke="#6E8BF7" style="transform-box:fill-box;transform-origin:center;animation:r-rot1 2.2s infinite both;"></circle>
+            <circle cx="55" cy="55" r="44" fill="none" stroke-width="9" stroke-linecap="round" stroke-dasharray="80 196.5" stroke="#E0A23E" style="transform-box:fill-box;transform-origin:center;animation:r-rot2 2.2s infinite both;"></circle>
+            <circle cx="55" cy="55" r="44" fill="none" stroke-width="9" stroke-linecap="round" stroke-dasharray="80 196.5" stroke="#41C08D" style="transform-box:fill-box;transform-origin:center;animation:r-rot3 2.2s infinite both;"></circle>
+          </svg>
+        </div>
+        <div style="display:flex;align-items:baseline;gap:8px;margin-top:12px;"><span style="font-family:'Schibsted Grotesk',sans-serif;font-weight:700;font-size:12px;color:#fff;background:#14161A;border-radius:6px;padding:2px 7px;">3d</span><span style="font-weight:600;font-size:14px;color:#14161A;">Assemble</span></div>
+        <div style="font-size:12px;color:#9a9ca2;margin-top:4px;">Segmente drehen an ihren Platz</div>
+      </div>
+
+      <div id="3e" style="width:196px;">
+        <div style="background:#0E1116;border-radius:20px;height:172px;display:flex;align-items:center;justify-content:center;">
+          <svg viewBox="0 0 110 110" width="116" height="116" style="display:block;overflow:visible;"><g transform="translate(55 55)"><circle cx="0" cy="0" r="30" fill="#6E8BF7" style="mix-blend-mode:screen;transform-box:fill-box;transform-origin:center;animation:r-orbit1 2.2s infinite both;"></circle><circle cx="0" cy="0" r="30" fill="#E0A23E" style="mix-blend-mode:screen;transform-box:fill-box;transform-origin:center;animation:r-orbit2 2.2s infinite both;"></circle><circle cx="0" cy="0" r="30" fill="#41C08D" style="mix-blend-mode:screen;transform-box:fill-box;transform-origin:center;animation:r-orbit3 2.2s infinite both;"></circle></g></svg>
+        </div>
+        <div style="display:flex;align-items:baseline;gap:8px;margin-top:12px;"><span style="font-family:'Schibsted Grotesk',sans-serif;font-weight:700;font-size:12px;color:#fff;background:#14161A;border-radius:6px;padding:2px 7px;">3e</span><span style="font-weight:600;font-size:14px;color:#14161A;">Farbpalette</span></div>
+        <div style="font-size:12px;color:#9a9ca2;margin-top:4px;">Drei eigenständige Kreise drehen ineinander</div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============ TURN 2 — MORPH AUSGEARBEITET ============ -->
+  <section style="margin-bottom:46px;">
+    <div id="2a" data-option="2a" style="--ac:#6E8BF7;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">
+        <span style="font-family:'Schibsted Grotesk',sans-serif;font-weight:700;font-size:13px;color:#fff;background:#6E8BF7;border-radius:7px;padding:3px 9px;">2a</span>
+        <span style="font-weight:600;font-size:16px;color:#14161A;">Morph o → together — ausgearbeitet</span>
+        <span style="font-size:12px;color:#9a9ca2;">deine Wahl</span>
+      </div>
+
+      <div style="display:flex;gap:26px;align-items:stretch;flex-wrap:wrap;">
+
+        <!-- Phone -->
+        <div style="width:280px;border-radius:46px;background:#1a1c21;padding:9px;box-shadow:0 24px 50px -18px rgba(20,22,26,.5);flex:0 0 auto;">
+          <div style="position:relative;width:262px;height:540px;border-radius:38px;background:#0E1116;overflow:hidden;display:flex;flex-direction:column;padding:30px 22px;">
+            <div style="position:absolute;top:14px;left:50%;transform:translateX(-50%);width:104px;height:22px;border-radius:0 0 14px 14px;background:#1a1c21;"></div>
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;">
+              <div style="display:flex;align-items:center;justify-content:center;font-family:'Schibsted Grotesk',sans-serif;font-weight:600;font-size:32px;letter-spacing:-0.03em;color:#F4F5F7;">
+                <span style="animation:tgD-left 6s infinite both;">t</span>
+                <span style="position:relative;display:inline-block;width:30px;height:30px;margin:0 2px;">
+                  <span style="position:absolute;inset:0;border-radius:50%;background:#E8EAEE;animation:tgD-disc 6s infinite both;"></span>
+                  <span style="position:absolute;inset:0;animation:tg-ofade 6s infinite both;"><svg viewBox="0 0 110 110" width="30" height="30" style="display:block;"><circle cx="55" cy="55" r="44" fill="none" stroke-width="11" stroke-linecap="round" stroke-dasharray="0 276.5" transform="rotate(-90 55 55)" stroke="#6E8BF7" style="animation:tg-d1 6s infinite both;"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="11" stroke-linecap="round" stroke-dasharray="0 276.5" transform="rotate(30 55 55)" stroke="#E0A23E" style="animation:tg-d2 6s infinite both;"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="11" stroke-linecap="round" stroke-dasharray="0 276.5" transform="rotate(150 55 55)" stroke="#41C08D" style="animation:tg-d3 6s infinite both;"></circle></svg></span>
+                </span>
+                <span style="animation:tgD-right 6s infinite both;">gether</span>
+              </div>
+              <div style="font-size:13px;color:#80838b;animation:tg-rise 6s infinite both;animation-delay:.05s;">Wer ist gerade offen?</div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:11px;">
+              <div style="animation:tg-barfade 6s infinite both;">
+                <div style="height:4px;border-radius:2px;background:rgba(255,255,255,.09);overflow:hidden;"><div style="height:100%;background:var(--ac);border-radius:2px;transform-origin:left;animation:tg-bar 6s infinite both;"></div></div>
+              </div>
+              <div style="height:46px;border-radius:23px;background:#F4F5F7;color:#14161A;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:14px;animation:tg-rise 6s infinite both;animation-delay:.05s;">Mit Apple fortfahren</div>
+              <div style="height:46px;border-radius:23px;border:1px solid rgba(255,255,255,.15);color:#E8EAEE;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:14px;animation:tg-rise 6s infinite both;animation-delay:.12s;">Mit Google fortfahren</div>
+              <div style="text-align:center;font-size:11px;color:rgba(255,255,255,.36);margin-top:2px;animation:tg-rise 6s infinite both;animation-delay:.18s;">Mit Fortfahren stimmst du den Nutzungsbedingungen zu</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Animation hero -->
+        <div style="flex:1;min-width:320px;background:#0E1116;border-radius:24px;padding:38px 34px;display:flex;flex-direction:column;justify-content:space-between;">
+          <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#6b6e76;">Die Bewegung</div>
+          <div style="display:flex;align-items:center;justify-content:center;flex:1;padding:30px 0;">
+            <div style="display:flex;align-items:center;justify-content:center;font-family:'Schibsted Grotesk',sans-serif;font-weight:600;font-size:58px;letter-spacing:-0.03em;color:#F4F5F7;">
+              <span style="animation:tgD-left 6s infinite both;">t</span>
+              <span style="position:relative;display:inline-block;width:54px;height:54px;margin:0 3px;">
+                <span style="position:absolute;inset:0;border-radius:50%;background:#E8EAEE;animation:tgD-disc 6s infinite both;"></span>
+                <span style="position:absolute;inset:0;animation:tg-ofade 6s infinite both;"><svg viewBox="0 0 110 110" width="54" height="54" style="display:block;"><circle cx="55" cy="55" r="44" fill="none" stroke-width="10" stroke-linecap="round" stroke-dasharray="0 276.5" transform="rotate(-90 55 55)" stroke="#6E8BF7" style="animation:tg-d1 6s infinite both;"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="10" stroke-linecap="round" stroke-dasharray="0 276.5" transform="rotate(30 55 55)" stroke="#E0A23E" style="animation:tg-d2 6s infinite both;"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="10" stroke-linecap="round" stroke-dasharray="0 276.5" transform="rotate(150 55 55)" stroke="#41C08D" style="animation:tg-d3 6s infinite both;"></circle></svg></span>
+              </span>
+              <span style="animation:tgD-right 6s infinite both;">gether</span>
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;">
+            <div style="flex:1;border-top:1px solid rgba(255,255,255,.1);padding-top:10px;"><div style="color:#F4F5F7;font-size:13px;font-weight:600;">Punkt</div><div style="color:#6b6e76;font-size:12px;">ein Mensch</div></div>
+            <div style="flex:1;border-top:1px solid rgba(255,255,255,.1);padding-top:10px;"><div style="color:#F4F5F7;font-size:13px;font-weight:600;">Ring</div><div style="color:#6b6e76;font-size:12px;">der Kreis öffnet sich</div></div>
+            <div style="flex:1;border-top:1px solid rgba(255,255,255,.1);padding-top:10px;"><div style="color:#F4F5F7;font-size:13px;font-weight:600;">Schriftzug</div><div style="color:#6b6e76;font-size:12px;">together</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:26px;align-items:stretch;flex-wrap:wrap;margin-top:26px;">
+
+        <!-- App icon set -->
+        <div style="flex:1;min-width:340px;background:#fff;border:1px solid #e3e1da;border-radius:24px;padding:30px 32px;">
+          <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#9a9ca2;margin-bottom:24px;">App-Icon</div>
+          <div style="display:flex;gap:22px;align-items:flex-end;flex-wrap:wrap;">
+            <div style="text-align:center;">
+              <div style="width:104px;height:104px;border-radius:24px;background:#0E1116;display:flex;align-items:center;justify-content:center;box-shadow:0 12px 24px -10px rgba(20,22,26,.4);">
+                <svg viewBox="0 0 110 110" width="52" height="52"><circle cx="55" cy="55" r="44" fill="none" stroke-width="11" stroke-linecap="round" stroke-dasharray="80 196.5" transform="rotate(-90 55 55)" stroke="#6E8BF7"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="11" stroke-linecap="round" stroke-dasharray="80 196.5" transform="rotate(30 55 55)" stroke="#E0A23E"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="11" stroke-linecap="round" stroke-dasharray="80 196.5" transform="rotate(150 55 55)" stroke="#41C08D"></circle></svg>
+              </div>
+              <div style="font-size:11px;color:#9a9ca2;margin-top:10px;">Dunkel · empfohlen</div>
+            </div>
+            <div style="text-align:center;">
+              <div style="width:104px;height:104px;border-radius:24px;background:#161A2B;display:flex;align-items:center;justify-content:center;box-shadow:0 12px 24px -10px rgba(20,22,26,.4);">
+                <svg viewBox="0 0 110 110" width="52" height="52"><circle cx="55" cy="55" r="44" fill="none" stroke-width="11" stroke-linecap="round" stroke-dasharray="80 196.5" transform="rotate(-90 55 55)" stroke="#6E8BF7"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="11" stroke-linecap="round" stroke-dasharray="80 196.5" transform="rotate(30 55 55)" stroke="#E0A23E"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="11" stroke-linecap="round" stroke-dasharray="80 196.5" transform="rotate(150 55 55)" stroke="#41C08D"></circle></svg>
+              </div>
+              <div style="font-size:11px;color:#9a9ca2;margin-top:10px;">Tint</div>
+            </div>
+            <div style="text-align:center;">
+              <div style="width:104px;height:104px;border-radius:24px;background:#F4F5F7;border:1px solid #e3e1da;display:flex;align-items:center;justify-content:center;">
+                <svg viewBox="0 0 110 110" width="52" height="52"><circle cx="55" cy="55" r="44" fill="none" stroke-width="11" stroke-linecap="round" stroke-dasharray="80 196.5" transform="rotate(-90 55 55)" stroke="#6E8BF7"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="11" stroke-linecap="round" stroke-dasharray="80 196.5" transform="rotate(30 55 55)" stroke="#E0A23E"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="11" stroke-linecap="round" stroke-dasharray="80 196.5" transform="rotate(150 55 55)" stroke="#41C08D"></circle></svg>
+              </div>
+              <div style="font-size:11px;color:#9a9ca2;margin-top:10px;">Hell</div>
+            </div>
+            <div style="display:flex;gap:12px;align-items:center;margin-left:6px;">
+              <div style="width:60px;height:60px;border-radius:14px;background:#0E1116;display:flex;align-items:center;justify-content:center;"><svg viewBox="0 0 110 110" width="30" height="30"><circle cx="55" cy="55" r="44" fill="none" stroke-width="13" stroke-linecap="round" stroke-dasharray="80 196.5" transform="rotate(-90 55 55)" stroke="#6E8BF7"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="13" stroke-linecap="round" stroke-dasharray="80 196.5" transform="rotate(30 55 55)" stroke="#E0A23E"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="13" stroke-linecap="round" stroke-dasharray="80 196.5" transform="rotate(150 55 55)" stroke="#41C08D"></circle></svg></div>
+              <div style="width:40px;height:40px;border-radius:10px;background:#0E1116;display:flex;align-items:center;justify-content:center;"><svg viewBox="0 0 110 110" width="20" height="20"><circle cx="55" cy="55" r="44" fill="none" stroke-width="15" stroke-linecap="round" stroke-dasharray="80 196.5" transform="rotate(-90 55 55)" stroke="#6E8BF7"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="15" stroke-linecap="round" stroke-dasharray="80 196.5" transform="rotate(30 55 55)" stroke="#E0A23E"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="15" stroke-linecap="round" stroke-dasharray="80 196.5" transform="rotate(150 55 55)" stroke="#41C08D"></circle></svg></div>
+              <div style="width:28px;height:28px;border-radius:7px;background:#0E1116;display:flex;align-items:center;justify-content:center;"><div style="width:14px;height:14px;border-radius:50%;border:2.5px solid #6E8BF7;"></div></div>
+            </div>
+          </div>
+          <p style="font-size:13px;line-height:1.5;color:#5b5e66;margin:24px 2px 0;">Das „o" ist das Marken-Atom — als Icon bleibt der offene Ring auch winzig erkennbar.</p>
+        </div>
+
+        <!-- Wordmark & color spec -->
+        <div style="flex:1;min-width:340px;background:#fff;border:1px solid #e3e1da;border-radius:24px;padding:30px 32px;">
+          <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#9a9ca2;margin-bottom:24px;">Wortmarke &amp; Farben</div>
+          <div style="display:flex;flex-direction:column;gap:18px;">
+            <div style="display:flex;align-items:center;font-family:'Schibsted Grotesk',sans-serif;font-weight:600;font-size:40px;letter-spacing:-0.03em;color:#14161A;line-height:1;">t<span style="display:inline-flex;width:30px;height:30px;margin:0 1px;"><svg viewBox="0 0 110 110" width="30" height="30"><circle cx="55" cy="55" r="44" fill="none" stroke-width="11" stroke-linecap="round" stroke-dasharray="80 196.5" transform="rotate(-90 55 55)" stroke="#6E8BF7"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="11" stroke-linecap="round" stroke-dasharray="80 196.5" transform="rotate(30 55 55)" stroke="#E0A23E"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="11" stroke-linecap="round" stroke-dasharray="80 196.5" transform="rotate(150 55 55)" stroke="#41C08D"></circle></svg></span>gether</div>
+            <div style="font-family:'Schibsted Grotesk',sans-serif;font-weight:600;font-size:24px;letter-spacing:-0.03em;color:#14161A;line-height:1;">t<span style="color:#6E8BF7;">o</span>gether</div>
+            <div style="font-family:'Schibsted Grotesk',sans-serif;font-weight:600;font-size:15px;letter-spacing:-0.02em;color:#14161A;line-height:1;">t<span style="color:#6E8BF7;">o</span>gether</div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:26px;">
+            <div style="flex:1;"><div style="height:44px;border-radius:10px;background:#6E8BF7;"></div><div style="font-size:11px;color:#5b5e66;margin-top:7px;">Open</div><div style="font-size:10px;color:#9a9ca2;font-family:'Hanken Grotesk';">#6E8BF7</div></div>
+            <div style="flex:1;"><div style="height:44px;border-radius:10px;background:#E0A23E;"></div><div style="font-size:11px;color:#5b5e66;margin-top:7px;">Soon</div><div style="font-size:10px;color:#9a9ca2;">#E0A23E</div></div>
+            <div style="flex:1;"><div style="height:44px;border-radius:10px;background:#41C08D;"></div><div style="font-size:11px;color:#5b5e66;margin-top:7px;">Now</div><div style="font-size:10px;color:#9a9ca2;">#41C08D</div></div>
+            <div style="flex:1;"><div style="height:44px;border-radius:10px;background:#0E1116;"></div><div style="font-size:11px;color:#5b5e66;margin-top:7px;">Ink</div><div style="font-size:10px;color:#9a9ca2;">#0E1116</div></div>
+            <div style="flex:1;"><div style="height:44px;border-radius:10px;background:#F4F5F7;border:1px solid #e3e1da;"></div><div style="font-size:11px;color:#5b5e66;margin-top:7px;">Paper</div><div style="font-size:10px;color:#9a9ca2;">#F4F5F7</div></div>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:26px;background:#0E1116;border-radius:24px;padding:32px 34px;display:flex;gap:38px;align-items:center;flex-wrap:wrap;">
+        <div style="display:flex;align-items:center;justify-content:center;width:120px;height:120px;flex:0 0 auto;">
+          <svg viewBox="0 0 110 110" width="110" height="110" style="display:block;"><circle cx="55" cy="55" r="44" fill="none" stroke-width="9" stroke-linecap="round" stroke-dasharray="0 276.5" transform="rotate(-90 55 55)" stroke="#6E8BF7" style="animation:tg-d1 6s 1 both;"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="9" stroke-linecap="round" stroke-dasharray="0 276.5" transform="rotate(30 55 55)" stroke="#E0A23E" style="animation:tg-d2 6s 1 both;"></circle><circle cx="55" cy="55" r="44" fill="none" stroke-width="9" stroke-linecap="round" stroke-dasharray="0 276.5" transform="rotate(150 55 55)" stroke="#41C08D" style="animation:tg-d3 6s 1 both;"></circle></svg>
+        </div>
+        <div style="flex:1;min-width:240px;">
+          <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#6b6e76;margin-bottom:16px;">Der Ring ist der Status</div>
+          <div style="display:flex;flex-direction:column;gap:12px;">
+            <div style="display:flex;align-items:center;gap:12px;"><span style="width:11px;height:11px;border-radius:50%;background:#6E8BF7;flex:0 0 auto;"></span><span style="color:#F4F5F7;font-weight:600;font-size:15px;width:54px;">Open</span><span style="color:#80838b;font-size:14px;">offen für Vorschläge</span></div>
+            <div style="display:flex;align-items:center;gap:12px;"><span style="width:11px;height:11px;border-radius:50%;background:#E0A23E;flex:0 0 auto;"></span><span style="color:#F4F5F7;font-weight:600;font-size:15px;width:54px;">Soon</span><span style="color:#80838b;font-size:14px;">später geplant</span></div>
+            <div style="display:flex;align-items:center;gap:12px;"><span style="width:11px;height:11px;border-radius:50%;background:#41C08D;flex:0 0 auto;"></span><span style="color:#F4F5F7;font-weight:600;font-size:15px;width:54px;">Now</span><span style="color:#80838b;font-size:14px;">gerade aktiv</span></div>
+          </div>
+          <p style="font-size:13px;line-height:1.5;color:#6b6e76;margin:18px 0 0;max-width:420px;">Dieselben drei Farben tragen Logo, App-Icon und die Aktivitätsringe in der App — die Marke <em>ist</em> das Statussystem.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div style="font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#b3b1a9;margin-bottom:18px;">Alle Richtungen</div>
+
+  <section style="display:flex;gap:30px;align-items:flex-start;">
+
+    <!-- ============ 1a — KONVERGENZ ============ -->
+    <div id="1a" data-option="1a" style="--ac:#8093F2;flex:0 0 auto;width:312px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+        <span style="font-family:'Schibsted Grotesk',sans-serif;font-weight:700;font-size:13px;color:#fff;background:#14161A;border-radius:7px;padding:3px 9px;">1a</span>
+        <span style="font-weight:600;font-size:15px;color:#14161A;">Konvergenz</span>
+        <span style="width:10px;height:10px;border-radius:50%;background:var(--ac);margin-left:auto;"></span>
+      </div>
+
+      <div style="width:280px;border-radius:46px;background:#1a1c21;padding:9px;box-shadow:0 24px 50px -18px rgba(20,22,26,.5);">
+        <div style="position:relative;width:262px;height:540px;border-radius:38px;background:#0E1116;overflow:hidden;display:flex;flex-direction:column;padding:30px 22px;">
+          <div style="position:absolute;top:14px;left:50%;transform:translateX(-50%);width:104px;height:22px;border-radius:0 0 14px 14px;background:#1a1c21;"></div>
+          <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;">
+            <div style="position:relative;width:120px;height:120px;">
+              <div style="position:absolute;inset:26px;border-radius:50%;border:2.5px solid var(--ac);box-shadow:0 0 24px -6px var(--ac);animation:tgA-ring 6s infinite both;"></div>
+              <div style="position:absolute;left:50%;top:50%;width:17px;height:17px;margin:-8.5px;border-radius:50%;background:var(--ac);animation:tgA-d1 6s infinite both;"></div>
+              <div style="position:absolute;left:50%;top:50%;width:17px;height:17px;margin:-8.5px;border-radius:50%;background:var(--ac);animation:tgA-d2 6s infinite both;"></div>
+              <div style="position:absolute;left:50%;top:50%;width:17px;height:17px;margin:-8.5px;border-radius:50%;background:var(--ac);animation:tgA-d3 6s infinite both;"></div>
+            </div>
+            <div style="text-align:center;animation:tg-rise 6s infinite both;">
+              <div style="font-family:'Schibsted Grotesk',sans-serif;font-weight:600;font-size:28px;letter-spacing:-0.03em;color:#F4F5F7;">t<span style="color:var(--ac);">o</span>gether</div>
+              <div style="font-size:13px;color:#80838b;margin-top:6px;">Wer ist gerade offen?</div>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:11px;">
+            <div style="animation:tg-barfade 6s infinite both;">
+              <div style="height:4px;border-radius:2px;background:rgba(255,255,255,.09);overflow:hidden;"><div style="height:100%;background:var(--ac);border-radius:2px;transform-origin:left;animation:tg-bar 6s infinite both;"></div></div>
+            </div>
+            <div style="height:46px;border-radius:23px;background:#F4F5F7;color:#14161A;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:14px;animation:tg-rise 6s infinite both;animation-delay:.05s;">Mit Apple fortfahren</div>
+            <div style="height:46px;border-radius:23px;border:1px solid rgba(255,255,255,.15);color:#E8EAEE;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:14px;animation:tg-rise 6s infinite both;animation-delay:.12s;">Mit Google fortfahren</div>
+            <div style="text-align:center;font-size:11px;color:rgba(255,255,255,.36);margin-top:2px;animation:tg-rise 6s infinite both;animation-delay:.18s;">Mit Fortfahren stimmst du den Nutzungsbedingungen zu</div>
+          </div>
+        </div>
+      </div>
+
+      <p style="font-size:13px;line-height:1.5;color:#5b5e66;margin:18px 2px 14px;">Drei Punkte – Freunde – finden zueinander und schließen sich zu einem Kreis. <span style="color:#9a9ca2;">Animation: einfliegen → sammeln → Ring.</span></p>
+
+      <div style="display:flex;gap:10px;margin-bottom:10px;">
+        <div style="flex:1;background:#0E1116;border-radius:14px;padding:16px;display:flex;align-items:center;justify-content:center;">
+          <svg data-export width="100%" viewBox="0 0 232 60" xmlns="http://www.w3.org/2000/svg" style="max-width:150px;">
+            <g fill="#8093F2"><circle cx="29" cy="20" r="5"/><circle cx="19" cy="37" r="5"/><circle cx="39" cy="37" r="5"/></g>
+            <circle cx="29" cy="30" r="22" fill="none" stroke="#8093F2" stroke-width="3"/>
+            <text x="70" y="41" font-family="Schibsted Grotesk, sans-serif" font-weight="600" font-size="33" letter-spacing="-1" fill="#F4F5F7">t<tspan fill="#8093F2">o</tspan>gether</text>
+          </svg>
+        </div>
+        <div style="flex:1;background:#fff;border:1px solid #e3e1da;border-radius:14px;padding:16px;display:flex;align-items:center;justify-content:center;">
+          <svg width="100%" viewBox="0 0 232 60" xmlns="http://www.w3.org/2000/svg" style="max-width:150px;">
+            <g fill="#8093F2"><circle cx="29" cy="20" r="5"/><circle cx="19" cy="37" r="5"/><circle cx="39" cy="37" r="5"/></g>
+            <circle cx="29" cy="30" r="22" fill="none" stroke="#8093F2" stroke-width="3"/>
+            <text x="70" y="41" font-family="Schibsted Grotesk, sans-serif" font-weight="600" font-size="33" letter-spacing="-1" fill="#14161A">t<tspan fill="#8093F2">o</tspan>gether</text>
+          </svg>
+        </div>
+      </div>
+      <button onClick="{{ downloadSvg }}" style="width:100%;height:38px;border:1px solid #d4d2cb;background:#fff;color:#3a3d44;border-radius:10px;font-family:'Hanken Grotesk',sans-serif;font-weight:600;font-size:13px;cursor:pointer;" style-hover="background:#f6f5f1;">SVG exportieren ↓</button>
+    </div>
+
+    <!-- ============ 1b — OVERLAP ============ -->
+    <div id="1b" data-option="1b" style="--ac:#3FB1C9;flex:0 0 auto;width:312px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+        <span style="font-family:'Schibsted Grotesk',sans-serif;font-weight:700;font-size:13px;color:#fff;background:#14161A;border-radius:7px;padding:3px 9px;">1b</span>
+        <span style="font-weight:600;font-size:15px;color:#14161A;">Overlap</span>
+        <span style="width:10px;height:10px;border-radius:50%;background:var(--ac);margin-left:auto;"></span>
+      </div>
+
+      <div style="width:280px;border-radius:46px;background:#1a1c21;padding:9px;box-shadow:0 24px 50px -18px rgba(20,22,26,.5);">
+        <div style="position:relative;width:262px;height:540px;border-radius:38px;background:#0E1116;overflow:hidden;display:flex;flex-direction:column;padding:30px 22px;">
+          <div style="position:absolute;top:14px;left:50%;transform:translateX(-50%);width:104px;height:22px;border-radius:0 0 14px 14px;background:#1a1c21;"></div>
+          <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;">
+            <div style="position:relative;width:120px;height:120px;display:flex;align-items:center;justify-content:center;">
+              <div style="position:absolute;width:66px;height:66px;border-radius:50%;border:2.5px solid var(--ac);animation:tgB-left 6s infinite both;"></div>
+              <div style="position:absolute;width:66px;height:66px;border-radius:50%;border:2.5px solid var(--ac);animation:tgB-right 6s infinite both;"></div>
+              <div style="position:absolute;width:20px;height:48px;border-radius:50%;background:var(--ac);box-shadow:0 0 22px -4px var(--ac);animation:tgB-lens 6s infinite both;"></div>
+            </div>
+            <div style="text-align:center;animation:tg-rise 6s infinite both;">
+              <div style="font-family:'Schibsted Grotesk',sans-serif;font-weight:600;font-size:28px;letter-spacing:-0.03em;color:#F4F5F7;">t<span style="color:var(--ac);">o</span>gether</div>
+              <div style="font-size:13px;color:#80838b;margin-top:6px;">Wer ist gerade offen?</div>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:11px;">
+            <div style="animation:tg-barfade 6s infinite both;">
+              <div style="height:4px;border-radius:2px;background:rgba(255,255,255,.09);overflow:hidden;"><div style="height:100%;background:var(--ac);border-radius:2px;transform-origin:left;animation:tg-bar 6s infinite both;"></div></div>
+            </div>
+            <div style="height:46px;border-radius:23px;background:#F4F5F7;color:#14161A;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:14px;animation:tg-rise 6s infinite both;animation-delay:.05s;">Mit Apple fortfahren</div>
+            <div style="height:46px;border-radius:23px;border:1px solid rgba(255,255,255,.15);color:#E8EAEE;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:14px;animation:tg-rise 6s infinite both;animation-delay:.12s;">Mit Google fortfahren</div>
+            <div style="text-align:center;font-size:11px;color:rgba(255,255,255,.36);margin-top:2px;animation:tg-rise 6s infinite both;animation-delay:.18s;">Mit Fortfahren stimmst du den Nutzungsbedingungen zu</div>
+          </div>
+        </div>
+      </div>
+
+      <p style="font-size:13px;line-height:1.5;color:#5b5e66;margin:18px 2px 14px;">Zwei Kreise gleiten zusammen – die Schnittmenge ist der gemeinsame Moment. <span style="color:#9a9ca2;">Animation: zusammenschieben → Überlappung leuchtet.</span></p>
+
+      <div style="display:flex;gap:10px;margin-bottom:10px;">
+        <div style="flex:1;background:#0E1116;border-radius:14px;padding:16px;display:flex;align-items:center;justify-content:center;">
+          <svg data-export width="100%" viewBox="0 0 232 60" xmlns="http://www.w3.org/2000/svg" style="max-width:150px;">
+            <g fill="none" stroke="#3FB1C9" stroke-width="3"><circle cx="23" cy="30" r="16"/><circle cx="39" cy="30" r="16"/></g>
+            <ellipse cx="31" cy="30" rx="4.5" ry="12" fill="#3FB1C9"/>
+            <text x="70" y="41" font-family="Schibsted Grotesk, sans-serif" font-weight="600" font-size="33" letter-spacing="-1" fill="#F4F5F7">t<tspan fill="#3FB1C9">o</tspan>gether</text>
+          </svg>
+        </div>
+        <div style="flex:1;background:#fff;border:1px solid #e3e1da;border-radius:14px;padding:16px;display:flex;align-items:center;justify-content:center;">
+          <svg width="100%" viewBox="0 0 232 60" xmlns="http://www.w3.org/2000/svg" style="max-width:150px;">
+            <g fill="none" stroke="#3FB1C9" stroke-width="3"><circle cx="23" cy="30" r="16"/><circle cx="39" cy="30" r="16"/></g>
+            <ellipse cx="31" cy="30" rx="4.5" ry="12" fill="#3FB1C9"/>
+            <text x="70" y="41" font-family="Schibsted Grotesk, sans-serif" font-weight="600" font-size="33" letter-spacing="-1" fill="#14161A">t<tspan fill="#3FB1C9">o</tspan>gether</text>
+          </svg>
+        </div>
+      </div>
+      <button onClick="{{ downloadSvg }}" style="width:100%;height:38px;border:1px solid #d4d2cb;background:#fff;color:#3a3d44;border-radius:10px;font-family:'Hanken Grotesk',sans-serif;font-weight:600;font-size:13px;cursor:pointer;" style-hover="background:#f6f5f1;">SVG exportieren ↓</button>
+    </div>
+
+    <!-- ============ 1c — STATUS-RING ============ -->
+    <div id="1c" data-option="1c" style="--ac:#41C08D;flex:0 0 auto;width:312px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+        <span style="font-family:'Schibsted Grotesk',sans-serif;font-weight:700;font-size:13px;color:#fff;background:#14161A;border-radius:7px;padding:3px 9px;">1c</span>
+        <span style="font-weight:600;font-size:15px;color:#14161A;">Status-Ring</span>
+        <span style="width:10px;height:10px;border-radius:50%;background:var(--ac);margin-left:auto;"></span>
+      </div>
+
+      <div style="width:280px;border-radius:46px;background:#1a1c21;padding:9px;box-shadow:0 24px 50px -18px rgba(20,22,26,.5);">
+        <div style="position:relative;width:262px;height:540px;border-radius:38px;background:#0E1116;overflow:hidden;display:flex;flex-direction:column;padding:30px 22px;">
+          <div style="position:absolute;top:14px;left:50%;transform:translateX(-50%);width:104px;height:22px;border-radius:0 0 14px 14px;background:#1a1c21;"></div>
+          <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;">
+            <div style="position:relative;width:120px;height:120px;display:flex;align-items:center;justify-content:center;">
+              <svg width="110" height="110" viewBox="0 0 110 110" style="animation:tg-fade 6s infinite both;">
+                <circle cx="55" cy="55" r="44" fill="none" stroke="var(--ac)" stroke-width="4" stroke-linecap="round" stroke-dasharray="277" transform="rotate(-90 55 55)" style="animation:tgC-draw 6s infinite both;"></circle>
+              </svg>
+              <div style="position:absolute;width:22px;height:22px;border-radius:50%;background:var(--ac);box-shadow:0 0 20px -2px var(--ac);animation:tgC-pulse 6s infinite both;"></div>
+            </div>
+            <div style="text-align:center;animation:tg-rise 6s infinite both;">
+              <div style="font-family:'Schibsted Grotesk',sans-serif;font-weight:600;font-size:28px;letter-spacing:-0.03em;color:#F4F5F7;">t<span style="color:var(--ac);">o</span>gether</div>
+              <div style="font-size:13px;color:#80838b;margin-top:6px;">Wer ist gerade offen?</div>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:11px;">
+            <div style="animation:tg-barfade 6s infinite both;">
+              <div style="height:4px;border-radius:2px;background:rgba(255,255,255,.09);overflow:hidden;"><div style="height:100%;background:var(--ac);border-radius:2px;transform-origin:left;animation:tg-bar 6s infinite both;"></div></div>
+            </div>
+            <div style="height:46px;border-radius:23px;background:#F4F5F7;color:#14161A;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:14px;animation:tg-rise 6s infinite both;animation-delay:.05s;">Mit Apple fortfahren</div>
+            <div style="height:46px;border-radius:23px;border:1px solid rgba(255,255,255,.15);color:#E8EAEE;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:14px;animation:tg-rise 6s infinite both;animation-delay:.12s;">Mit Google fortfahren</div>
+            <div style="text-align:center;font-size:11px;color:rgba(255,255,255,.36);margin-top:2px;animation:tg-rise 6s infinite both;animation-delay:.18s;">Mit Fortfahren stimmst du den Nutzungsbedingungen zu</div>
+          </div>
+        </div>
+      </div>
+
+      <p style="font-size:13px;line-height:1.5;color:#5b5e66;margin:18px 2px 14px;">Ein Ring, der sich schließt, mit pulsierendem Kern – passt direkt zu Open · Soon · Now. <span style="color:#9a9ca2;">Animation: Ring zeichnet → Puls.</span></p>
+
+      <div style="display:flex;gap:10px;margin-bottom:10px;">
+        <div style="flex:1;background:#0E1116;border-radius:14px;padding:16px;display:flex;align-items:center;justify-content:center;">
+          <svg data-export width="100%" viewBox="0 0 232 60" xmlns="http://www.w3.org/2000/svg" style="max-width:150px;">
+            <circle cx="29" cy="30" r="20" fill="none" stroke="#41C08D" stroke-width="3.5"/>
+            <circle cx="29" cy="30" r="6.5" fill="#41C08D"/>
+            <text x="70" y="41" font-family="Schibsted Grotesk, sans-serif" font-weight="600" font-size="33" letter-spacing="-1" fill="#F4F5F7">t<tspan fill="#41C08D">o</tspan>gether</text>
+          </svg>
+        </div>
+        <div style="flex:1;background:#fff;border:1px solid #e3e1da;border-radius:14px;padding:16px;display:flex;align-items:center;justify-content:center;">
+          <svg width="100%" viewBox="0 0 232 60" xmlns="http://www.w3.org/2000/svg" style="max-width:150px;">
+            <circle cx="29" cy="30" r="20" fill="none" stroke="#41C08D" stroke-width="3.5"/>
+            <circle cx="29" cy="30" r="6.5" fill="#41C08D"/>
+            <text x="70" y="41" font-family="Schibsted Grotesk, sans-serif" font-weight="600" font-size="33" letter-spacing="-1" fill="#14161A">t<tspan fill="#41C08D">o</tspan>gether</text>
+          </svg>
+        </div>
+      </div>
+      <button onClick="{{ downloadSvg }}" style="width:100%;height:38px;border:1px solid #d4d2cb;background:#fff;color:#3a3d44;border-radius:10px;font-family:'Hanken Grotesk',sans-serif;font-weight:600;font-size:13px;cursor:pointer;" style-hover="background:#f6f5f1;">SVG exportieren ↓</button>
+    </div>
+
+    <!-- ============ 1d — MORPH o→together ============ -->
+    <div id="1d" data-option="1d" style="--ac:#B07FF0;flex:0 0 auto;width:312px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+        <span style="font-family:'Schibsted Grotesk',sans-serif;font-weight:700;font-size:13px;color:#fff;background:#14161A;border-radius:7px;padding:3px 9px;">1d</span>
+        <span style="font-weight:600;font-size:15px;color:#14161A;">Morph o → together</span>
+        <span style="width:10px;height:10px;border-radius:50%;background:var(--ac);margin-left:auto;"></span>
+      </div>
+
+      <div style="width:280px;border-radius:46px;background:#1a1c21;padding:9px;box-shadow:0 24px 50px -18px rgba(20,22,26,.5);">
+        <div style="position:relative;width:262px;height:540px;border-radius:38px;background:#0E1116;overflow:hidden;display:flex;flex-direction:column;padding:30px 22px;">
+          <div style="position:absolute;top:14px;left:50%;transform:translateX(-50%);width:104px;height:22px;border-radius:0 0 14px 14px;background:#1a1c21;"></div>
+          <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;">
+            <div style="display:flex;align-items:center;justify-content:center;font-family:'Schibsted Grotesk',sans-serif;font-weight:600;font-size:32px;letter-spacing:-0.03em;color:#F4F5F7;">
+              <span style="animation:tgD-left 6s infinite both;">t</span>
+              <span style="position:relative;display:inline-block;width:28px;height:28px;margin:0 1px;">
+                <span style="position:absolute;inset:0;border-radius:50%;background:var(--ac);box-shadow:0 0 20px -4px var(--ac);animation:tgD-disc 6s infinite both;"></span>
+                <span style="position:absolute;inset:0;border-radius:50%;border:4px solid var(--ac);box-shadow:0 0 16px -6px var(--ac);animation:tgD-ring 6s infinite both;"></span>
+              </span>
+              <span style="animation:tgD-right 6s infinite both;">gether</span>
+            </div>
+            <div style="font-size:13px;color:#80838b;animation:tg-rise 6s infinite both;animation-delay:.05s;">Wer ist gerade offen?</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:11px;">
+            <div style="animation:tg-barfade 6s infinite both;">
+              <div style="height:4px;border-radius:2px;background:rgba(255,255,255,.09);overflow:hidden;"><div style="height:100%;background:var(--ac);border-radius:2px;transform-origin:left;animation:tg-bar 6s infinite both;"></div></div>
+            </div>
+            <div style="height:46px;border-radius:23px;background:#F4F5F7;color:#14161A;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:14px;animation:tg-rise 6s infinite both;animation-delay:.05s;">Mit Apple fortfahren</div>
+            <div style="height:46px;border-radius:23px;border:1px solid rgba(255,255,255,.15);color:#E8EAEE;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:14px;animation:tg-rise 6s infinite both;animation-delay:.12s;">Mit Google fortfahren</div>
+            <div style="text-align:center;font-size:11px;color:rgba(255,255,255,.36);margin-top:2px;animation:tg-rise 6s infinite both;animation-delay:.18s;">Mit Fortfahren stimmst du den Nutzungsbedingungen zu</div>
+          </div>
+        </div>
+      </div>
+
+      <p style="font-size:13px;line-height:1.5;color:#5b5e66;margin:18px 2px 14px;">Der Punkt wächst zum „o" und der Schriftzug entfaltet sich daraus – Icon und Wortmarke sind dasselbe. <span style="color:#9a9ca2;">Animation: Punkt → Ring → Schriftzug.</span></p>
+
+      <div style="display:flex;gap:10px;margin-bottom:10px;">
+        <div style="flex:1;background:#0E1116;border-radius:14px;padding:16px;display:flex;align-items:center;justify-content:center;">
+          <svg data-export width="100%" viewBox="0 0 188 60" xmlns="http://www.w3.org/2000/svg" style="max-width:150px;">
+            <text x="6" y="41" font-family="Schibsted Grotesk, sans-serif" font-weight="600" font-size="33" letter-spacing="-1" fill="#F4F5F7">t</text>
+            <circle cx="34" cy="30" r="12" fill="none" stroke="#B07FF0" stroke-width="4"/>
+            <text x="50" y="41" font-family="Schibsted Grotesk, sans-serif" font-weight="600" font-size="33" letter-spacing="-1" fill="#F4F5F7">gether</text>
+          </svg>
+        </div>
+        <div style="flex:1;background:#fff;border:1px solid #e3e1da;border-radius:14px;padding:16px;display:flex;align-items:center;justify-content:center;">
+          <svg width="100%" viewBox="0 0 188 60" xmlns="http://www.w3.org/2000/svg" style="max-width:150px;">
+            <text x="6" y="41" font-family="Schibsted Grotesk, sans-serif" font-weight="600" font-size="33" letter-spacing="-1" fill="#14161A">t</text>
+            <circle cx="34" cy="30" r="12" fill="none" stroke="#B07FF0" stroke-width="4"/>
+            <text x="50" y="41" font-family="Schibsted Grotesk, sans-serif" font-weight="600" font-size="33" letter-spacing="-1" fill="#14161A">gether</text>
+          </svg>
+        </div>
+      </div>
+      <button onClick="{{ downloadSvg }}" style="width:100%;height:38px;border:1px solid #d4d2cb;background:#fff;color:#3a3d44;border-radius:10px;font-family:'Hanken Grotesk',sans-serif;font-weight:600;font-size:13px;cursor:pointer;" style-hover="background:#f6f5f1;">SVG exportieren ↓</button>
+    </div>
+
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      downloadSvg: (e) => {
+        const card = e.currentTarget.closest('[data-option]');
+        if (!card) return;
+        const svg = card.querySelector('svg[data-export]');
+        if (!svg) return;
+        const clone = svg.cloneNode(true);
+        clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+        const str = '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(clone);
+        const blob = new Blob([str], { type: 'image/svg+xml' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'together-logo-' + card.getAttribute('data-option') + '.svg';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+    };
+  }
+}
+</script>
+</body>
+</html>

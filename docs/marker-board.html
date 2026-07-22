@@ -1,0 +1,851 @@
+<style>
+  :root {
+    --ink: #14211C;
+    --paper: #F3F0E9;
+    --cream: #EFEAE1;
+    --open: rgb(110, 139, 247);
+    --soon: rgb(224, 162, 62);
+    --now: rgb(65, 192, 141);
+    --danger: #FF3B30;
+
+    --bg: #ECE7DC;
+    --surface: #FBF9F4;
+    --surface-2: #F4F1E9;
+    --text: #1C2621;
+    --muted: #6B6258;
+    --hair: rgba(20, 33, 28, 0.12);
+    --hair-soft: rgba(20, 33, 28, 0.07);
+    --accent: #2E6B54;
+    --shadow: rgba(20, 33, 28, 0.16);
+
+    --fs-eyebrow: 0.72rem;
+    --maxw: 1120px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0E1613;
+      --surface: #16211C;
+      --surface-2: #121B17;
+      --text: #ECE7DC;
+      --muted: #9AA79E;
+      --hair: rgba(236, 231, 220, 0.14);
+      --hair-soft: rgba(236, 231, 220, 0.08);
+      --accent: #5FCB9E;
+      --shadow: rgba(0, 0, 0, 0.5);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #ECE7DC; --surface: #FBF9F4; --surface-2: #F4F1E9;
+    --text: #1C2621; --muted: #6B6258; --hair: rgba(20,33,28,0.12);
+    --hair-soft: rgba(20,33,28,0.07); --accent: #2E6B54; --shadow: rgba(20,33,28,0.16);
+  }
+  :root[data-theme="dark"] {
+    --bg: #0E1613; --surface: #16211C; --surface-2: #121B17;
+    --text: #ECE7DC; --muted: #9AA79E; --hair: rgba(236,231,220,0.14);
+    --hair-soft: rgba(236,231,220,0.08); --accent: #5FCB9E; --shadow: rgba(0,0,0,0.5);
+  }
+
+  * { box-sizing: border-box; }
+
+  body { margin: 0; }
+
+  .wrap {
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: clamp(20px, 5vw, 56px) clamp(16px, 5vw, 40px) 72px;
+  }
+  .inner { max-width: var(--maxw); margin: 0 auto; }
+
+  .eyebrow {
+    font-size: var(--fs-eyebrow);
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    font-weight: 700;
+    color: var(--accent);
+    margin: 0 0 12px;
+  }
+  h1 {
+    font-size: clamp(2rem, 5.5vw, 3.4rem);
+    line-height: 1.02;
+    letter-spacing: -0.02em;
+    font-weight: 800;
+    margin: 0 0 16px;
+    text-wrap: balance;
+  }
+  .lede {
+    font-size: clamp(1rem, 2.2vw, 1.18rem);
+    line-height: 1.55;
+    color: var(--muted);
+    max-width: 62ch;
+    margin: 0 0 28px;
+  }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 18px;
+    align-items: center;
+    padding: 14px 18px;
+    background: var(--surface);
+    border: 1px solid var(--hair);
+    border-radius: 14px;
+    margin-bottom: 44px;
+  }
+  .legend-item { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; font-weight: 600; }
+  .legend-item .swatch { width: 14px; height: 14px; border-radius: 5px; }
+  .legend-note { margin-left: auto; font-size: 0.8rem; color: var(--muted); }
+
+  .section-label {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    font-weight: 700;
+    color: var(--muted);
+    margin: 0 0 6px;
+  }
+  h2 {
+    font-size: clamp(1.4rem, 3.5vw, 2rem);
+    letter-spacing: -0.015em;
+    font-weight: 800;
+    margin: 0 0 8px;
+    text-wrap: balance;
+  }
+  .section-lede { color: var(--muted); line-height: 1.5; max-width: 60ch; margin: 0 0 24px; }
+
+  .block { margin-bottom: 56px; }
+
+  /* ---------- Faux map ---------- */
+  .map {
+    position: relative;
+    border-radius: 18px;
+    overflow: hidden;
+    background:
+      radial-gradient(120% 90% at 18% 12%, #E5EEE1 0%, rgba(229,238,225,0) 55%),
+      radial-gradient(95% 80% at 88% 92%, #DFEAF1 0%, rgba(223,234,241,0) 52%),
+      #EFEBE1;
+    border: 1px solid rgba(20, 33, 28, 0.1);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4);
+  }
+  .map::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    opacity: 0.55;
+    background:
+      repeating-linear-gradient(34deg, transparent 0 40px, rgba(20,33,28,0.055) 40px 42px),
+      repeating-linear-gradient(-54deg, transparent 0 58px, rgba(20,33,28,0.045) 58px 60px);
+  }
+  .map::after {
+    content: "";
+    position: absolute;
+    left: -10%; top: 46%;
+    width: 130%; height: 22px;
+    background: linear-gradient(90deg, rgba(150,190,214,0.32), rgba(150,190,214,0.16));
+    transform: rotate(-6deg);
+    filter: blur(0.5px);
+  }
+  .map--stage { height: 230px; display: grid; place-items: center; }
+  .map--wide { height: 280px; }
+
+  /* ---------- Shared marker atoms ---------- */
+  .ini {
+    display: grid;
+    place-items: center;
+    color: #14211C;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    background: #EFEAE1;
+    width: 100%; height: 100%;
+  }
+  .av {
+    border-radius: 50%;
+    border: 2px solid #fff;
+    display: grid;
+    place-items: center;
+    color: #14211C;
+    font-weight: 800;
+    overflow: hidden;
+    background: #EFEAE1;
+  }
+  .av--a { background: #CFE7DC; }
+  .av--b { background: #F1DEB6; }
+  .av--c { background: #D6DEFB; }
+  .av--d { background: #E7D4EC; }
+
+  .coin {
+    position: absolute;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    border: 2px solid #fff;
+    box-shadow: 0 2px 5px rgba(20,33,28,0.28);
+    font-size: 11px;
+    line-height: 1;
+    z-index: 5;
+  }
+  .badge-unread {
+    position: absolute;
+    min-width: 22px; height: 22px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--danger);
+    border: 2px solid #fff;
+    color: #fff;
+    font-size: 11px; font-weight: 800;
+    display: grid; place-items: center;
+    z-index: 6;
+  }
+
+  /* ---------- CURRENT marker (faithful rebuild) ---------- */
+  .cur { position: relative; width: 60px; height: 60px; }
+  .cur__shadow {
+    position: absolute; left: 50%; bottom: -12px; width: 70px; height: 20px;
+    transform: translateX(-50%);
+    background: radial-gradient(closest-side, rgba(20,33,28,0.22), rgba(20,33,28,0));
+    z-index: 0;
+  }
+  .cur__halo {
+    position: absolute; inset: -3px; border-radius: 50%; background: #fff; z-index: 1;
+  }
+  .cur__circle {
+    position: absolute; inset: 0;
+    border-radius: 50%;
+    background: #fff;
+    border: 3px solid var(--now);
+    display: grid; place-items: center;
+    z-index: 2;
+    font-size: 18px; font-weight: 800; color: #14211C;
+  }
+  .cur__name {
+    position: absolute; left: 50%; bottom: -14px; transform: translateX(-50%);
+    background: rgba(255,255,255,0.96);
+    border: 1px solid rgba(20,33,28,0.1);
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 11px; font-weight: 700; color: #14211C;
+    white-space: nowrap;
+    z-index: 4;
+  }
+  .cur .badge-unread { top: -4px; right: -6px; }
+
+  /* ---------- A: refined circle + tail ---------- */
+  .pinA { position: relative; width: 58px; height: 58px; }
+  .pinA__tail {
+    position: absolute; left: 50%; bottom: -6px; width: 15px; height: 15px;
+    background: #fff; transform: translateX(-50%) rotate(45deg); border-radius: 4px;
+    box-shadow: 0 5px 8px rgba(20,33,28,0.12); z-index: 1;
+  }
+  .pinA__circle {
+    position: absolute; inset: 0; border-radius: 50%;
+    background: #fff; border: 2px solid rgba(20,33,28,0.08);
+    box-shadow: 0 7px 16px rgba(20,33,28,0.2);
+    display: grid; place-items: center; z-index: 2;
+    font-size: 18px; font-weight: 800; color: #14211C; overflow: hidden;
+  }
+  .pinA__dot {
+    position: absolute; right: -1px; bottom: -1px; width: 17px; height: 17px;
+    border-radius: 50%; border: 2.5px solid #fff; z-index: 4;
+    box-shadow: 0 1px 3px rgba(20,33,28,0.3);
+  }
+
+  /* stacked group */
+  .stack { display: flex; }
+  .stack .av { width: 34px; height: 34px; font-size: 12px; margin-left: -12px; box-shadow: 0 2px 4px rgba(20,33,28,0.18); }
+  .stack .av:first-child { margin-left: 0; }
+  .stack .more {
+    width: 34px; height: 34px; margin-left: -12px;
+    border-radius: 50%; border: 2px solid #fff; background: #14211C; color: #fff;
+    display: grid; place-items: center; font-size: 12px; font-weight: 800;
+  }
+
+  /* ---------- B: tailed squircle bubble (recommended) ---------- */
+  .pinB { position: relative; width: 60px; }
+  .pinB__tail {
+    position: absolute; left: 50%; bottom: -5px; width: 16px; height: 16px;
+    background: #fff; transform: translateX(-50%) rotate(45deg); border-radius: 5px;
+    box-shadow: 0 6px 9px rgba(20,33,28,0.14); z-index: 1;
+  }
+  .pinB__ring {
+    position: relative; z-index: 2;
+    width: 60px; height: 60px;
+    padding: 2.5px;
+    border-radius: 36% / 40%;
+    background: var(--now);
+    box-shadow: 0 8px 18px rgba(20,33,28,0.24);
+  }
+  .pinB__ring--open { background: var(--open); }
+  .pinB__ring--soon { background: var(--soon); }
+  .pinB__ring--now {
+    /* depleting-clock countdown, exactly like your SVG arc — but as the ring */
+    background: conic-gradient(from -90deg, var(--now) 0 68%, rgba(65,192,141,0.22) 68% 100%);
+  }
+  .pinB__bubble {
+    width: 100%; height: 100%;
+    border-radius: 33% / 37%;
+    background: #fff;
+    display: grid; place-items: center; overflow: hidden;
+    font-size: 18px; font-weight: 800; color: #14211C;
+  }
+  .pinB__bubble .ini { border-radius: 0; }
+  .pinB .coin { top: -6px; right: -6px; width: 22px; height: 22px; }
+  .pinB .badge-unread { top: -7px; right: -7px; }
+
+  /* group variant B: squircle holding a stack */
+  .pinB--group .pinB__ring { width: 74px; height: 60px; border-radius: 30% / 40%; }
+  .pinB--group .pinB__bubble { border-radius: 27% / 37%; padding: 0 6px; }
+
+  /* ---------- C: category chip ---------- */
+  .pinC { position: relative; }
+  .pinC__tail {
+    position: absolute; left: 26px; bottom: -5px; width: 15px; height: 15px;
+    background: #fff; transform: rotate(45deg); border-radius: 4px;
+    box-shadow: 0 5px 8px rgba(20,33,28,0.12); z-index: 1;
+  }
+  .pinC__chip {
+    position: relative; z-index: 2;
+    display: flex; align-items: center; gap: 8px;
+    background: #fff;
+    border-radius: 999px;
+    padding: 5px 12px 5px 5px;
+    box-shadow: 0 8px 18px rgba(20,33,28,0.22);
+    border: 1px solid rgba(20,33,28,0.06);
+  }
+  .pinC__coin {
+    width: 34px; height: 34px; border-radius: 50%;
+    display: grid; place-items: center; font-size: 16px;
+    background: var(--soon);
+  }
+  .pinC__label { font-size: 13px; font-weight: 800; color: #14211C; letter-spacing: -0.01em; }
+  .pinC__count {
+    font-size: 12px; font-weight: 800; color: #14211C;
+    background: #EFEAE1; border-radius: 999px; padding: 2px 8px;
+    font-variant-numeric: tabular-nums;
+  }
+  .pinC .stack .av { width: 26px; height: 26px; font-size: 10px; margin-left: -9px; }
+
+  /* ---------- direction cards ---------- */
+  .board3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  @media (max-width: 860px) { .board3 { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--hair);
+    border-radius: 20px;
+    padding: 20px;
+    display: flex; flex-direction: column;
+  }
+  .card--rec { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .card__head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  .card__letter {
+    width: 28px; height: 28px; border-radius: 8px; flex: none;
+    display: grid; place-items: center; font-weight: 800; font-size: 14px;
+    background: var(--surface-2); color: var(--accent); border: 1px solid var(--hair);
+  }
+  .card h3 { font-size: 1.12rem; font-weight: 800; margin: 0; letter-spacing: -0.01em; }
+  .pill-rec {
+    margin-left: auto; font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.1em;
+    font-weight: 800; color: #fff; background: var(--accent);
+    padding: 3px 9px; border-radius: 999px;
+  }
+  .card__sub { color: var(--muted); font-size: 0.86rem; line-height: 1.45; margin: 4px 0 16px; }
+  .card .map { height: 150px; display: grid; place-items: center; margin-bottom: 16px; }
+  .card .map--pair { gap: 0; }
+  .card .map--pair > * { margin: 0 6px; }
+
+  .meta { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .chip-meta {
+    font-size: 0.72rem; font-weight: 700; padding: 4px 9px; border-radius: 999px;
+    background: var(--surface-2); border: 1px solid var(--hair); color: var(--muted);
+  }
+  .proscons { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 7px; }
+  .proscons li { font-size: 0.86rem; line-height: 1.4; padding-left: 22px; position: relative; }
+  .proscons li.pro::before { content: "＋"; position: absolute; left: 0; color: var(--now); font-weight: 800; }
+  .proscons li.con::before { content: "−"; position: absolute; left: 2px; color: var(--soon); font-weight: 800; }
+
+  /* ---------- current-state tells ---------- */
+  .current-grid { display: grid; grid-template-columns: 280px 1fr; gap: 28px; align-items: center; }
+  @media (max-width: 720px) { .current-grid { grid-template-columns: 1fr; } }
+  .tells { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 12px; }
+  .tells li {
+    display: flex; gap: 12px; align-items: flex-start;
+    font-size: 0.92rem; line-height: 1.45;
+  }
+  .tells .n {
+    flex: none; width: 24px; height: 24px; border-radius: 7px;
+    display: grid; place-items: center; font-size: 0.78rem; font-weight: 800;
+    background: var(--surface-2); border: 1px solid var(--hair); color: var(--accent);
+    font-variant-numeric: tabular-nums;
+  }
+  .tells b { font-weight: 700; }
+
+  /* ---------- fork callout ---------- */
+  .fork {
+    background: var(--surface);
+    border: 1px solid var(--hair);
+    border-left: 4px solid var(--accent);
+    border-radius: 16px;
+    padding: 24px clamp(18px, 3vw, 30px);
+  }
+  .fork h2 { margin-bottom: 12px; }
+  .fork p { line-height: 1.6; margin: 0 0 14px; max-width: 74ch; }
+  .fork p:last-child { margin-bottom: 0; }
+  .fork .two { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 18px; }
+  @media (max-width: 720px) { .fork .two { grid-template-columns: 1fr; } }
+  .fork .opt { background: var(--surface-2); border: 1px solid var(--hair); border-radius: 12px; padding: 16px; }
+  .fork .opt h4 { margin: 0 0 6px; font-size: 0.95rem; }
+  .fork .opt p { font-size: 0.85rem; color: var(--muted); }
+  .fork .opt .tagline { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.1em; font-weight: 800; color: var(--accent); display: block; margin-bottom: 8px; }
+
+  /* density strip pins */
+  .drop { position: absolute; }
+
+  .live-pulse { position: absolute; inset: -6px; border-radius: 40% / 44%; border: 2px solid var(--now); opacity: 0; z-index: 0; }
+  @media (prefers-reduced-motion: no-preference) {
+    .live-pulse { animation: pulse 2.4s ease-out infinite; }
+    @keyframes pulse {
+      0% { transform: scale(0.9); opacity: 0.5; }
+      70% { transform: scale(1.35); opacity: 0; }
+      100% { opacity: 0; }
+    }
+  }
+
+  .foot { margin-top: 8px; color: var(--muted); font-size: 0.85rem; line-height: 1.5; border-top: 1px solid var(--hair); padding-top: 20px; }
+
+  /* ================= WOW TIER ================= */
+  .wow-hero {
+    display: grid; grid-template-columns: 340px 1fr; gap: 28px; align-items: center;
+    background: var(--surface); border: 1px solid var(--accent); border-radius: 22px;
+    padding: 24px; margin-bottom: 22px; box-shadow: 0 0 0 1px var(--accent);
+  }
+  @media (max-width: 760px) { .wow-hero { grid-template-columns: 1fr; } }
+  .wow-hero .map { height: 230px; width: 100%; }
+  .wow-hero h3 { font-size: 1.4rem; margin: 8px 0 8px; letter-spacing: -0.015em; }
+  .wow-hero p { color: var(--muted); line-height: 1.55; margin: 0 0 16px; }
+
+  .wow-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  @media (max-width: 900px) { .wow-grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 560px) { .wow-grid { grid-template-columns: 1fr; } }
+  .wow-card { background: var(--surface); border: 1px solid var(--hair); border-radius: 18px; padding: 16px; }
+  .wow-card .map { height: 148px; display: grid; place-items: center; margin-bottom: 14px; }
+  .wow-card h4 { margin: 0 0 5px; font-size: 1.02rem; letter-spacing: -0.01em; }
+  .wow-card p { margin: 0 0 12px; font-size: 0.85rem; color: var(--muted); line-height: 1.45; }
+  .wow-tags { display: flex; gap: 6px; flex-wrap: wrap; }
+  .wow-tag { font-size: 0.68rem; font-weight: 700; padding: 3px 8px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--hair); color: var(--muted); }
+  .wow-tag--skia { color: var(--accent); border-color: var(--accent); }
+  .wow-tag--warn { color: var(--soon); border-color: rgba(224,162,62,0.5); }
+
+  .stagepos { position: relative; display: grid; place-items: center; }
+
+  /* W1 living aura */
+  .aura, .breathe, .sonar { position: absolute; inset: 0; margin: auto; z-index: 0; }
+  .aura { width: 56px; height: 56px; border-radius: 50%; background: radial-gradient(closest-side, rgba(65,192,141,0.55), rgba(65,192,141,0)); }
+  .breathe { width: 94px; height: 94px; border-radius: 50%; background: radial-gradient(closest-side, rgba(65,192,141,0.26), transparent); animation: breathe 3.6s ease-in-out infinite; }
+  .hb1 { animation: hb 2.8s ease-out infinite; }
+  .hb2 { animation: hb 2.8s ease-out infinite 1.4s; }
+  @keyframes hb { 0% { transform: scale(0.7); opacity: 0.6; } 75% { transform: scale(2.6); opacity: 0; } 100% { opacity: 0; } }
+  @keyframes breathe { 0%, 100% { transform: scale(0.9); opacity: 0.5; } 50% { transform: scale(1.12); opacity: 0.9; } }
+
+  /* W2 sonar */
+  .sonar { width: 58px; height: 58px; border-radius: 50%; border: 2px solid var(--now); }
+  .sn1 { animation: sonar 2.6s ease-out infinite; }
+  .sn2 { animation: sonar 2.6s ease-out infinite 1.3s; }
+  @keyframes sonar { 0% { transform: scale(0.55); opacity: 0.75; } 100% { transform: scale(2.9); opacity: 0; } }
+
+  /* W3 liquid countdown */
+  .liquidbub { position: relative; width: 60px; height: 60px; border-radius: 34% / 38%; background: #fff; overflow: hidden; box-shadow: 0 8px 18px rgba(20,33,28,0.22); z-index: 2; }
+  .liquidbub .lbl { position: absolute; inset: 0; display: grid; place-items: center; font-weight: 800; color: #14211C; z-index: 3; font-size: 15px; font-variant-numeric: tabular-nums; }
+  .liquid { position: absolute; left: -20%; right: -20%; bottom: 0; height: 72%; background: linear-gradient(var(--soon), rgba(224,162,62,0.72)); z-index: 1; animation: drain 6.5s ease-in-out infinite; }
+  .liquid::before { content: ""; position: absolute; top: -8px; left: 0; right: 0; height: 16px; border-radius: 50%; background: var(--soon); animation: wobble 2.4s ease-in-out infinite; }
+  @keyframes drain { 0% { height: 78%; } 92% { height: 10%; } 100% { height: 78%; } }
+  @keyframes wobble { 0%, 100% { transform: translateX(-8%) scaleY(0.8); } 50% { transform: translateX(8%) scaleY(1.1); } }
+
+  /* W4 comet trail */
+  .comet { position: relative; animation: bob 2.4s ease-in-out infinite; }
+  .comet__trail { position: absolute; right: 92%; top: 50%; width: 52px; height: 14px; transform: translateY(-50%); background: linear-gradient(90deg, rgba(110,139,247,0), rgba(110,139,247,0.6)); filter: blur(2px); border-radius: 999px; animation: trailpulse 2.4s ease-in-out infinite; }
+  @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+  @keyframes trailpulse { 0%, 100% { opacity: 0.4; width: 44px; } 50% { opacity: 0.8; width: 58px; } }
+
+  /* W5 metaball group */
+  .goo { position: relative; width: 96px; height: 68px; filter: url(#goo); }
+  .blob { position: absolute; border-radius: 50%; background: var(--open); }
+  .b1 { width: 34px; height: 34px; left: 6px; top: 17px; animation: orbit1 4s ease-in-out infinite; }
+  .b2 { width: 38px; height: 38px; left: 30px; top: 11px; animation: orbit2 4.6s ease-in-out infinite; }
+  .b3 { width: 30px; height: 30px; left: 58px; top: 20px; animation: orbit3 4.2s ease-in-out infinite; }
+  @keyframes orbit1 { 0%, 100% { transform: translate(0,0); } 50% { transform: translate(5px,-4px); } }
+  @keyframes orbit2 { 0%, 100% { transform: translate(0,0); } 50% { transform: translate(-4px,5px); } }
+  @keyframes orbit3 { 0%, 100% { transform: translate(0,0); } 50% { transform: translate(5px,3px); } }
+  .goo-avatars { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 3px; z-index: 3; }
+  .goo-avatars .av { width: 26px; height: 26px; font-size: 9px; }
+
+  /* W6 glass */
+  .glass { position: relative; width: 60px; height: 60px; border-radius: 34% / 38%; background: rgba(255,255,255,0.42); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); border: 1px solid rgba(255,255,255,0.75); box-shadow: inset 0 1px 3px rgba(255,255,255,0.9), inset 0 -6px 10px rgba(20,33,28,0.06), 0 10px 20px rgba(20,33,28,0.2); overflow: hidden; display: grid; place-items: center; font-weight: 800; color: #14211C; z-index: 2; }
+  .glass__spec { position: absolute; top: -30%; left: -60%; width: 50%; height: 160%; background: linear-gradient(115deg, transparent, rgba(255,255,255,0.85), transparent); transform: rotate(18deg); animation: sweep 3.8s ease-in-out infinite; }
+  @keyframes sweep { 0% { transform: translateX(0) rotate(18deg); } 55%, 100% { transform: translateX(150px) rotate(18deg); } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .hb1, .hb2, .breathe, .sn1, .sn2, .liquid, .liquid::before, .comet, .comet__trail, .b1, .b2, .b3, .glass__spec, .live-pulse { animation: none !important; }
+  }
+</style>
+
+<div class="wrap">
+  <div class="inner">
+
+    <div class="eyebrow">Together · Kartenansicht</div>
+    <h1>Marker-Redesign</h1>
+    <p class="lede">Deine Avatar-Kreise sind schon durchdacht — Modus-Farbe, Countdown, Gruppen, Journey-Glow. Was sie „weniger modern" wirken lässt, sind ein paar konkrete Tells und zu viel Chrome pro Marker. Hier drei Richtungen zum Ansehen, nicht zum Vorstellen.</p>
+
+    <div class="legend">
+      <div class="legend-item"><span class="swatch" style="background:var(--open)"></span>Open</div>
+      <div class="legend-item"><span class="swatch" style="background:var(--soon)"></span>Soon</div>
+      <div class="legend-item"><span class="swatch" style="background:var(--now)"></span>Now</div>
+      <span class="legend-note">Marker sitzen auf heller Karte — Farben bleiben in beiden App-Themes gleich.</span>
+    </div>
+
+    <!-- CURRENT -->
+    <div class="block">
+      <p class="section-label">Heute</p>
+      <h2>Was du hast</h2>
+      <div class="current-grid">
+        <div class="map map--stage">
+          <div class="cur">
+            <div class="cur__shadow"></div>
+            <div class="cur__halo"></div>
+            <div class="cur__circle">MK</div>
+            <div class="badge-unread">3</div>
+            <div class="cur__name">Mara</div>
+          </div>
+        </div>
+        <ul class="tells">
+          <li><span class="n">1</span><span><b>Kein Anker.</b> Der Kreis schwebt — er zeigt auf keinen genauen Punkt. Der größte einzelne „nicht-modern"-Tell.</span></li>
+          <li><span class="n">2</span><span><b>Voller 3px-Farbring</b> um jeden Marker: laut, macht die Karte bei vielen Pins unruhig. Identität und Status stecken im selben Element.</span></li>
+          <li><span class="n">3</span><span><b>2×2-Gruppen-Grid</b> wird bei der Größe matschig (steht so in deinem Code-Kommentar).</span></li>
+          <li><span class="n">4</span><span><b>Gestapeltes Chrome:</b> Halo + Ring + Ground-Shadow + Ring-Arc + Badge + Name-Pill — viel pro Marker.</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- FORK -->
+    <div class="block">
+      <div class="fork">
+        <p class="section-label" style="color:var(--accent)">Die eigentliche Weiche</p>
+        <h2>Statisches Bild vs. lebendige Karte</h2>
+        <p>Deine Marker sind aktuell <b>statische PNG-Snapshots</b> (der view-shot-Workaround gegen den Android-Clipping-Bug). Das heißt: jede Animation — pulsierender „now"-Marker, atmende Präsenz, weich laufender Countdown — bräuchte pro Frame ein Re-Capture. Genau der Look, der eine Karte „premium" macht, ist damit blockiert. Das ist wichtiger als jede Ringfarbe.</p>
+        <div class="two">
+          <div class="opt">
+            <span class="tagline">Weg 1 · klein</span>
+            <h4>Schönere statische Pins</h4>
+            <p>Neues Marker-Design, weiter als Snapshot gerendert. Sofort machbar, kein Architektur-Umbau — aber unbewegt.</p>
+          </div>
+          <div class="opt">
+            <span class="tagline">Weg 2 · der Hebel</span>
+            <h4>Overlay-Layer</h4>
+            <p>Marker als absolut positionierte Views über der Karte (lat/lng → Screen projizieren). Umgeht den Snapshot-Bug, macht Animation + Gesten billig. Größerer Umbau — aber <i>das</i> ist „lebendige Karte".</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- DIRECTIONS -->
+    <div class="block">
+      <p class="section-label">Drei Richtungen</p>
+      <h2>Von aufräumen bis umdenken</h2>
+      <p class="section-lede">Alle drei sind auf dieselbe warme Marke abgestimmt. Empfehlung: B als Zielbild, A als sofortiger Schritt.</p>
+
+      <div class="board3">
+
+        <!-- A -->
+        <div class="card">
+          <div class="card__head">
+            <span class="card__letter">A</span>
+            <h3>Kreis, aufgeräumt</h3>
+          </div>
+          <p class="card__sub">Deine DNA behalten, Lautstärke runter — plus Anker.</p>
+          <div class="map map--pair">
+            <div class="pinA">
+              <div class="pinA__tail"></div>
+              <div class="pinA__circle">LR</div>
+              <div class="pinA__dot" style="background:var(--open)"></div>
+            </div>
+            <div class="stack" aria-hidden="true">
+              <div class="av av--a">JS</div>
+              <div class="av av--b">AN</div>
+              <div class="av av--c">MK</div>
+              <div class="more">+2</div>
+            </div>
+          </div>
+          <div class="meta">
+            <span class="chip-meta">Aufwand: klein</span>
+            <span class="chip-meta">Snapshot-OK</span>
+          </div>
+          <ul class="proscons">
+            <li class="pro">Tail = endlich am Boden verankert</li>
+            <li class="pro">Status als Punkt statt lautem Ring</li>
+            <li class="pro">Gruppen als Stapel statt Grid-Matsch</li>
+            <li class="con">Bleibt „ein Kreis" — kein großer Sprung</li>
+          </ul>
+        </div>
+
+        <!-- B -->
+        <div class="card card--rec">
+          <div class="card__head">
+            <span class="card__letter">B</span>
+            <h3>Squircle-Bubble</h3>
+            <span class="pill-rec">Empfehlung</span>
+          </div>
+          <p class="card__sub">Snap/Zenly-Sprache, warm übersetzt. Wer + Was + Status, klar getrennt.</p>
+          <div class="map map--pair">
+            <div class="pinB">
+              <div class="pinB__tail"></div>
+              <div class="pinB__ring pinB__ring--now">
+                <div class="pinB__bubble">JS</div>
+              </div>
+              <div class="coin" style="background:var(--now)">☕</div>
+            </div>
+            <div class="pinB pinB--group">
+              <div class="pinB__tail"></div>
+              <div class="pinB__ring pinB__ring--open">
+                <div class="pinB__bubble">
+                  <div class="stack" aria-hidden="true">
+                    <div class="av av--b" style="width:32px;height:32px;font-size:11px">AN</div>
+                    <div class="av av--c" style="width:32px;height:32px;font-size:11px">MK</div>
+                    <div class="more" style="width:32px;height:32px;font-size:11px">+3</div>
+                  </div>
+                </div>
+              </div>
+              <div class="coin" style="background:var(--open)">🍻</div>
+            </div>
+          </div>
+          <div class="meta">
+            <span class="chip-meta">Aufwand: mittel</span>
+            <span class="chip-meta">Snapshot-OK</span>
+          </div>
+          <ul class="proscons">
+            <li class="pro">Squircle + Tail = sofort „aktuelle App"</li>
+            <li class="pro">Kategorie-Münze zeigt das <i>Was</i></li>
+            <li class="pro">Ring = Status; bei „now" = Countdown</li>
+            <li class="con">Etwas mehr Fläche pro Marker</li>
+          </ul>
+        </div>
+
+        <!-- C -->
+        <div class="card">
+          <div class="card__head">
+            <span class="card__letter">C</span>
+            <h3>Kategorie-Chip</h3>
+          </div>
+          <p class="card__sub">Marker führt mit der Aktivität, nicht der Person (Airbnb-Pill-Logik).</p>
+          <div class="map map--pair">
+            <div class="pinC">
+              <div class="pinC__tail"></div>
+              <div class="pinC__chip">
+                <div class="pinC__coin" style="background:var(--soon)">☕</div>
+                <span class="pinC__label">Kaffee</span>
+                <div class="stack" aria-hidden="true">
+                  <div class="av av--a">JS</div>
+                  <div class="av av--c">MK</div>
+                </div>
+                <span class="pinC__count">3</span>
+              </div>
+            </div>
+          </div>
+          <div class="meta">
+            <span class="chip-meta">Aufwand: mittel</span>
+            <span class="chip-meta">Umdenken</span>
+          </div>
+          <ul class="proscons">
+            <li class="pro">Beste Hierarchie fürs <i>Entdecken</i></li>
+            <li class="pro">„Was ist hier los?" auf einen Blick</li>
+            <li class="con">Verliert „Person zuerst"-Wärme</li>
+            <li class="con">Breiter — mehr Überlappung bei Dichte</li>
+          </ul>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- DENSITY -->
+    <div class="block">
+      <p class="section-label">Empfehlung im Kontext</p>
+      <h2>B im Gedränge</h2>
+      <p class="section-lede">Ein einzelner Marker lügt über das Gefühl in der Menge. So liest sich die ruhige Variante mit mehreren Pins — inkl. angedeutetem Live-Puls (nur mit Overlay-Layer, Weg 2).</p>
+      <div class="map map--wide">
+        <div class="drop" style="left:14%; top:22%">
+          <div class="pinB">
+            <div class="pinB__tail"></div>
+            <div class="pinB__ring pinB__ring--soon"><div class="pinB__bubble">LR</div></div>
+            <div class="coin" style="background:var(--soon)">🎾</div>
+          </div>
+        </div>
+        <div class="drop" style="left:40%; top:52%">
+          <div class="pinB">
+            <div class="live-pulse"></div>
+            <div class="pinB__tail"></div>
+            <div class="pinB__ring pinB__ring--now"><div class="pinB__bubble">JS</div></div>
+            <div class="coin" style="background:var(--now)">☕</div>
+            <div class="badge-unread">2</div>
+          </div>
+        </div>
+        <div class="drop" style="left:63%; top:28%">
+          <div class="pinB pinB--group">
+            <div class="pinB__tail"></div>
+            <div class="pinB__ring pinB__ring--open">
+              <div class="pinB__bubble">
+                <div class="stack" aria-hidden="true">
+                  <div class="av av--c" style="width:32px;height:32px;font-size:11px">MK</div>
+                  <div class="av av--d" style="width:32px;height:32px;font-size:11px">TB</div>
+                  <div class="more" style="width:32px;height:32px;font-size:11px">+4</div>
+                </div>
+              </div>
+            </div>
+            <div class="coin" style="background:var(--open)">🍻</div>
+          </div>
+        </div>
+        <div class="drop" style="left:82%; top:62%">
+          <div class="pinB">
+            <div class="pinB__tail"></div>
+            <div class="pinB__ring pinB__ring--open"><div class="pinB__bubble">AN</div></div>
+            <div class="coin" style="background:var(--open)">🎬</div>
+          </div>
+        </div>
+        <div class="drop" style="left:26%; top:72%">
+          <div class="pinB">
+            <div class="pinB__tail"></div>
+            <div class="pinB__ring pinB__ring--soon"><div class="pinB__bubble">TB</div></div>
+            <div class="coin" style="background:var(--soon)">🏃</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- WOW TIER -->
+    <div class="block">
+      <p class="section-label">Wenn du wirklich Wow willst</p>
+      <h2>Wow-Tier — bewegte Marker</h2>
+      <p class="section-lede">Diese leben von Bewegung — hier fühlst du sie, statt sie dir vorzustellen. Alle brauchen <b>Weg 2 (Overlay-Layer)</b>. Die gute Nachricht: dein Logo läuft schon über Skia + Reanimated — <i>genau</i> diese Technik. Kein neues Fundament, nur woanders eingesetzt.</p>
+
+      <!-- inline goo filter for metaball (self-contained, no external host) -->
+      <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+        <defs>
+          <filter id="goo">
+            <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="blur" />
+            <feColorMatrix in="blur" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 20 -9" result="goo" />
+            <feBlend in="SourceGraphic" in2="goo" />
+          </filter>
+        </defs>
+      </svg>
+
+      <!-- HERO: Living Aura -->
+      <div class="wow-hero">
+        <div class="map">
+          <div class="stagepos">
+            <div class="breathe"></div>
+            <div class="aura hb1"></div>
+            <div class="aura hb2"></div>
+            <div class="pinB" style="z-index:2">
+              <div class="pinB__tail"></div>
+              <div class="pinB__ring pinB__ring--now"><div class="pinB__bubble">JS</div></div>
+              <div class="coin" style="background:var(--now)">☕</div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <span class="pill-rec">Wow-Empfehlung</span>
+          <h3>Living Aura — der „Herzschlag"</h3>
+          <p>Die Signatur von Zenly, warm übersetzt: aktive Menschen und „now"-Aktivitäten <i>atmen</i> und senden einen weichen Herzschlag aus. Die Karte fühlt sich lebendig an — als wären echt Leute da. Am stärksten on-brand, weil deine App genau davon lebt: Präsenz und Freunde. Echoed die Lebendigkeit deines Logos.</p>
+          <div class="wow-tags">
+            <span class="wow-tag wow-tag--skia">Skia + Reanimated</span>
+            <span class="wow-tag">Overlay nötig</span>
+            <span class="wow-tag">nur „now"/aktive animieren</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="wow-grid">
+
+        <!-- W2 Sonar -->
+        <div class="wow-card">
+          <div class="map">
+            <div class="stagepos">
+              <div class="sonar sn1"></div>
+              <div class="sonar sn2"></div>
+              <div class="pinB" style="z-index:2">
+                <div class="pinB__tail"></div>
+                <div class="pinB__ring pinB__ring--now"><div class="pinB__bubble">LR</div></div>
+                <div class="coin" style="background:var(--now)">🎾</div>
+              </div>
+            </div>
+          </div>
+          <h4>Sonar-Ping „Now"</h4>
+          <p>Was gerade läuft, strahlt Ringe über den Boden ab. Zieht den Blick sofort auf das Jetzt.</p>
+          <div class="wow-tags"><span class="wow-tag">leicht</span><span class="wow-tag">Overlay</span></div>
+        </div>
+
+        <!-- W3 Liquid -->
+        <div class="wow-card">
+          <div class="map">
+            <div class="liquidbub">
+              <div class="liquid"></div>
+              <div class="lbl">2:14</div>
+            </div>
+          </div>
+          <h4>Liquid-Countdown</h4>
+          <p>Statt Ring-Arc leert sich die Bubble wie Flüssigkeit, während die Zeit abläuft. Zeit wird spürbar.</p>
+          <div class="wow-tags"><span class="wow-tag wow-tag--skia">Skia-Shader</span><span class="wow-tag">Overlay</span></div>
+        </div>
+
+        <!-- W4 Comet -->
+        <div class="wow-card">
+          <div class="map">
+            <div class="comet">
+              <div class="comet__trail"></div>
+              <div class="pinB">
+                <div class="pinB__tail"></div>
+                <div class="pinB__ring pinB__ring--open"><div class="pinB__bubble">AN</div></div>
+              </div>
+            </div>
+          </div>
+          <h4>Kometen-Trail (Journey)</h4>
+          <p>Wer unterwegs ist, zieht eine weiche Spur und wippt leicht. Schön <i>und</i> nützlich: zeigt Richtung — direkt für Heimweg/Safety.</p>
+          <div class="wow-tags"><span class="wow-tag">Reanimated</span><span class="wow-tag">Safety-Nutzen</span></div>
+        </div>
+
+        <!-- W5 Metaball -->
+        <div class="wow-card">
+          <div class="map">
+            <div style="position:relative">
+              <div class="goo">
+                <div class="blob b1"></div>
+                <div class="blob b2"></div>
+                <div class="blob b3"></div>
+              </div>
+              <div class="goo-avatars">
+                <div class="av av--c">MK</div>
+                <div class="av av--b">AN</div>
+              </div>
+            </div>
+          </div>
+          <h4>Metaball-Gruppe</h4>
+          <p>Eine Gruppe ist keine 4 Kreise, sondern <i>eine verschmolzene Form</i>. Fast niemand macht das — maximaler Wiedererkennungswert.</p>
+          <div class="wow-tags"><span class="wow-tag wow-tag--skia">Skia-Shader</span><span class="wow-tag">am mutigsten</span></div>
+        </div>
+
+        <!-- W6 Glass -->
+        <div class="wow-card">
+          <div class="map">
+            <div class="glass"><div class="glass__spec"></div>JS</div>
+          </div>
+          <h4>Glass-Gem</h4>
+          <p>Frosted-Glas mit Lichtreflex, die Karte schimmert durch. Premium-Material — aber ehrlich: die schwerste auf RN.</p>
+          <div class="wow-tags"><span class="wow-tag wow-tag--warn">kein expo-blur</span><span class="wow-tag">Demo schmeichelt</span></div>
+        </div>
+
+      </div>
+    </div>
+
+    <p class="foot">Mockup in CSS — die echten Marker sind React-Native-Komponenten. Farben, Modus-Logik und Marke sind aus deinem Code übernommen (ink #14211C, warm #EFEAE1, open/soon/now). Sag mir, welche Richtung dich anzieht, dann setze ich sie in echtem RN um — mit Snapshot-Constraint (Weg 1) oder als Overlay-Layer (Weg 2), wenn du Animation willst.</p>
+
+  </div>
+</div>
