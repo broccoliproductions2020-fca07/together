@@ -27,6 +27,13 @@ export type FriendRequestPolicy = 'anyone' | 'shared_activity' | 'nobody';
  */
 export interface FriendSettings {
   closeFriendUids: string[];
+  /**
+   * Preselected audience for Heimweg — deliberately separate from close
+   * friends. Who you trust with a live location at 2 a.m. is a different,
+   * usually smaller set than who you are closest to: it is the people who are
+   * reliable and likely to actually react. Empty until the first Heimweg.
+   */
+  heimwegGroupUids: string[];
   friendRequestPolicy: FriendRequestPolicy;
   /** Server-owned revision of the friendship graph. It travels on the
    * existing settings listener, so cached relationships refresh only after a
@@ -36,6 +43,9 @@ export interface FriendSettings {
    * The reminder only ever OFFERS; each activity's sharing is still confirmed
    * individually (docs/safety-mode.md → Anreise). Absent = on. */
   journeyRemindersEnabled: boolean;
+  /** Monotonic inbox cursor. It rides on the existing user-document listener,
+   * so notification badges need no second always-on subscription. */
+  notificationsSeenAt: number;
 }
 
 export type FriendRequestTarget =
@@ -83,6 +93,15 @@ export interface FriendService {
   respondToFriendRequest(actor: FriendActor, friendshipId: string, accept: boolean): Promise<void>;
   removeFriend(actor: FriendActor, uid: string): Promise<void>;
   setCloseFriend(actor: FriendActor, uid: string, isClose: boolean): Promise<void>;
+  /**
+   * Replaces the whole Heimweg group. Unlike `setCloseFriend` this is a direct
+   * client write rather than a callable: the group is only a *preselection*,
+   * every start still passes the real audience through `startHeimweg`, and
+   * readers filter it against the confirmed friend list — so a stale or forged
+   * uid can never widen an actual share. That saves a function invocation on
+   * every edit for no loss of safety.
+   */
+  setHeimwegGroup(actor: FriendActor, uids: string[]): Promise<void>;
   setFriendRequestPolicy(actor: FriendActor, policy: FriendRequestPolicy): Promise<void>;
   /** Toggles the 1 h-before Anreise reminder. Stored on `users/{uid}` so the
    * server-side `sendJourneyReminders` can honour it when picking recipients. */

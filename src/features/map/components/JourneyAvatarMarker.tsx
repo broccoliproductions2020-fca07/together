@@ -6,6 +6,8 @@ import type { JourneyParticipant } from '@/features/journey';
 import { MarkerGroundShadow } from './MarkerGroundShadow';
 import { MarkerImage } from './markerCapture';
 
+import { TEXT_FIXED } from '@/shared/theme';
+
 // Brand ink (global.css light foreground) — see AvatarMarker.
 const INK = '#14211C';
 
@@ -55,7 +57,9 @@ export function JourneyAvatarMarker({
           {participant.avatarUrl ? (
             <MarkerImage source={{ uri: participant.avatarUrl }} style={styles.avatarImage} />
           ) : (
-            <Text style={styles.initials}>{participant.initials}</Text>
+            <Text style={styles.initials} {...TEXT_FIXED}>
+              {participant.initials}
+            </Text>
           )}
         </View>
         {showStatusBadge ? (
@@ -66,10 +70,14 @@ export function JourneyAvatarMarker({
       </View>
 
       <View style={styles.label}>
-        <Text style={styles.labelText} numberOfLines={1}>
+        <Text style={styles.labelText} numberOfLines={1} {...TEXT_FIXED}>
           {participant.isCurrentUser ? 'Du' : participant.displayName}
         </Text>
-        {subLabel ? <Text style={styles.subLabelText}>{subLabel}</Text> : null}
+        {subLabel ? (
+          <Text style={styles.subLabelText} {...TEXT_FIXED}>
+            {subLabel}
+          </Text>
+        ) : null}
       </View>
     </Pressable>
   );

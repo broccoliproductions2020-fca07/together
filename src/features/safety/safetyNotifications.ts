@@ -13,9 +13,12 @@ export const SAFETY_STATIONARY_ARRIVED_ACTION_ID = 'together.safety.stationary.a
 export const SAFETY_EXPIRY_CATEGORY_ID = 'together.safety.expiry.v1';
 export const SAFETY_EXPIRY_EXTEND_ACTION_ID = 'together.safety.expiry.extend.v1';
 export const SAFETY_EXPIRY_ARRIVED_ACTION_ID = 'together.safety.expiry.arrived.v1';
-export const SAFETY_COMPANION_CONFIRMATION_CATEGORY_ID = 'together.safety.companion-confirmation.v1';
-export const SAFETY_COMPANION_CONTINUE_ACTION_ID = 'together.safety.companion-confirmation.continue.v1';
-export const SAFETY_COMPANION_UNAVAILABLE_ACTION_ID = 'together.safety.companion-confirmation.unavailable.v1';
+export const SAFETY_COMPANION_CONFIRMATION_CATEGORY_ID =
+  'together.safety.companion-confirmation.v1';
+export const SAFETY_COMPANION_CONTINUE_ACTION_ID =
+  'together.safety.companion-confirmation.continue.v1';
+export const SAFETY_COMPANION_UNAVAILABLE_ACTION_ID =
+  'together.safety.companion-confirmation.unavailable.v1';
 export const SAFETY_ALERT_CHANNEL_ID = 'safety-alerts';
 const SAFETY_CHECKIN_CHANNEL_ID = 'safety-check-in';
 const SAFETY_REMINDER_CHANNEL_ID = 'safety-reminders';

@@ -1,12 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Pressable, Text, View } from 'react-native';
 
-import {
-  dateKey,
-  getDaysInMonth,
-  mondayFirstIndex,
-  MONTHS_FULL,
-} from '../utils/formatPlanTime';
+import { dateKey, getDaysInMonth, mondayFirstIndex, MONTHS_FULL } from '../utils/formatPlanTime';
 
 const WEEKDAY_LABELS = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 
@@ -49,7 +44,6 @@ export function MonthGrid({
   for (let i = 0; i < cells.length; i += 7) {
     rows.push(cells.slice(i, i + 7));
   }
-
 
   return (
     <View className="px-4">
@@ -123,7 +117,11 @@ export function MonthGrid({
                 </View>
                 <View
                   className={`mt-0.5 h-1 w-1 rounded-full ${
-                    hasPlans ? (isSelected ? 'bg-primary-foreground' : 'bg-primary') : 'bg-transparent'
+                    hasPlans
+                      ? isSelected
+                        ? 'bg-primary-foreground'
+                        : 'bg-primary'
+                      : 'bg-transparent'
                   }`}
                 />
               </Pressable>

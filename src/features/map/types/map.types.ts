@@ -1,22 +1,17 @@
-export type ActivityMode = 'open' | 'soon' | 'now';
+import type {
+  ActivityCategory as DomainActivityCategory,
+  ActivityMode as DomainActivityMode,
+} from '@/domain/activity';
+import type { GeoCoordinate } from '@/domain/geo';
+import type { ParticipantPreview } from '@/domain/person';
+
+export type ActivityMode = DomainActivityMode;
 
 /** Creator-chosen activity category (composer icon chips → marker badge).
  * Deliberately manual, NOT from Google Places: `onPoiClick` carries no `types`,
  * Place Details costs per call, and the category describes the ACTIVITY, not
  * the venue. Optional — undefined shows no badge. */
-export type ActivityCategory =
-  | 'essen'
-  | 'drinks'
-  | 'kaffee'
-  | 'sport'
-  | 'outdoor'
-  | 'feiern'
-  | 'kultur'
-  | 'spiele'
-  | 'lernen'
-  | 'chillen'
-  | 'shopping'
-  | 'sonstiges';
+export type ActivityCategory = DomainActivityCategory;
 
 /**
  * How an open status shares proximity inside the Offen-Fenster:
@@ -45,10 +40,7 @@ export interface NearbyFriend {
   expiresAt?: number;
 }
 
-export interface MapCoordinate {
-  latitude: number;
-  longitude: number;
-}
+export type MapCoordinate = GeoCoordinate;
 
 export interface MapRegion {
   latitude: number;
@@ -57,20 +49,7 @@ export interface MapRegion {
   longitudeDelta: number;
 }
 
-export interface MockMapPosition {
-  /** Percentage from the left edge in MockMapCanvas. Later: longitude. */
-  x: number;
-  /** Percentage from the top edge in MockMapCanvas. Later: latitude. */
-  y: number;
-}
-
-export interface MarkerAvatar {
-  userId: string;
-  displayName: string;
-  initials: string;
-  avatarUrl?: string;
-  mode?: ActivityMode;
-}
+export type MarkerAvatar = ParticipantPreview;
 
 export interface MapMarker {
   id: string;
@@ -86,7 +65,7 @@ export interface MapMarker {
   timeLabel?: string;
   /** Human-readable place, e.g. "Prater Garten". */
   placeLabel?: string;
-  position: MockMapPosition;
+  coordinate: MapCoordinate;
   /** Known activity participants, in the same order as the detail sheet. */
   avatars?: MarkerAvatar[];
   /** Current participant count. It can exceed `avatars.length` only when a
@@ -94,9 +73,7 @@ export interface MapMarker {
   participantCount?: number;
   /** Max participants incl. host; undefined = unbegrenzt. */
   maxParticipants?: number;
-  approximate?: boolean;
-  hasExactLocation?: boolean;
-  /** Links this marker to a NearbyFriend (`mockNearbyFriends[].id`) for pin friends. */
+  /** Links this marker to a nearby friend when it represents that person's activity. */
   friendId?: string;
   /** Creator-chosen category → icon badge top-right on the marker. */
   category?: ActivityCategory;
@@ -113,7 +90,7 @@ export interface MarkerCluster {
   avatars: MarkerAvatar[];
   mode: ActivityMode;
   label: string;
-  position: MockMapPosition;
+  coordinate: MapCoordinate;
   /** Max participants incl. host; set → marker/detail show "N/MAX". */
   maxParticipants?: number;
   /** Creator-chosen category → icon badge top-right on the marker. */
@@ -143,7 +120,6 @@ export interface ActivitySelectionPreview {
   /** Max participants incl. host; undefined = unbegrenzt. */
   maxParticipants?: number;
   targetCoordinate?: MapCoordinate;
-  targetPosition?: MockMapPosition;
   /** Optional time window, e.g. "Heute 18:00–21:00". */
   timeLabel?: string;
   /** Optional place, e.g. "Prater Garten". */
@@ -152,6 +128,8 @@ export interface ActivitySelectionPreview {
   endsAt?: string;
   /** Uid of the creator — drives the "Bearbeiten" affordance (host-only). */
   hostId?: string;
+  /** Host opt-in: participants may invite their OWN confirmed friends. */
+  guestInvitesEnabled?: boolean;
 }
 
 export type MapSelection =

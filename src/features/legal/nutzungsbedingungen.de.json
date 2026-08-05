@@ -1,0 +1,113 @@
+{
+  "title": "Nutzungsbedingungen",
+  "stand": "August 2026",
+  "sections": [
+    {
+      "title": "1. Geltungsbereich und Anbieter",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Diese Nutzungsbedingungen gelten für die Nutzung der Together-App. Anbieter ist [Vor- und Nachname bzw. Unternehmen], [Straße und Hausnummer], [PLZ und Ort] (siehe Impressum). Mit der Registrierung erklärst du dich mit diesen Bedingungen einverstanden."
+        }
+      ]
+    },
+    {
+      "title": "2. Leistung",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Together ist eine kostenlose App, mit der du dich privat mit bestätigten Freundinnen und Freunden verabreden kannst. Es besteht kein Anspruch auf ununterbrochene Verfügbarkeit; wir dürfen die App weiterentwickeln, verändern oder einzelne Funktionen einstellen."
+        }
+      ]
+    },
+    {
+      "title": "3. Konto",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "Du musst mindestens 16 Jahre alt sein.",
+            "Deine Angaben bei der Registrierung müssen zutreffend sein; du darfst dich nicht als eine andere Person ausgeben.",
+            "Halte deine Zugangsdaten geheim. Handlungen über dein Konto werden dir zugerechnet, wenn du sie zu vertreten hast.",
+            "Du kannst dein Konto jederzeit in der App löschen (Profil → Account löschen)."
+          ]
+        }
+      ]
+    },
+    {
+      "title": "4. Verhalten",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Bei der Nutzung von Together ist es untersagt:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "andere Personen zu belästigen, zu bedrohen, zu beleidigen oder zu diskriminieren,",
+            "rechtswidrige Inhalte zu verbreiten oder Rechte Dritter zu verletzen,",
+            "Standort- und Sicherheitsfunktionen zu missbrauchen, insbesondere um Personen gegen ihren Willen zu beobachten oder zu verfolgen,",
+            "die App automatisiert auszulesen, zu stören oder Schutzmaßnahmen zu umgehen."
+          ]
+        },
+        {
+          "type": "p",
+          "text": "Du kannst Personen jederzeit blockieren oder melden. Wir prüfen Meldungen und können bei Verstößen Inhalte entfernen sowie Konten vorübergehend sperren oder dauerhaft schließen."
+        }
+      ]
+    },
+    {
+      "title": "5. Sicherheitsfunktionen (Heimweg und Anreise)",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Die Sicherheitsfunktionen von Together (insbesondere der Heimweg-Modus) verbinden dich mit von dir ausgewählten Freundinnen und Freunden. Sie sind eine Unterstützung durch private Kontakte — sie sind KEIN Notruf und ersetzen keine professionelle Hilfe. In einer Notlage wähle immer den Notruf 112."
+        },
+        {
+          "type": "p",
+          "text": "Wir können nicht garantieren, dass Benachrichtigungen zugestellt werden, dass ausgewählte Personen sie sehen oder reagieren, oder dass Standortdaten jederzeit aktuell übertragen werden. Ob ein Gerät klingelt, entscheidet dessen Betriebssystem; Funklöcher, Akkustand und Geräteeinstellungen können die Übertragung unterbrechen. Together verspricht keine Rettung und keine Überwachung."
+        }
+      ]
+    },
+    {
+      "title": "6. Inhalte",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Für Inhalte, die du in Together erstellst (Nachrichten, Aktivitäten, Profilbild), bleibst du verantwortlich. Du räumst uns das einfache, jederzeit widerrufliche Recht ein, diese Inhalte technisch zu speichern und den von dir gewählten Empfängerinnen und Empfängern anzuzeigen — ausschließlich zum Betrieb der App. Inhalte löschen sich nach den in der Datenschutzerklärung genannten Fristen von selbst."
+        }
+      ]
+    },
+    {
+      "title": "7. Haftung",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Wir haften unbeschränkt bei Vorsatz und grober Fahrlässigkeit sowie bei der Verletzung von Leben, Körper oder Gesundheit. Bei einfacher Fahrlässigkeit haften wir nur für die Verletzung wesentlicher Vertragspflichten (Pflichten, deren Erfüllung die Nutzung der App überhaupt erst ermöglicht), begrenzt auf den vorhersehbaren, vertragstypischen Schaden. Im Übrigen ist die Haftung ausgeschlossen. Die Haftung nach zwingenden gesetzlichen Vorschriften bleibt unberührt."
+        }
+      ]
+    },
+    {
+      "title": "8. Änderungen dieser Bedingungen",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Wir können diese Bedingungen anpassen, wenn sich die App, die Rechtslage oder die technischen Rahmenbedingungen ändern. Über wesentliche Änderungen informieren wir dich in der App. Wenn du mit einer Änderung nicht einverstanden bist, kannst du dein Konto jederzeit löschen."
+        }
+      ]
+    },
+    {
+      "title": "9. Schlussbestimmungen",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Es gilt deutsches Recht. Zwingende Verbraucherschutzvorschriften deines gewöhnlichen Aufenthaltsorts bleiben unberührt. Sollte eine Bestimmung dieser Bedingungen unwirksam sein, bleibt die Wirksamkeit der übrigen Bestimmungen davon unberührt."
+        },
+        {
+          "type": "p",
+          "text": "Kontakt: [Kontakt-E-Mail-Adresse]"
+        }
+      ]
+    }
+  ]
+}

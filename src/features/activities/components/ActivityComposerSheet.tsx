@@ -2,7 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   StyleSheet,
-  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
@@ -11,6 +10,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import Animated, {
   Easing,
   interpolateColor,
@@ -22,15 +22,25 @@ import Animated, {
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import type { ActivityDraft, ActivityMode, SelectedPlace } from '../types';
+import { SquircleButton } from '@/shared/components/SquircleButton';
+
+import type { ActivityCategory, ActivityDraft, ActivityMode, SelectedPlace } from '../types';
 import {
   classifyActivityTitle,
   classifyActivityTitleHybrid,
   shouldAutoApplyCategory,
 } from '../utils/activityUnderstanding';
+import {
+  forgetCategory,
+  loadCategoryMemory,
+  recallCategory,
+  rememberCategory,
+} from '../utils/categoryMemory';
 import { validateActivityDraft } from '../utils/activityValidation';
 import { applyModeDefaults, createInitialActivityDraft } from '../utils/modeDefaults';
 import { ActivityModeSwitch } from './ActivityModeSwitch';
+import { CategoryIconSlot } from './CategoryIconSlot';
+import { GuestInvitesField } from './GuestInvitesField';
 import { LocationPicker } from './LocationPicker';
 import { NowFields } from './NowFields';
 import { ParticipantLimitField } from './ParticipantLimitField';
@@ -74,7 +84,7 @@ export interface ActivityComposerSheetProps {
   editing?: boolean;
   onClose: () => void;
   onOpenMapPicker?: (mode: ActivityMode, onPick: (place: SelectedPlace) => void) => void;
-  onSubmit?: (draft: ActivityDraft) => void;
+  onSubmit?: (draft: ActivityDraft) => void | Promise<void>;
 }
 
 export function ActivityComposerSheet({
@@ -94,13 +104,25 @@ export function ActivityComposerSheet({
   const modeProgress = useSharedValue(MODE_INDEX[initialMode]);
   const [expanded, setExpanded] = useState(false);
   const [categoryManuallyChanged, setCategoryManuallyChanged] = useState(false);
+  const [categorySheetOpen, setCategorySheetOpen] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
+  // On publish the sheet vanishes instantly (no slide-down) so the map's
+  // "Wurf & Pop" seed can take over from the button's exact position — a
+  // sliding sheet would fight the marker morphing upward. Cancel/close still slide.
+  const [instantClose, setInstantClose] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   // A ref (not state) so a rapid double-tap can't slip a second submit() call
   // through before the disabled/opacity state has actually re-rendered.
   const submittingRef = useRef(false);
   const [draft, setDraft] = useState<ActivityDraft>(
     () => initialDraft ?? createInitialActivityDraft(initialMode, initialPlace, initialTitle),
   );
+
+  // Hydrate the learned wording→category map once; recallCategory() is a
+  // synchronous no-op until it resolves, so typing is never blocked on storage.
+  useEffect(() => {
+    void loadCategoryMemory();
+  }, []);
 
   useEffect(() => {
     if (!visible) return;
@@ -110,6 +132,8 @@ export function ActivityComposerSheet({
     setValidationError(null);
     setDraft(initialDraft ?? createInitialActivityDraft(initialMode, initialPlace, initialTitle));
     submittingRef.current = false;
+    setSubmitting(false);
+    setInstantClose(false);
   }, [initialMode, initialPlace, initialTitle, initialDraft, visible]);
 
   useEffect(() => {
@@ -165,7 +189,6 @@ export function ActivityComposerSheet({
 
   function updateDraft(nextDraft: ActivityDraft) {
     setValidationError(null);
-    submittingRef.current = false;
     setDraft(nextDraft);
   }
 
@@ -174,17 +197,29 @@ export function ActivityComposerSheet({
   }
 
   function changeTitle(title: string) {
-    const categoryGuess = classifyActivityTitle(title);
+    // Tier 0: what this person already taught us about this wording beats the
+    // bundled knowledge base — it is an explicit past correction, not a guess.
+    const learned = categoryManuallyChanged ? null : recallCategory(title);
+    const categoryGuess = learned ? null : classifyActivityTitle(title);
     const autoCategory = categoryManuallyChanged
       ? draft.category
-      : shouldAutoApplyCategory(categoryGuess)
-        ? categoryGuess.primary
-        : undefined;
+      : (learned ??
+        (shouldAutoApplyCategory(categoryGuess) ? categoryGuess.primary : undefined));
 
     updateDraft({ ...draft, title, category: autoCategory });
   }
 
-  function submit() {
+  /** A category chosen by hand is a correction: remember it for this wording so
+   * the same slang resolves instantly next time (on-device only). */
+  function pickCategory(category: ActivityCategory | null) {
+    setCategoryManuallyChanged(true);
+    const title = draft.title?.trim() ?? '';
+    if (title.length < 2) return;
+    if (category) rememberCategory(title, category);
+    else forgetCategory(title);
+  }
+
+  async function submit() {
     if (submittingRef.current) return;
 
     const error = validateActivityDraft(draft);
@@ -193,16 +228,38 @@ export function ActivityComposerSheet({
       return;
     }
 
+    // Vanish instantly only when the map will actually launch a marker in
+    // (a new activity with a real pin, motion allowed) — otherwise slide as usual.
+    const willLaunch =
+      !editing && !reducedMotion && draft.place?.latitude != null && draft.place?.longitude != null;
+    setInstantClose(willLaunch);
+
     submittingRef.current = true;
-    onSubmit?.(draft);
+    setSubmitting(true);
+    try {
+      await onSubmit?.(draft);
+    } catch (error) {
+      const rawMessage = error instanceof Error ? error.message : '';
+      const message = rawMessage.replace(/^\[[^\]]+\]\s*/, '').trim();
+      setValidationError(
+        message && message.length <= 240
+          ? message
+          : 'Die Änderungen konnten nicht gespeichert werden. Bitte versuche es erneut.',
+      );
+      setInstantClose(false);
+      submittingRef.current = false;
+      setSubmitting(false);
+    }
   }
 
   return (
     <Modal
-      animationType="slide"
+      animationType={instantClose ? 'none' : 'slide'}
       transparent
       visible={visible && !suspended}
-      onRequestClose={onClose}
+      onRequestClose={() => {
+        if (!submitting) onClose();
+      }}
       statusBarTranslucent
       navigationBarTranslucent
     >
@@ -219,7 +276,7 @@ export function ActivityComposerSheet({
             <Animated.View pointerEvents="none" style={[styles.topWash, sheetTopWashStyle]} />
             <View pointerEvents="none" style={styles.innerSurface} />
 
-            <View className="px-5 pt-3">
+            <View className="px-5 pt-3" pointerEvents={submitting ? 'none' : 'auto'}>
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={expanded ? 'Composer verkleinern' : 'Composer erweitern'}
@@ -240,6 +297,7 @@ export function ActivityComposerSheet({
                   accessibilityRole="button"
                   accessibilityLabel="Composer schließen"
                   className="h-11 w-11 items-center justify-center rounded-full bg-white/10"
+                  disabled={submitting}
                   onPress={onClose}
                 >
                   <Ionicons name="close" size={22} color="#F4F5F7" />
@@ -251,25 +309,42 @@ export function ActivityComposerSheet({
 
             <ScrollView
               className="mt-4 flex-1"
+              pointerEvents={submitting ? 'none' : 'auto'}
               keyboardShouldPersistTaps="handled"
               contentContainerStyle={{
                 paddingHorizontal: 20,
                 paddingBottom: contentPaddingBottom,
-                gap: 18,
+                gap: 20,
               }}
             >
               <View className="gap-2">
                 <Text className="text-sm font-bold text-white">Aktivitätsname</Text>
-                <TextInput
-                  className="rounded-3xl border border-white/10 px-4 py-4 text-lg font-semibold text-white"
-                  style={{ backgroundColor: 'rgba(255,255,255,0.08)' }}
-                  placeholder="Name eingeben"
-                  placeholderTextColor="rgba(244,245,247,0.4)"
-                  value={draft.title ?? ''}
-                  onChangeText={changeTitle}
-                  returnKeyType="next"
-                  maxLength={60}
-                />
+                {/* The category lives here as a single slot rather than its own
+                    labelled chip row: the classifier answers it while you type,
+                    so showing the ANSWER next to the field beats asking the
+                    question again further down the form. */}
+                <View className="flex-row items-center gap-2.5">
+                  <TextInput
+                    className="flex-1 rounded-3xl border border-white/10 px-4 py-4 text-lg font-semibold text-white"
+                    style={{ backgroundColor: 'rgba(255,255,255,0.08)' }}
+                    placeholder="Name eingeben"
+                    placeholderTextColor="rgba(244,245,247,0.4)"
+                    value={draft.title ?? ''}
+                    onChangeText={changeTitle}
+                    returnKeyType="next"
+                    maxLength={60}
+                  />
+                  <CategoryIconSlot
+                    category={draft.category}
+                    accent={accent}
+                    open={categorySheetOpen}
+                    onOpenChange={setCategorySheetOpen}
+                    onPick={(category) => {
+                      updateDraft({ ...draft, category: category ?? undefined });
+                      pickCategory(category);
+                    }}
+                  />
+                </View>
               </View>
 
               {draft.mode === 'soon' ? <SoonFields draft={draft} onChange={updateDraft} /> : null}
@@ -296,6 +371,7 @@ export function ActivityComposerSheet({
               <View className="gap-2">
                 <Text className="text-sm font-bold text-white">Teilnehmer</Text>
                 <ParticipantLimitField draft={draft} onChange={updateDraft} />
+                <GuestInvitesField draft={draft} onChange={updateDraft} />
               </View>
             </ScrollView>
 
@@ -310,17 +386,21 @@ export function ActivityComposerSheet({
                     {validationError}
                   </Text>
                 ) : null}
-                <Pressable
-                  accessibilityRole="button"
+                <SquircleButton
+                  color={accent}
+                  loading={submitting}
                   accessibilityLabel={editing ? 'Änderungen speichern' : 'Aktivität erstellen'}
-                  className="min-h-[54px] items-center justify-center rounded-[18px] px-5 py-3.5 active:opacity-90"
-                  style={{ backgroundColor: accent }}
-                  onPress={submit}
-                >
-                  <Text className="text-base font-bold text-white">
-                    {editing ? 'Änderungen speichern' : 'Aktivität erstellen'}
-                  </Text>
-                </Pressable>
+                  label={
+                    submitting
+                      ? editing
+                        ? 'Wird gespeichert …'
+                        : 'Wird erstellt …'
+                      : editing
+                        ? 'Änderungen speichern'
+                        : 'Aktivität erstellen'
+                  }
+                  onPress={() => void submit()}
+                />
               </View>
             </Animated.View>
           </View>

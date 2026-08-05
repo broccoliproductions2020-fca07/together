@@ -1,0 +1,71 @@
+name: Deploy production backend
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_ref:
+        description: Immutable release tag, for example v1.0.0
+        required: true
+        type: string
+      confirmation:
+        description: Type DEPLOY_PRODUCTION to continue
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: inputs.confirmation == 'DEPLOY_PRODUCTION' && startsWith(inputs.release_ref, 'v')
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_ref }}
+          fetch-depth: 0
+
+      - name: Require an exact release tag
+        env:
+          RELEASE_REF: ${{ inputs.release_ref }}
+        run: test "$(git describe --tags --exact-match HEAD)" = "$RELEASE_REF"
+
+      - name: Require the tag to match app.json
+        env:
+          RELEASE_REF: ${{ inputs.release_ref }}
+        run: node scripts/assert-release-tag.cjs "$RELEASE_REF"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - run: npm ci
+      - run: npm ci --prefix functions
+      - run: npm run verify:release
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOYER_SERVICE_ACCOUNT }}
+
+      - name: Deploy rules and indexes
+        run: npx --no-install firebase deploy --project prod --only firestore:rules,firestore:indexes,database,storage --non-interactive
+
+      - name: Deploy functions
+        run: npx --no-install firebase deploy --project prod --only functions --non-interactive

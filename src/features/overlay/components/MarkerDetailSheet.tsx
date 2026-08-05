@@ -1,11 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useState } from 'react';
 import { ScrollView, Text, useWindowDimensions, View } from 'react-native';
-import {
-  Gesture,
-  GestureDetector,
-  GestureHandlerRootView,
-} from 'react-native-gesture-handler';
+import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 import Animated, {
   Extrapolation,
@@ -24,14 +20,14 @@ import type { ProposalData } from '@/features/chat';
 import { useAuth } from '@/features/auth';
 import type { MapSelection, MarkerAvatar } from '@/features/map/types/map.types';
 import { markerModeStyles } from '@/features/map/utils/markerStyles';
+import { PressableScale } from '@/shared/components/PressableScale';
 
-import { AnimatedPressable } from './AnimatedPressable';
 import { ActivityContent } from './markerDetail/ActivityContent';
 import { ActivityParticipantsContent } from './markerDetail/ActivityParticipantsContent';
 import { PlaceContent } from './markerDetail/PlaceContent';
 import { ParticipantProfileSheet } from './markerDetail/ParticipantProfileSheet';
 import { isActivitySelection } from './markerDetail/types';
-import { useKeyboardHeight } from '@/features/chat/utils/useKeyboardHeight';
+import { useKeyboardPadding } from '@/features/chat/utils/useKeyboardHeight';
 
 // Chat-sheet snap points as % of the keyboard-aware container. Dragging below
 // the release threshold collapses back to the activity details.
@@ -80,7 +76,6 @@ export function MarkerDetailSheet({
 }: MarkerDetailSheetProps) {
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
-  const keyboardHeight = useKeyboardHeight();
   const [mounted, setMounted] = useState(visible);
   const [shownSelection, setShownSelection] = useState<MapSelection | null>(selection);
   const [chatExpanded, setChatExpanded] = useState(false);
@@ -133,16 +128,19 @@ export function MarkerDetailSheet({
     height: `${chatPct.value}%` as const,
   }));
 
+  // Derived BEFORE the early return: `useKeyboardPadding` is a hook and must run
+  // on every render, so nothing it depends on may sit behind a conditional exit.
+  const activitySelection = shownSelection ? isActivitySelection(shownSelection) : null;
+  const participantView = Boolean(activitySelection) && activityView === 'participants';
+  // When joined AND the chat is expanded, the sheet becomes a tall chat surface.
+  const chatMode = Boolean(activitySelection) && joined && chatExpanded && !participantView;
+  const keyboardPadding = useKeyboardPadding(0, chatMode);
+
   if (!mounted || !shownSelection) return null;
 
-  const activitySelection = isActivitySelection(shownSelection);
   const closeIconColor = activitySelection
     ? markerModeStyles[activitySelection.mode].color
     : markerModeStyles.now.color;
-  const participantView = Boolean(activitySelection) && activityView === 'participants';
-
-  // When joined AND the chat is expanded, the sheet becomes a tall chat surface.
-  const chatMode = Boolean(activitySelection) && joined && chatExpanded && !participantView;
 
   const expandChat = () => {
     // Start the height animation from the sheet's measured detail height so
@@ -187,32 +185,32 @@ export function MarkerDetailSheet({
         runOnJS(collapseChat)();
         return;
       }
-      const target = projected > (CHAT_SNAP_LOW + CHAT_SNAP_HIGH) / 2 ? CHAT_SNAP_HIGH : CHAT_SNAP_LOW;
+      const target =
+        projected > (CHAT_SNAP_LOW + CHAT_SNAP_HIGH) / 2 ? CHAT_SNAP_HIGH : CHAT_SNAP_LOW;
       chatPct.value = reducedMotion ? target : withSpring(target, CHAT_SPRING);
       runOnJS(setChatFullscreen)(target === CHAT_SNAP_HIGH);
     });
 
   return (
-      <GestureHandlerRootView
+    <GestureHandlerRootView
+      pointerEvents="box-none"
+      style={{ bottom: 0, left: 0, position: 'absolute', right: 0, top: 0 }}
+    >
+      <Animated.View
+        // Keyboard padding instead of KeyboardAvoidingView: this sheet is an
+        // absolutely-positioned overlay (not a native Modal window), where
+        // KeyboardAvoidingView's auto-resize is unreliable on Android. Padding
+        // the bottom-anchored ("justify-end") content by the live keyboard
+        // frame clears it regardless of window resize behavior — and because
+        // the value comes from the UI thread, it tracks the keyboard instead
+        // of jumping to its final position.
+        className="flex-1 justify-end"
+        style={keyboardPadding}
         pointerEvents="box-none"
-        style={{ bottom: 0, left: 0, position: 'absolute', right: 0, top: 0 }}
+        onLayout={(event) => {
+          parentHeight.value = event.nativeEvent.layout.height;
+        }}
       >
-        <View
-          // Manual keyboard offset instead of KeyboardAvoidingView: this sheet
-          // is an absolutely-positioned overlay (not a native Modal window),
-          // and KeyboardAvoidingView's auto-resize is unreliable there on
-          // Android — the composer ends up hidden behind the keyboard. Plain
-          // padding using the real keyboard height always works: it pushes
-          // this bottom-anchored ("justify-end") content up by exactly that
-          // many px, clearing the keyboard regardless of window resize
-          // behavior.
-          className="flex-1 justify-end"
-          style={{ paddingBottom: chatMode ? keyboardHeight : 0 }}
-          pointerEvents="box-none"
-          onLayout={(event) => {
-            parentHeight.value = event.nativeEvent.layout.height;
-          }}
-        >
         <Animated.View
           layout={reducedMotion ? undefined : LinearTransition.duration(240)}
           className="rounded-t-[30px] border border-border bg-card px-5 pt-3 shadow-xl"
@@ -225,9 +223,7 @@ export function MarkerDetailSheet({
             chatMode ? chatHeightStyle : null,
             // Participants size to their content (capped inside the list) — a
             // fixed tall sheet left odd empty space for small activities.
-            chatMode
-              ? { paddingBottom: insets.bottom }
-              : { paddingBottom: insets.bottom + 18 },
+            chatMode ? { paddingBottom: insets.bottom } : { paddingBottom: insets.bottom + 18 },
           ]}
           pointerEvents={visible ? 'auto' : 'none'}
         >
@@ -278,7 +274,9 @@ export function MarkerDetailSheet({
               accessible={chatMode}
               accessibilityRole={chatMode ? 'adjustable' : undefined}
               accessibilityLabel={chatMode ? 'Chat-Größe' : undefined}
-              accessibilityValue={chatMode ? { text: chatFullscreen ? 'Groß' : 'Kompakt' } : undefined}
+              accessibilityValue={
+                chatMode ? { text: chatFullscreen ? 'Groß' : 'Kompakt' } : undefined
+              }
               accessibilityActions={
                 chatMode
                   ? [
@@ -299,14 +297,15 @@ export function MarkerDetailSheet({
 
           {participantView ? (
             <View className="mb-3 flex-row items-center gap-3 pr-12">
-              <AnimatedPressable
+              <PressableScale
                 accessibilityRole="button"
                 accessibilityLabel="Zurück zu den Activity-Details"
                 className="h-10 w-10 items-center justify-center rounded-full bg-secondary/80"
+                haptic={false}
                 onPress={() => setActivityView('detail')}
               >
                 <Ionicons name="chevron-back" size={22} color={closeIconColor} />
-              </AnimatedPressable>
+              </PressableScale>
               <View className="flex-1">
                 <Text className="text-xl font-bold text-foreground">Teilnehmer</Text>
                 <Text className="mt-0.5 text-sm text-muted-foreground">
@@ -323,14 +322,15 @@ export function MarkerDetailSheet({
           {/* Chat mode drops the floating close: back leads to the details and a
               backdrop tap still closes everything — one control per intention. */}
           {!chatMode ? (
-            <AnimatedPressable
+            <PressableScale
               accessibilityRole="button"
               accessibilityLabel="Detail schließen"
               className="absolute right-5 top-4 z-10 h-10 w-10 items-center justify-center rounded-full bg-secondary/80"
+              haptic={false}
               onPress={onClose}
             >
               <Ionicons name="close" size={20} color={closeIconColor} />
-            </AnimatedPressable>
+            </PressableScale>
           ) : null}
 
           {(() => {
@@ -403,7 +403,7 @@ export function MarkerDetailSheet({
             />
           ) : null}
         </Animated.View>
-        </View>
-      </GestureHandlerRootView>
+      </Animated.View>
+    </GestureHandlerRootView>
   );
 }

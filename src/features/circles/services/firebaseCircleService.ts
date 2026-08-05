@@ -1,13 +1,9 @@
 import {
-  addDoc,
   collection,
-  deleteDoc,
-  doc,
   getDocs,
   limit,
   orderBy,
   query,
-  serverTimestamp,
   type DocumentData,
 } from '@react-native-firebase/firestore';
 import { httpsCallable } from '@react-native-firebase/functions';
@@ -48,15 +44,15 @@ export const firebaseCircleService: CircleService = {
     return snapshot.docs.map((item) => mapCircle(item.id, item.data()));
   },
 
-  async createCircle(actor, name, emoji) {
-    const ref = await addDoc(privateCirclesRef(actor.uid), {
+  async createCircle(_actor, name, emoji) {
+    const result = await httpsCallable<{ name: string; emoji?: string }, { id: string }>(
+      getFirebaseFunctions(),
+      'createPrivateCircle',
+    )({
       name: name.trim(),
       ...(emoji?.trim() ? { emoji: emoji.trim() } : {}),
-      friendUids: [],
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
     });
-    return ref.id;
+    return result.data.id;
   },
 
   async setCircleFriends(actor, circleId, friendUids) {
@@ -66,7 +62,10 @@ export const firebaseCircleService: CircleService = {
     )({ circleId, friendUids: [...new Set(friendUids)].slice(0, 50) });
   },
 
-  async deleteCircle(actor, circleId) {
-    await deleteDoc(doc(privateCirclesRef(actor.uid), circleId));
+  async deleteCircle(_actor, circleId) {
+    await httpsCallable<{ circleId: string }, { ok: true }>(
+      getFirebaseFunctions(),
+      'deletePrivateCircle',
+    )({ circleId });
   },
 };

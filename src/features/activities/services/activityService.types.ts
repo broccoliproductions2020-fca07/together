@@ -1,4 +1,4 @@
-import type { ActivityCategory, ActivityMode } from '@/features/map/types/map.types';
+import type { ActivityCategory, ActivityMode } from '@/domain/activity';
 
 import type { ActivityVisibility } from '../types';
 
@@ -14,6 +14,18 @@ export interface ActivityParticipant {
   initials: string;
 }
 
+export type ActivityPlace =
+  | {
+      label: string;
+      latitude: number;
+      longitude: number;
+      visibility: 'pin';
+    }
+  | {
+      label: string;
+      visibility: 'none';
+    };
+
 /** Persisted activity document (mirrors firestore.rules `validActivity`). */
 export interface ActivityDoc {
   id: string;
@@ -28,12 +40,15 @@ export interface ActivityDoc {
   /** ISO 8601. */
   startsAt?: string;
   endsAt?: string;
-  place?: { label?: string; latitude?: number; longitude?: number; visibility: 'pin' | 'none' };
+  place?: ActivityPlace;
   /** Max participants incl. host (2–50); absent = unbegrenzt. */
   maxParticipants?: number;
   /** Creator-chosen category (validated enum in firestore.rules); absent = keine. */
   category?: ActivityCategory;
   participants: ActivityParticipant[];
+  /** Host opt-in: participants may invite their OWN confirmed friends (guest
+   * invites widen the read audience; joining still runs all join checks). */
+  guestInvitesEnabled?: boolean;
   status: 'active' | 'expired' | 'cancelled';
   createdAt: number;
   /** Controls map/calendar visibility; `expireAt` retains the Activity chat. */
@@ -48,19 +63,22 @@ export interface ActivityDocUpdate {
   mode?: ActivityMode;
   startsAt?: string;
   endsAt?: string;
-  note?: string;
-  place?: ActivityDoc['place'];
+  /** null removes an existing description; undefined leaves it unchanged. */
+  note?: string | null;
+  /** null removes an existing place and its coordinates. */
+  place?: ActivityPlace | null;
   /** null removes the limit (back to unbegrenzt); undefined leaves it unchanged. */
   maxParticipants?: number | null;
   /** null removes the category; undefined leaves it unchanged. */
   category?: ActivityCategory | null;
-  participants?: ActivityParticipant[];
+  /** Host toggle for participant guest invites; undefined leaves it unchanged. */
+  guestInvitesEnabled?: boolean;
 }
 
 /**
  * Creation carries the chosen visibility context separately from the resolved
- * uid snapshot. Mock mode needs the latter; Firebase resolves it again on the
- * server so a client can never smuggle in a person-by-person audience.
+ * uid snapshot. Firebase resolves it again on the server so a client can never
+ * smuggle in a person-by-person audience.
  */
 export type ActivityCreateInput = Omit<ActivityDoc, 'id' | 'createdAt' | 'hostId' | 'status'> & {
   audienceContext: ActivityVisibility;
@@ -87,17 +105,20 @@ export interface ActivityService {
     doc: ActivityCreateInput,
     preferredId?: string,
   ): ActivityCreation;
-  updateActivity(actor: ActivityActor, id: string, update: ActivityDocUpdate): void;
+  updateActivity(actor: ActivityActor, id: string, update: ActivityDocUpdate): Promise<void>;
   /** Host-only cancellation. The document remains for retention/audit and is
    * excluded from the active feed. */
-  cancelActivity(actor: ActivityActor, id: string): void;
-  /**
-   * Adds the actor to the activity's `participants` (self-join). No-op if the
-   * activity has no backing doc (demo seeds) or the actor is already in. The
-   * participant limit is enforced atomically by the server callable; callers
-   * use the false result to keep chat membership in sync.
-   */
+  cancelActivity(actor: ActivityActor, id: string): Promise<void>;
+  /** Adds the actor to the activity's participants. Participant limits are
+   * enforced atomically by the server callable. */
   joinActivity(actor: ActivityActor, id: string): Promise<boolean>;
   /** Removes only the current user; the host must cancel instead. */
   leaveActivity(actor: ActivityActor, id: string): Promise<boolean>;
+  /** Participant-vouched guest invite: adds one of the CALLER's confirmed
+   * friends to the activity's read audience (host opt-in, server-checked). */
+  inviteFriend(
+    actor: ActivityActor,
+    id: string,
+    targetUid: string,
+  ): Promise<'invited' | 'already_invited'>;
 }

@@ -1,6 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
+
+import { AnimatedToggleIcon } from '@/shared/components/AnimatedToggleIcon';
 import Animated, {
   Easing,
   interpolateColor,
@@ -11,6 +13,8 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { markerModeStyles } from '@/features/map/utils/markerStyles';
+import { onColorTextColor } from '@/shared/utils/contrastColor';
+import { haptics } from '@/shared/utils/haptics';
 
 import type { ActivityMode } from '../types';
 
@@ -23,10 +27,12 @@ const MODE_LABELS: Record<ActivityMode, string> = {
   soon: 'Soon',
   now: 'Jetzt',
 };
+// Filled glyphs — AnimatedToggleIcon derives the `-outline` form for the
+// unselected state and morphs between them with a pop on selection.
 const MODE_ICONS: Record<ActivityMode, keyof typeof Ionicons.glyphMap> = {
-  open: 'compass-outline',
-  soon: 'calendar-clear-outline',
-  now: 'flash-outline',
+  open: 'compass',
+  soon: 'calendar-clear',
+  now: 'flash',
 };
 const MODE_COLORS = ['#41C08D', '#E0A23E'];
 const MODE_INDEX: Record<ActivityMode, number> = {
@@ -71,7 +77,9 @@ export function ActivityModeSwitch({ mode, onChange }: ActivityModeSwitchProps) 
       />
       {MODES.map((item) => {
         const active = mode === item;
-        const color = active ? '#FFFFFF' : markerModeStyles[item].color;
+        // Active tab sits on the mode-colour fill → contrast-safe foreground
+        // (white fails WCAG on green/amber); inactive sits on the dark track.
+        const activeForeground = onColorTextColor(markerModeStyles[item].color);
         return (
           <Pressable
             key={item}
@@ -79,10 +87,22 @@ export function ActivityModeSwitch({ mode, onChange }: ActivityModeSwitchProps) 
             accessibilityLabel={`Mode ${markerModeStyles[item].label}`}
             accessibilityState={{ selected: active }}
             className="min-h-11 flex-1 flex-row items-center justify-center gap-2 rounded-full px-3"
-            onPress={() => onChange(item)}
+            onPress={() => {
+              if (item !== mode) haptics.selection();
+              onChange(item);
+            }}
           >
-            <Ionicons name={MODE_ICONS[item]} size={16} color={color} />
-            <Text className="text-sm font-bold" style={{ color: active ? '#FFFFFF' : '#D6DAE2' }}>
+            <AnimatedToggleIcon
+              icon={MODE_ICONS[item]}
+              active={active}
+              size={16}
+              activeColor={activeForeground}
+              inactiveColor={markerModeStyles[item].color}
+            />
+            <Text
+              className="text-sm font-bold"
+              style={{ color: active ? activeForeground : '#D6DAE2' }}
+            >
               {MODE_LABELS[item]}
             </Text>
           </Pressable>

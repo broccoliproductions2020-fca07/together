@@ -115,6 +115,12 @@
 }
 
 @theme inline {
+  /* Shared radius tokens for NativeWind utility classes. */
+  --radius-sm: 12px;
+  --radius-md: 16px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+
   --color-primary: rgb(var(--primary));
   --color-primary-foreground: rgb(var(--primary-foreground));
   --color-card: rgb(var(--card));

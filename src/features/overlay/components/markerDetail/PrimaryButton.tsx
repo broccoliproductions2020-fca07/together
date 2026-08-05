@@ -1,8 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Text } from 'react-native';
 
-import { AnimatedPressable } from '../AnimatedPressable';
+import { SquircleButton } from '@/shared/components/SquircleButton';
 
+/**
+ * The activity detail's main action (Beitreten / Mitplanen / Dazustoßen). Thin
+ * wrapper over the shared SquircleButton so the "edel" solid look — contrast-safe
+ * label, top light edge, soft colour shadow, press-scale + haptic — is inherited
+ * from one place; callers keep passing label/accent/icon unchanged.
+ */
 export function PrimaryButton({
   label,
   accent,
@@ -14,16 +19,5 @@ export function PrimaryButton({
   icon: keyof typeof Ionicons.glyphMap;
   onPress?: () => void;
 }) {
-  return (
-    <AnimatedPressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      className="min-h-[54px] flex-row items-center justify-center gap-2 rounded-2xl px-5"
-      style={{ backgroundColor: accent }}
-      onPress={onPress}
-    >
-      <Ionicons name={icon} size={20} color="#ffffff" />
-      <Text className="text-base font-bold text-white">{label}</Text>
-    </AnimatedPressable>
-  );
+  return <SquircleButton label={label} color={accent} icon={icon} onPress={onPress} />;
 }

@@ -1,4 +1,4 @@
-import { mockCurrentPlace } from '@/data/mock';
+import { CURRENT_LOCATION_PLACE } from './currentPlace';
 
 import type { ActivityDraft, ActivityMode, SelectedPlace } from '../types';
 import { addMinutes, durationMinutes, roundUpToStep, toISO } from './datetime';
@@ -14,7 +14,7 @@ export function createInitialActivityDraft(
   place?: SelectedPlace,
   title?: string,
 ): ActivityDraft {
-  const defaultPlace = place ?? mockCurrentPlace;
+  const defaultPlace = place ?? CURRENT_LOCATION_PLACE;
   return applyModeDefaults(
     {
       mode,

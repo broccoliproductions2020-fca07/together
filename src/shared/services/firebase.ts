@@ -3,7 +3,11 @@ import * as Device from 'expo-device';
 import { getApp as getNativeApp, type FirebaseApp } from '@react-native-firebase/app';
 import { initializeAppCheck } from '@react-native-firebase/app-check';
 import { connectAuthEmulator, getAuth, type Auth } from '@react-native-firebase/auth';
-import { connectDatabaseEmulator, getDatabase, type Database } from '@react-native-firebase/database';
+import {
+  connectDatabaseEmulator,
+  getDatabase,
+  type Database,
+} from '@react-native-firebase/database';
 import {
   enablePersistentCacheIndexAutoCreation,
   getFirestore,
@@ -11,36 +15,40 @@ import {
   initializeFirestore,
   type Firestore,
 } from '@react-native-firebase/firestore';
-import { connectFunctionsEmulator, getFunctions, type Functions } from '@react-native-firebase/functions';
-import { connectStorageEmulator, getStorage, type FirebaseStorage } from '@react-native-firebase/storage';
+import {
+  connectFunctionsEmulator,
+  getFunctions,
+  type Functions,
+} from '@react-native-firebase/functions';
+import {
+  connectStorageEmulator,
+  getStorage,
+  type FirebaseStorage,
+} from '@react-native-firebase/storage';
 import { Platform } from 'react-native';
 
 /**
- * Central Firebase bootstrap. Everything Firebase-shaped goes through here so
- * the rest of the app never imports the SDK directly.
+ * Central Firebase bootstrap for native app initialization, emulator routing
+ * and shared Firebase service instances.
  *
- * Modes (see docs/backend-plan.md):
- *  - `EXPO_PUBLIC_BACKEND` unset or `mock` → the app never calls into this file
- *    at runtime (services stay mock-backed); zero network, zero cost.
- *  - `firebase` + emulators (default)      → local Emulator Suite against the
- *    offline `demo-together` project. Start it with `npm run emulators`.
- *  - `firebase` + `EXPO_PUBLIC_FIREBASE_EMULATORS=false` → real cloud project
- *    (staging/release only; native project identity comes from the platform
- *    configuration files, not JavaScript environment variables).
+ * There is exactly ONE backend: Firebase. The former `mock` implementation was
+ * removed (Produktentscheidung Juli 2026) — dev and production now run the same
+ * code and differ only in WHICH Firebase they talk to:
+ *
+ *  - **Dev** (`APP_VARIANT=development`, `EXPO_PUBLIC_FIREBASE_EMULATORS=true`)
+ *    → local Emulator Suite. Start it with `npm run emulators`; the app will not
+ *    work without it. Installs alongside production as a separate `.dev` app.
+ *  - **Produktion** (`EXPO_PUBLIC_FIREBASE_EMULATORS=false`) → the real cloud
+ *    project. Its identity comes from the native configuration files, never from
+ *    JavaScript environment variables.
  */
-
-export type BackendKind = 'mock' | 'firebase';
-
-export const BACKEND: BackendKind =
-  Platform.OS !== 'web' &&
-  process.env.EXPO_PUBLIC_BACKEND === 'firebase'
-    ? 'firebase'
-    : 'mock';
 
 // Exported so auth services can tell a real cloud project apart from the
 // local Emulator Suite (e.g. to keep guest sign-in dev/test-only — see
 // firebaseAuthService.ts).
-export const USE_EMULATORS = process.env.EXPO_PUBLIC_FIREBASE_EMULATORS !== 'false';
+// Emulator routing is opt-in. A cloud build that accidentally lacks this
+// variable must never be pointed at a developer machine instead of Firebase.
+export const USE_EMULATORS = process.env.EXPO_PUBLIC_FIREBASE_EMULATORS === 'true';
 const APP_CHECK_ENABLED = process.env.EXPO_PUBLIC_FIREBASE_APP_CHECK_ENABLED === 'true';
 const APP_CHECK_DEBUG_TOKEN = process.env.EXPO_PUBLIC_FIREBASE_APP_CHECK_DEBUG_TOKEN;
 
@@ -48,6 +56,8 @@ const AUTH_EMULATOR_PORT = 9099;
 const DATABASE_EMULATOR_PORT = 9000;
 const FIRESTORE_EMULATOR_PORT = 8080;
 const FUNCTIONS_EMULATOR_PORT = 5001;
+/** Keep in sync with `setGlobalOptions` in functions/index.js. */
+const FUNCTIONS_REGION = 'europe-west3';
 const STORAGE_EMULATOR_PORT = 9198;
 
 /**
@@ -77,8 +87,8 @@ function emulatorHost(): string {
  */
 function firestoreEmulatorEndpoint(): string {
   const host = emulatorHost();
-  const androidEmulatorLoopback = Platform.OS === 'android' && !Device.isDevice &&
-    (host === 'localhost' || host === '127.0.0.1');
+  const androidEmulatorLoopback =
+    Platform.OS === 'android' && !Device.isDevice && (host === 'localhost' || host === '127.0.0.1');
   return `${androidEmulatorLoopback ? '10.0.2.2' : host}:${FIRESTORE_EMULATOR_PORT}`;
 }
 
@@ -90,7 +100,10 @@ let storage: FirebaseStorage | null = null;
 let nativeFirebasePreparation: Promise<void> | null = null;
 
 function isAlreadyInitializedEmulatorError(error: unknown): boolean {
-  return error instanceof Error && /useEmulator\(\) after instance has already been initialized/i.test(error.message);
+  return (
+    error instanceof Error &&
+    /useEmulator\(\) after instance has already been initialized/i.test(error.message)
+  );
 }
 
 type EmulatorConnectionRegistry = typeof globalThis & {
@@ -143,7 +156,6 @@ function getApp(): FirebaseApp {
  * silently run without device-attestation protection.
  */
 export function prepareNativeFirebase(): Promise<void> {
-  if (BACKEND !== 'firebase' || Platform.OS === 'web') return Promise.resolve();
   if (nativeFirebasePreparation) return nativeFirebasePreparation;
 
   nativeFirebasePreparation = (async () => {
@@ -169,7 +181,10 @@ export function prepareNativeFirebase(): Promise<void> {
         'Firebase App Check ist für diesen Cloud-Build nicht aktiviert. Setze EXPO_PUBLIC_FIREBASE_APP_CHECK_ENABLED=true erst nach der App-Check-Konfiguration.',
       );
     }
-    const useDebugProvider = Boolean(APP_CHECK_DEBUG_TOKEN);
+    // A debug token is intentionally accepted only by development builds. A
+    // release build must always use the device-attestation provider even if a
+    // stale debug environment variable made it into the build environment.
+    const useDebugProvider = __DEV__ && Boolean(APP_CHECK_DEBUG_TOKEN);
     await initializeAppCheck(app, {
       provider: {
         providerOptions: {
@@ -239,7 +254,10 @@ export function getFirebaseRealtimeDb(): Database {
 /** Lazily initialized callable/scheduled Functions client. */
 export function getFirebaseFunctions(): Functions {
   if (!functions) {
-    const instance = getFunctions(getApp());
+    // Must match `setGlobalOptions({ region })` in functions/index.js — the
+    // callable URL contains the region, so a mismatch resolves to a function
+    // that does not exist.
+    const instance = getFunctions(getApp(), FUNCTIONS_REGION);
     functions = instance;
     if (USE_EMULATORS) {
       connectLocalEmulator('functions', () =>

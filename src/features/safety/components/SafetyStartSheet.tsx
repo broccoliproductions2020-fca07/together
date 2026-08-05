@@ -1,6 +1,7 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   InteractionManager,
@@ -19,8 +20,10 @@ import { useCircles } from '@/features/circles';
 import { useFriends, type FriendProfile } from '@/features/friends';
 
 import { useSafety } from '../SafetyProvider';
+import { STATUS_COLOR } from '../safetyTheme';
 
-const SAFETY_COLOR = '#6E8BF7';
+const SAFETY_COLOR = STATUS_COLOR.blue;
+const INTRO_SEEN_KEY = 'together.safety.introSeen.v1';
 
 type QuickChoice = {
   id: string;
@@ -42,19 +45,19 @@ const FEATURE_POINTS: {
 }[] = [
   {
     icon: 'locate-outline',
-    color: '#41C08D',
+    color: STATUS_COLOR.blue,
     title: 'Live-Standort',
     text: 'Nur die Freunde, die du auswählst, sehen deinen aktuellen Standort — und nur so lange, bis du sicher zu Hause bist. Danach wird er gelöscht.',
   },
   {
     icon: 'alert-circle-outline',
-    color: '#E0A23E',
+    color: STATUS_COLOR.orange,
     title: 'Ich fühle mich unsicher',
     text: 'Deine Freunde werden benachrichtigt und gebeten, deinen Heimweg aktiv im Blick zu behalten, damit sie bei Bedarf schnell reagieren können. Dein Standort wird häufiger aktualisiert.',
   },
   {
     icon: 'warning-outline',
-    color: '#FF5A5A',
+    color: STATUS_COLOR.red,
     title: 'Ich bin in Gefahr',
     // "alarmiert" = our dispatch act (allowed); "sofort"/"laut" = recipient
     // device behavior (banned — the OS owns delivery timing and sound).
@@ -132,7 +135,7 @@ function IntroStep({ onNext, onClose }: { onNext: () => void; onClose: () => voi
       </View>
 
       <View className="mt-3 flex-row items-start gap-2 rounded-2xl bg-white/[0.04] px-3.5 py-3">
-        <Ionicons name="call-outline" size={16} color="#FF5A5A" />
+        <Ionicons name="call-outline" size={16} color={STATUS_COLOR.red} />
         <Text className="flex-1 text-xs leading-4 text-white/55">
           Together ist kein Notrufdienst. Die Zustellung von Benachrichtigungen und eine Reaktion
           deiner Begleiter können nicht garantiert werden. Bei Gefahr rufe direkt 112.
@@ -215,7 +218,7 @@ function FriendRow({
  */
 export function SafetyStartSheet({ visible, onClose, onStartRequested }: SafetyStartSheetProps) {
   const insets = useSafeAreaInsets();
-  const { friends, closeFriends } = useFriends();
+  const { friends, closeFriends, heimwegGroup, setHeimwegGroup } = useFriends();
   const { circles, refreshCircles } = useCircles();
   const { joinedIds } = useActivityChat();
   const { findActivityById } = useActivityEntities();
@@ -223,9 +226,20 @@ export function SafetyStartSheet({ visible, onClose, onStartRequested }: SafetyS
   const [selectedUids, setSelectedUids] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
-  // Deliberate two-step flow: the overview always comes first — for a trust
-  // feature the "what happens here" page IS part of the product, not friction.
+  // Revision August 2026 (replaces "overview on EVERY open"): the trust
+  // overview shows on the FIRST open only — a returning user at night wants
+  // the fewest possible taps to start sharing. The select step's back arrow
+  // keeps the overview one tap away for re-reading; a storage error safely
+  // falls back to showing it.
   const [step, setStep] = useState<'intro' | 'select'>('intro');
+  // Revision August 2026 — the Heimweg group. Preselection order is
+  // deliberate: the saved group, else close friends, else ALL friends. The
+  // last fallback exists because the primary button used to arrive DISABLED
+  // for anyone who had never marked a close friend — i.e. every new user, at
+  // night, in the one moment they must not have to think. Nothing is ever
+  // shared silently: the audience stays listed and editable above the button.
+  const [rememberGroup, setRememberGroup] = useState(true);
+  const seededRef = useRef(false);
 
   const activeActivityChoices = useMemo<QuickChoice[]>(() => {
     const now = Date.now();
@@ -277,14 +291,36 @@ export function SafetyStartSheet({ visible, onClose, onStartRequested }: SafetyS
   }, [activeActivityChoices, circles, closeFriends, friends]);
 
   useEffect(() => {
-    if (!visible) return;
+    if (!visible) {
+      seededRef.current = false;
+      return;
+    }
+    // Seed ONCE per open. The friend list arrives from a live listener, so
+    // re-running on every snapshot would silently wipe a selection the user is
+    // in the middle of making.
+    if (seededRef.current) return;
+    seededRef.current = true;
     void refreshCircles();
-    const initial = closeFriends.length ? closeFriends : [];
+    const initial = heimwegGroup.length
+      ? heimwegGroup
+      : closeFriends.length
+        ? closeFriends
+        : friends;
     setSelectedUids(new Set(initial.map((friend) => friend.uid)));
     setQuery('');
     setBusy(false);
     setStep('intro');
-  }, [closeFriends, refreshCircles, visible]);
+    setRememberGroup(true);
+    let active = true;
+    AsyncStorage.getItem(INTRO_SEEN_KEY)
+      .then((seen) => {
+        if (active && seen) setStep('select');
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [closeFriends, friends, heimwegGroup, refreshCircles, visible]);
 
   const visibleFriends = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase('de');
@@ -295,6 +331,9 @@ export function SafetyStartSheet({ visible, onClose, onStartRequested }: SafetyS
   }, [friends, query]);
 
   const selectedCount = selectedUids.size;
+  const groupMatchesSelection =
+    heimwegGroup.length === selectedCount &&
+    heimwegGroup.every((friend) => selectedUids.has(friend.uid));
 
   function chooseQuick(choice: QuickChoice) {
     setSelectedUids(new Set(choice.uids));
@@ -312,10 +351,17 @@ export function SafetyStartSheet({ visible, onClose, onStartRequested }: SafetyS
   async function start() {
     if (!selectedCount || busy) return;
     setBusy(true);
+    const audience = [...selectedUids];
+    // The group is saved as a BYPRODUCT of a real start — never as a setup
+    // step. Fire-and-forget on purpose: remembering a preference must never
+    // delay or fail the safety action it belongs to.
+    if (rememberGroup && !groupMatchesSelection) {
+      void setHeimwegGroup(audience).catch(() => {});
+    }
     // Calling the async provider first sets its pending state synchronously.
     // The sheet then dismisses and reveals the honest operation screen while
     // backend/permission/native work continues.
-    const activation = startHeimweg([...selectedUids]);
+    const activation = startHeimweg(audience);
     onClose();
     onStartRequested?.();
     InteractionManager.runAfterInteractions(() => setConsoleMinimized(false));
@@ -348,7 +394,13 @@ export function SafetyStartSheet({ visible, onClose, onStartRequested }: SafetyS
         >
           <View className="mb-4 h-1.5 w-12 self-center rounded-full bg-white/20" />
           {step === 'intro' ? (
-            <IntroStep onNext={() => setStep('select')} onClose={onClose} />
+            <IntroStep
+              onNext={() => {
+                setStep('select');
+                AsyncStorage.setItem(INTRO_SEEN_KEY, '1').catch(() => {});
+              }}
+              onClose={onClose}
+            />
           ) : (
             <>
               <View className="flex-row items-start justify-between gap-3">
@@ -413,7 +465,7 @@ export function SafetyStartSheet({ visible, onClose, onStartRequested }: SafetyS
                                 {choice.kind === 'activity' ? (
                                   <Text
                                     className="text-xs font-extrabold"
-                                    style={{ color: '#41C08D' }}
+                                    style={{ color: STATUS_COLOR.blue }}
                                   >
                                     Jetzt
                                   </Text>
@@ -462,7 +514,7 @@ export function SafetyStartSheet({ visible, onClose, onStartRequested }: SafetyS
                   </View>
                   <ScrollView
                     className="mt-1 max-h-[290px]"
-                    contentContainerStyle={{ paddingBottom: 6 }}
+                    contentContainerStyle={{ paddingBottom: 8 }}
                     keyboardShouldPersistTaps="handled"
                     showsVerticalScrollIndicator={false}
                   >
@@ -502,6 +554,37 @@ export function SafetyStartSheet({ visible, onClose, onStartRequested }: SafetyS
                   werden. Bei Gefahr rufe direkt 112.
                 </Text>
               </View>
+
+              {/* Offered only when it would actually change something, so a
+                  returning user with an unchanged group sees one button and
+                  nothing else. */}
+              {friends.length && selectedCount && !groupMatchesSelection ? (
+                <Pressable
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: rememberGroup }}
+                  accessibilityLabel="Diese Auswahl als Heimweg-Gruppe merken"
+                  className="mt-3 flex-row items-center gap-3 rounded-2xl bg-white/[0.04] px-3.5 py-3 active:opacity-80"
+                  onPress={() => setRememberGroup((current) => !current)}
+                >
+                  <View
+                    className="h-6 w-6 items-center justify-center rounded-lg border"
+                    style={{
+                      borderColor: rememberGroup ? SAFETY_COLOR : 'rgba(255,255,255,0.22)',
+                      backgroundColor: rememberGroup ? SAFETY_COLOR : 'transparent',
+                    }}
+                  >
+                    {rememberGroup ? <Ionicons name="checkmark" size={15} color="#fff" /> : null}
+                  </View>
+                  <View className="flex-1">
+                    <Text className="text-[15px] font-bold text-white">
+                      Als Heimweg-Gruppe merken
+                    </Text>
+                    <Text className="mt-0.5 text-xs leading-4 text-white/50">
+                      Beim nächsten Mal ist diese Auswahl schon gesetzt — ein Tipp und los.
+                    </Text>
+                  </View>
+                </Pressable>
+              ) : null}
 
               <StepDots active={1} />
               <Pressable

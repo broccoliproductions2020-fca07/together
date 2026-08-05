@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { Platform, Pressable, Switch, Text, TextInput, useColorScheme, View } from 'react-native';
 
 import { useOpenStatus } from '@/features/presence';
+import { AnimatedToggleIcon } from '@/shared/components/AnimatedToggleIcon';
+import { openLocationSettings } from '@/shared/utils/locationPermission';
 
 const OPEN_COLOR = '#6E8BF7';
 
@@ -109,6 +111,7 @@ export function OpenStatusCard() {
     setExpiresAt,
     shareLocation,
     setShareLocation,
+    shareLocationBlocked,
     close,
   } = useOpenStatus();
   // Collapsed by default: once open, the card is just a compact summary; the
@@ -249,10 +252,12 @@ export function OpenStatusCard() {
                 backgroundColor: shareLocation ? `${OPEN_COLOR}18` : 'rgba(255,255,255,0.04)',
               }}
             >
-              <Ionicons
-                name={shareLocation ? 'locate' : 'locate-outline'}
+              <AnimatedToggleIcon
+                icon="locate"
+                active={shareLocation}
                 size={17}
-                color={shareLocation ? OPEN_COLOR : 'rgba(244,245,247,0.6)'}
+                activeColor={OPEN_COLOR}
+                inactiveColor="rgba(244,245,247,0.6)"
               />
               <View className="flex-1">
                 <Text className="text-sm font-semibold text-white">Nähe teilen</Text>
@@ -269,6 +274,20 @@ export function OpenStatusCard() {
                 thumbColor="#ffffff"
               />
             </Pressable>
+            {shareLocation && shareLocationBlocked ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Standortzugriff in den Einstellungen erlauben"
+                onPress={openLocationSettings}
+                className="mt-2 flex-row items-start gap-2 rounded-xl border border-[#E0A23E]/40 bg-[#E0A23E]/10 px-3 py-2.5 active:opacity-80"
+              >
+                <Ionicons name="alert-circle-outline" size={15} color="#E0A23E" />
+                <Text className="flex-1 text-xs leading-4 text-white/70">
+                  Standortzugriff fehlt — deine Nähe wird gerade NICHT geteilt.{' '}
+                  <Text className="font-semibold text-[#E0A23E]">Einstellungen öffnen</Text>
+                </Text>
+              </Pressable>
+            ) : null}
           </View>
         </>
       ) : null}

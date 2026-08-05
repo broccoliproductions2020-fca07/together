@@ -1,86 +1,58 @@
-# Together — Data Model (first thoughts)
+# Together data model
 
-This is an early sketch, not a final schema — superseded in practice by each
-feature's own `types.ts` (see [AGENTS.md](../AGENTS.md) for the current,
-maintained spec). Mock seed data lives in
-[`src/data/mock`](../src/data/mock).
+This is a compact map of the persisted model. The executable authorities are
+[`firestore.rules`](../firestore.rules), [`functions/index.js`](../functions/index.js)
+and the feature service types; this document intentionally does not duplicate
+validation limits.
 
-## Entities
+## Firestore
 
-### User
+| Collection | Purpose | Ownership |
+| --- | --- | --- |
+| `users/{uid}` | Private account settings, notification state and close-friend ids | User profile fields; trusted functions own server fields |
+| `publicProfiles/{uid}` | Minimal contact snapshot | Created and synchronized by authenticated account flows |
+| `friendships/{uidA__uidB}` | Accepted and pending one-to-one friendships | Cloud Functions |
+| `circles/{circleId}` | Private lists of confirmed friends | Cloud Functions |
+| `activities/{activityId}` | A concrete `soon` or `now` meetup | Cloud Functions |
+| `chats/{activityId}` and `messages` | Ephemeral activity/group rooms and messages | Cloud Functions |
+| `presence/{uid}` | Expiring open status | Owner writes their own status; readers are its audience |
+| `notifications/{notificationId}` | Bounded in-app notification inbox | Cloud Functions |
+| `blocks`, `reports`, `pushOutbox` | Moderation and trusted delivery workflow | Cloud Functions |
 
-A person using the app.
+Activity documents carry the host, server-resolved audience snapshot,
+participants, schedule, lifecycle timestamps and optional place. `open` is a
+presence status, not a creatable activity.
 
-| field         | type    | notes                     |
-| ------------- | ------- | ------------------------- |
-| `id`          | string  |                           |
-| `name`        | string  | short handle / first name |
-| `displayName` | string? | optional fuller name      |
-| `avatarUrl`   | string? | optional avatar           |
+### Activity place
 
-### Private Group
+An activity place has exactly one of these shapes:
 
-A private, owner-only list of confirmed friends. A group can be the one
-visibility context of a concrete Activity; members are neither notified nor
-made mutually visible by the list itself.
+```ts
+{ label: string; latitude: number; longitude: number; visibility: 'pin' }
+{ label: string; visibility: 'none' }
+```
 
-| field       | type     | notes                     |
-| ----------- | -------- | ------------------------- |
-| `id`        | string   |                           |
-| `name`      | string   |                           |
-| `emoji`     | string?  | lightweight visual marker |
-| `memberIds` | string[] | ids of confirmed friends  |
+`pin` stores real WGS 84 coordinates and allows map rendering and Anreise.
+`none` stores no coordinates at all. The client never converts live coordinates
+into decorative screen positions before persisting or using them for distance
+or arrival logic.
 
-### Activity
+## Realtime Database
 
-An expression of availability/intent in one of three modes.
+Realtime Database contains only last-point, short-lived live location state for
+an explicitly active Anreise or Heimweg session. It is not a history store. The
+corresponding Firestore activity/session limits define who can subscribe.
 
-| field       | type                  | notes                                            |
-| ----------- | --------------------- | ------------------------------------------------ |
-| `id`        | string                |                                                  |
-| `hostId`    | string                | creator                                          |
-| `mode`      | `open \| soon \| now` | the core mode                                    |
-| `title`     | string?               | optional for a bare `open`                       |
-| `note`      | string?               | optional free text                               |
-| `audience`  | context               | exactly one: all friends, close friends or group |
-| `startsAt`  | string?               | ISO 8601, used by `soon`                         |
-| `location`  | `ActivityLocation?`   | only while active; never for bare `open`         |
-| `createdAt` | string                | ISO 8601                                         |
+## Retention
 
-`ActivityLocation` is deliberately coarse and carries an optional `expiresAt`,
-encoding the rule that **location is time-limited and only shared while an
-activity is active**.
+Activity chat rooms retain data until twelve hours after the activity ends.
+Open group rooms expire after thirty days without activity. Presence and
+notification records also carry expiry fields. Firebase TTL policies are the
+deletion backstop; clients still filter lifecycle state before rendering it.
 
-### Planning Round
+## Server authority
 
-A temporary conversation before a concrete Activity exists. It has its own
-participants and an ephemeral chat room; it can explicitly open for drop-ins.
-
-| field            | type                | notes                    |
-| ---------------- | ------------------- | ------------------------ |
-| `id`             | string              |                          |
-| `activityId`     | string              | the originating activity |
-| `title`          | string              |                          |
-| `participantIds` | string[]            |                          |
-| `startsAt`       | string?             | ISO 8601                 |
-| `location`       | `ActivityLocation?` |                          |
-| `createdAt`      | string              | ISO 8601                 |
-
-### ChatMessage
-
-Chat is **never a general messenger**. Messages only live inside the room of a
-single activity or plan.
-
-| field       | type   | notes                             |
-| ----------- | ------ | --------------------------------- |
-| `id`        | string |                                   |
-| `roomId`    | string | id of the owning activity or plan |
-| `authorId`  | string |                                   |
-| `text`      | string |                                   |
-| `createdAt` | string | ISO 8601                          |
-
-## Open questions for later
-
-- How exactly does a planning round transition into an Activity?
-- Location precision tiers (exact vs. area) and retention/expiry rules.
-- Backend mapping to Supabase tables + row-level security policies.
+The app does not grant clients direct authority to create activities, change
+membership, mutate room summaries, resolve audiences or send notifications.
+Those operations go through callable Cloud Functions, which validate input,
+apply rate limits and write the authoritative document shape.

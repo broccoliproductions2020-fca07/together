@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createContext, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import { authService } from './services/authService';
@@ -10,6 +11,12 @@ import type {
 } from './types';
 
 export const AuthContext = createContext<AuthProviderValue | null>(null);
+
+// iOS intentionally preserves the native Firebase session in Keychain after an
+// app is deleted. AsyncStorage is removed with the app, so this marker lets a
+// genuinely fresh staging install begin at the login screen instead of inheriting
+// a stale test account from a previous installation.
+const INSTALL_MARKER_KEY = 'together.auth.installed.v1';
 
 function toMessage(error: unknown): string {
   return error instanceof Error
@@ -43,24 +50,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // sign-in still establishes the authoritative session afterwards.
     const restoreTimeout = setTimeout(() => finishRestore(null), 6_000);
 
-    authService
-      .getCurrentSession()
-      .then((restored) => {
+    void (async () => {
+      try {
+        const [installedBefore, restored] = await Promise.all([
+          AsyncStorage.getItem(INSTALL_MARKER_KEY),
+          authService.getCurrentSession(),
+        ]);
+        if (!active) return;
+
+        if (!installedBefore) {
+          if (restored) await authService.signOut();
+          await AsyncStorage.setItem(INSTALL_MARKER_KEY, '1').catch(() => {});
+          finishRestore(null);
+          return;
+        }
+
         finishRestore(restored);
-      })
-      .catch(() => {
+      } catch {
         finishRestore(null);
-      });
+      }
+    })();
     return () => {
       active = false;
       clearTimeout(restoreTimeout);
     };
   }, []);
 
-  const runSignIn = useCallback(async (action: () => Promise<AuthSession>) => {
+  const runSignIn = useCallback(async (action: () => Promise<AuthSession | null>) => {
     setError(null);
     try {
       const next = await action();
+      if (!next) return;
       setSession(next);
       setStatus('authenticated');
     } catch (err) {
@@ -73,6 +93,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signInWithEmail = useCallback(
     (input: SignInWithEmailInput) => runSignIn(() => authService.signInWithEmail(input)),
+    [runSignIn],
+  );
+
+  const signInWithGoogle = useCallback(
+    () => runSignIn(() => authService.signInWithGoogle()),
+    [runSignIn],
+  );
+
+  const signInWithApple = useCallback(
+    () => runSignIn(() => authService.signInWithApple()),
     [runSignIn],
   );
 
@@ -91,6 +121,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const sendEmailVerification = useCallback(() => authService.sendEmailVerification(), []);
 
+  /** Used by the verification gate: reloads the account and reports whether the
+   * address is confirmed now. Keeps the session (and its fresh token) in sync. */
+  const refreshSession = useCallback(async () => {
+    const refreshed = await authService.refreshSession();
+    if (refreshed) setSession(refreshed);
+    return refreshed?.user.emailVerified === true;
+  }, []);
+
   const deleteAccount = useCallback(async () => {
     setError(null);
     await authService.deleteAccount();
@@ -102,9 +140,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(null);
     try {
       await authService.signOut();
-    } finally {
       setSession(null);
       setStatus('unauthenticated');
+    } catch (err) {
+      setError(toMessage(err));
+      throw err;
     }
   }, []);
 
@@ -118,9 +158,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       error,
       signInDemo,
       signInWithEmail,
+      signInWithGoogle,
+      signInWithApple,
       resetPassword,
       updateProfile,
       sendEmailVerification,
+      refreshSession,
       deleteAccount,
       signOut,
       clearError,
@@ -131,9 +174,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       error,
       signInDemo,
       signInWithEmail,
+      signInWithGoogle,
+      signInWithApple,
       resetPassword,
       updateProfile,
       sendEmailVerification,
+      refreshSession,
       deleteAccount,
       signOut,
       clearError,

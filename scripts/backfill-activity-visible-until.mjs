@@ -9,12 +9,9 @@
  *   node scripts/backfill-activity-visible-until.mjs --apply   # local write
  */
 import { createRequire } from 'node:module';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
-const admin = require(path.join(root, 'functions', 'node_modules', 'firebase-admin'));
+const admin = require('./firebase-admin-tools.cjs');
 
 const PROJECT_ID = 'demo-together';
 const PAGE_SIZE = 300;

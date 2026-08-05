@@ -1,6 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Pressable, Switch, Text, View } from 'react-native';
 
+import { AnimatedToggleIcon } from '@/shared/components/AnimatedToggleIcon';
+
 import type { ActivityDraft } from '../types';
 
 const MODE_ACCENTS = {
@@ -52,10 +54,12 @@ export function ParticipantLimitField({ draft, onChange }: ParticipantLimitField
         className="flex-row items-center gap-3"
         onPress={() => toggle(!limited)}
       >
-        <Ionicons
-          name={limited ? 'people' : 'people-outline'}
+        <AnimatedToggleIcon
+          icon="people"
+          active={limited}
           size={17}
-          color={limited ? accent : 'rgba(244,245,247,0.6)'}
+          activeColor={accent}
+          inactiveColor="rgba(244,245,247,0.6)"
         />
         <View className="flex-1">
           <Text className="text-sm font-semibold text-white">Teilnehmer begrenzen</Text>

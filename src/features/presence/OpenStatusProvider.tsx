@@ -12,7 +12,6 @@ import {
 } from 'react';
 
 import { useAuth } from '@/features/auth';
-import { useFriends } from '@/features/friends';
 
 import { presenceService } from './services/presenceService';
 import type {
@@ -79,6 +78,10 @@ export interface OpenStatusValue {
   /** Whether friends may see your location on the map (pin) while you're open. */
   shareLocation: boolean;
   setShareLocation: (value: boolean) => void;
+  /** Sharing is ON but the OS will not give us a position (permission denied
+   * or no fix). The card surfaces this — a toggle that silently does nothing
+   * is worse than one that admits it cannot work. */
+  shareLocationBlocked: boolean;
   /** Turn open off. */
   close: () => void;
 }
@@ -105,7 +108,6 @@ function coarsen(lat: number, lng: number): CoarseLocation {
  */
 export function OpenStatusProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
-  const { friendUids } = useFriends();
 
   const actor = useMemo<PresenceActor>(
     () => ({
@@ -118,6 +120,7 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
 
   const [status, setStatus] = useState<PersistedStatus>(CLOSED);
   const [coarse, setCoarse] = useState<CoarseLocation | null>(null);
+  const [shareLocationBlocked, setShareLocationBlocked] = useState(false);
   const [openFriends, setOpenFriends] = useState<PresenceDoc[]>([]);
   const [friendPresenceListening, setFriendPresenceListening] = useState(false);
   const remotePresenceRef = useRef(false);
@@ -173,6 +176,7 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!status.isOpen || !status.shareLocation) {
       setCoarse(null);
+      setShareLocationBlocked(false);
       return;
     }
     if (coarse) return;
@@ -180,13 +184,22 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
     (async () => {
       try {
         const perm = await Location.requestForegroundPermissionsAsync();
-        if (perm.status !== Location.PermissionStatus.GRANTED) return;
+        if (cancelled) return;
+        // A denial must never be swallowed: the toggle says you are sharing a
+        // location while the OS is refusing to give one, so the card has to be
+        // able to say so (`shareLocationBlocked` → hint in OpenStatusCard).
+        if (perm.status !== Location.PermissionStatus.GRANTED) {
+          setShareLocationBlocked(true);
+          return;
+        }
+        setShareLocationBlocked(false);
         const pos = await Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.Balanced,
         });
         if (!cancelled) setCoarse(coarsen(pos.coords.latitude, pos.coords.longitude));
       } catch {
-        // Permission denied / unavailable → stay list-only (no pin).
+        // No fix available → stay list-only (no pin), and say so.
+        if (!cancelled) setShareLocationBlocked(true);
       }
     })();
     return () => {
@@ -212,17 +225,21 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
     remotePresenceRef.current = true;
 
     const timer = setTimeout(() => {
+      // No `audienceUids` here on purpose: the `publishPresence` callable
+      // derives the audience server-side from the caller's real friend edges
+      // and ignores anything the client sends. Sending it would imply the
+      // client decides who may see it, which is not true and must not look
+      // true to the next reader.
       presenceService.setPresence(actor, {
         vibe: status.vibe,
         expiresAt: status.expiresAt ?? Date.now() + OPEN_DURATION_MS,
         shareLocation: status.shareLocation,
         coarseLocation: status.shareLocation ? coarse : null,
-        audienceUids: [actor.uid, ...friendUids].slice(0, 50),
       });
     }, PRESENCE_WRITE_DEBOUNCE_MS);
 
     return () => clearTimeout(timer);
-  }, [hydrated, actor, status, coarse, friendUids]);
+  }, [hydrated, actor, status, coarse]);
 
   // Friend presence is only map chrome. Keep the own open-status write-through
   // above alive everywhere, but do not keep paying for friend updates while the
@@ -276,6 +293,7 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
       setExpiresAt,
       shareLocation: status.shareLocation,
       setShareLocation,
+      shareLocationBlocked,
       close,
     }),
     [
@@ -286,6 +304,7 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
       setVibe,
       setExpiresAt,
       setShareLocation,
+      shareLocationBlocked,
       close,
     ],
   );

@@ -1,4 +1,4 @@
-import type { ActivityCategory, ActivityMode } from '@/features/map/types/map.types';
+import type { ActivityCategory, ActivityMode } from '@/domain/activity';
 
 export type { ActivityCategory, ActivityMode };
 
@@ -11,7 +11,7 @@ export interface SelectedPlace {
   address?: string;
   latitude?: number;
   longitude?: number;
-  source: 'mock' | 'current' | 'map';
+  source: 'current' | 'map';
 }
 
 /**
@@ -40,4 +40,6 @@ export interface ActivityDraft {
   maxPeople?: number;
   /** Optional creator-chosen category → icon badge on the map marker. */
   category?: ActivityCategory;
+  /** Host opt-in: participants may invite their OWN confirmed friends. */
+  guestInvitesEnabled?: boolean;
 }

@@ -39,7 +39,6 @@ yarn-error.*
 # local model experiments
 .model-cache/
 
-example
 
 # generated native folders
 /ios
@@ -48,8 +47,10 @@ example
 # firebase local artifacts
 .env
 functions/.env
-firebase/native/google-services.json
-firebase/native/GoogleService-Info.plist
+firebase/native/google-services*.json
+firebase/native/GoogleService-Info*.plist
+firebase/native/*/google-services*.json
+firebase/native/*/GoogleService-Info*.plist
 .firebase-cli-home/
 .emulator-data/
 firebase-debug.log
@@ -59,7 +60,16 @@ ui-debug.log
 
 # local assistant/editor state
 .claude/
+.agents/
+.tmp/
+# Throwaway debug copies of the project. These are FULL working copies —
+# .tmp-staging-emulator-debug alone is 731 MB and carries its own .env, so a
+# stray `git add -A` would commit both the bulk and the secrets.
+.tmp-*/
 
 # local emulator screenshots and scratch files
 /together-*.png
 /Ort
+
+# private desktop-installer artifacts
+/admin/desktop/release/

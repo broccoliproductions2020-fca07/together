@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
-const admin = require(path.join(root, 'functions', 'node_modules', 'firebase-admin'));
+const admin = require('./firebase-admin-tools.cjs');
 
 const PROJECT_ID = 'demo-together';
 // The test runner chooses an isolated local port. This explicit default keeps

@@ -1,8 +1,7 @@
 /**
  * Seeds the LOCAL Firebase Emulator Suite with fake people, friendships,
- * presence, activities and chats — the emulator-side replacement for the old
- * client-side demo seeds (PRESENCE_SEED / mock markers leaking into firebase
- * mode). Mock mode keeps its own offline data in src/data/mock.
+ * presence, activities and chats. These records exist only in the local
+ * Emulator Suite and are never mixed into client state.
  *
  * Usage:
  *   npm run emulators:seed            (emulators must be running)
@@ -17,17 +16,14 @@
  *    chats like `createActivity`, presence like `publishPresence`,
  *    friendships like `respondToFriendRequest`). Update BOTH places when a
  *    shape changes.
- *  - Coordinates default to Berlin Mitte (the mock world's center). Pass
- *    --lat/--lng to seed around the Android emulator's mocked GPS position.
+ *  - Coordinates default to Berlin Mitte. Pass --lat/--lng to seed around the
+ *    Android emulator's simulated GPS position.
  */
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
-// firebase-admin lives in functions/ (the only backend package in this repo).
-const admin = require(path.join(root, 'functions', 'node_modules', 'firebase-admin'));
+const admin = require('./firebase-admin-tools.cjs');
 
 process.env.FIRESTORE_EMULATOR_HOST ??= '127.0.0.1:8080';
 process.env.FIREBASE_AUTH_EMULATOR_HOST ??= '127.0.0.1:9099';
@@ -49,11 +45,15 @@ const at = (dLat, dLng) => ({
 });
 
 const HOUR = 60 * 60 * 1000;
+const DAY = 24 * HOUR;
+const NOTIFICATION_RETENTION_MS = 30 * DAY;
+const MAILBOX_ACCOUNT_LIMIT = 25;
 const now = Date.now();
 const ts = (ms) => admin.firestore.Timestamp.fromMillis(ms);
 const iso = (ms) => new Date(ms).toISOString();
+const stableSuffix = (value) => createHash('sha256').update(value).digest('hex').slice(0, 16);
 
-/** The fake roster — mirrors the personalities of the old client mock data. */
+/** Stable local roster for repeatable emulator scenarios. */
 const PEOPLE = [
   {
     uid: 'seed-max',
@@ -97,6 +97,14 @@ const PEOPLE = [
     location: at(-0.012, 0.009),
   },
 ];
+
+/** Kept outside PEOPLE so this account creates a real incoming request and is
+ * never overwritten by the accepted-friendship loop below. */
+const REQUESTER = {
+  uid: 'seed-mailbox-requester',
+  name: 'Leonie Hartmann',
+  username: 'leonie-seed',
+};
 
 const initialsOf = (name) =>
   name
@@ -208,6 +216,12 @@ async function main() {
     );
   }
   const devUids = devProfiles.map((profile) => profile.uid);
+  const mailboxProfiles = devProfiles.slice(0, MAILBOX_ACCOUNT_LIMIT);
+  if (devProfiles.length > mailboxProfiles.length) {
+    console.warn(
+      `Postfach-Seeds auf ${MAILBOX_ACCOUNT_LIMIT} Dev-Accounts begrenzt (${devProfiles.length} gefunden).`,
+    );
+  }
 
   // ── 2. Seed people: auth users + users/publicProfiles/usernames docs.
   for (const person of PEOPLE) {
@@ -239,6 +253,39 @@ async function main() {
       .set({ uid: person.uid, createdAt: ts(now) }, { merge: true });
   }
 
+  await ensureAuthUser(auth, {
+    uid: REQUESTER.uid,
+    email: `${REQUESTER.username}@seed.together.dev`,
+    password: 'seed-only',
+    displayName: REQUESTER.name,
+  });
+  const requesterProfile = profileOf(REQUESTER);
+  await Promise.all([
+    db.doc(`users/${REQUESTER.uid}`).set(
+      {
+        displayName: REQUESTER.name,
+        username: REQUESTER.username,
+        initials: requesterProfile.initials,
+        profileVisibility: 'friends',
+        friendRequestPolicy: 'anyone',
+        friendshipsVersion: mailboxProfiles.length,
+        createdAt: ts(now),
+      },
+      { merge: true },
+    ),
+    db.doc(`publicProfiles/${REQUESTER.uid}`).set(
+      {
+        displayName: REQUESTER.name,
+        initials: requesterProfile.initials,
+        username: REQUESTER.username,
+      },
+      { merge: true },
+    ),
+    db
+      .doc(`usernames/${REQUESTER.username}`)
+      .set({ uid: REQUESTER.uid, createdAt: ts(now) }, { merge: true }),
+  ]);
+
   // ── 3. Accepted friendships: every seed person ↔ every dev user.
   //      Doc id + shape mirror functions/index.js (friendshipId → `${a}__${b}` sorted).
   for (const person of PEOPLE) {
@@ -253,6 +300,36 @@ async function main() {
         updatedAt: ts(now),
       });
     }
+  }
+
+  // A separate requester gives each mailbox demo account a genuinely incoming
+  // action without changing any accepted seed relationship.
+  for (const devProfile of mailboxProfiles) {
+    const id = [REQUESTER.uid, devProfile.uid].sort().join('__');
+    await Promise.all([
+      db.doc(`friendships/${id}`).set({
+        participantUids: [REQUESTER.uid, devProfile.uid].sort(),
+        requesterUid: REQUESTER.uid,
+        status: 'pending',
+        profiles: [
+          {
+            uid: REQUESTER.uid,
+            displayName: REQUESTER.name,
+            initials: requesterProfile.initials,
+          },
+          {
+            uid: devProfile.uid,
+            displayName: devProfile.displayName,
+            initials: devProfile.initials,
+          },
+        ],
+        createdAt: ts(now - 12 * 60 * 1000),
+        updatedAt: ts(now - 12 * 60 * 1000),
+      }),
+      db
+        .doc(`users/${devProfile.uid}`)
+        .set({ friendshipsVersion: admin.firestore.FieldValue.increment(1) }, { merge: true }),
+    ]);
   }
 
   // ── 4. Presence for the "open" people (shape = publishPresence output).
@@ -270,7 +347,7 @@ async function main() {
       expireAt: ts(now + 3 * HOUR),
       shareLocation: Boolean(person.location),
       ...(person.location ? { coarseLocation: person.location } : {}),
-      audienceUids: [person.uid, ...devUids].slice(0, 50),
+      audienceUids: devUids.filter((uid) => uid !== person.uid).slice(0, 50),
       updatedAt: ts(now),
     });
   }
@@ -349,6 +426,119 @@ async function main() {
     }
   }
 
+  // A small private demo activity per dev account keeps every notification
+  // target truthful: the recipient hosts it, Max is a real participant, and
+  // the journey reminder points to a currently relevant destination.
+  for (const [index, devProfile] of mailboxProfiles.entries()) {
+    const suffix = stableSuffix(devProfile.uid);
+    const activityId = `seed-mailbox-${suffix}`;
+    const startsAt = now + 55 * 60 * 1000;
+    const endsAt = now + 2 * HOUR;
+    const coordinate = at(0.002 + index * 0.0001, 0.004 + index * 0.0001);
+    const maxProfile = profileOf(PEOPLE.find((person) => person.uid === 'seed-max'));
+    const participants = [
+      {
+        uid: devProfile.uid,
+        displayName: devProfile.displayName,
+        initials: devProfile.initials,
+      },
+      {
+        uid: maxProfile.uid,
+        displayName: maxProfile.displayName,
+        initials: maxProfile.initials,
+      },
+    ];
+    const participantUids = participants.map((participant) => participant.uid);
+    const title = 'Kaffee vor dem Feierabend';
+    const chatExpireAt = endsAt + 24 * HOUR;
+
+    await db.doc(`activities/${activityId}`).set({
+      hostId: devProfile.uid,
+      mode: 'soon',
+      title,
+      audienceUids: participantUids,
+      startsAt: iso(startsAt),
+      endsAt: iso(endsAt),
+      place: {
+        label: 'Five Elephant Mitte',
+        visibility: 'pin',
+        latitude: coordinate.lat,
+        longitude: coordinate.lng,
+      },
+      maxParticipants: 8,
+      category: 'kaffee',
+      participants,
+      participantUids,
+      status: 'active',
+      journeyReminderSentAt: ts(now - 42 * 60 * 1000),
+      createdAt: ts(now - 2 * HOUR),
+      visibleUntil: ts(endsAt),
+      expireAt: ts(chatExpireAt),
+    });
+
+    const roomRef = db.doc(`chats/${activityId}`);
+    const messageAt = now - 5 * 60 * 1000;
+    await roomRef.set({
+      type: 'activity',
+      title,
+      memberIds: participantUids,
+      messageCount: 1,
+      readCount: {},
+      lastMessage: {
+        text: 'Ich bin dabei – bis gleich!',
+        authorId: maxProfile.uid,
+        authorName: maxProfile.displayName,
+        at: ts(messageAt),
+      },
+      createdAt: ts(now - 2 * HOUR),
+      expireAt: ts(chatExpireAt),
+    });
+    await roomRef
+      .collection('messages')
+      .doc('seed-msg-max-joined')
+      .set({
+        authorId: maxProfile.uid,
+        authorName: maxProfile.displayName,
+        initials: maxProfile.initials,
+        text: 'Ich bin dabei – bis gleich!',
+        kind: 'text',
+        createdAt: ts(messageAt),
+        expireAt: ts(chatExpireAt),
+      });
+
+    const notificationExpireAt = ts(now + NOTIFICATION_RETENTION_MS);
+    const notificationBase = `seed-notification-${suffix}`;
+    await Promise.all([
+      db.doc(`notifications/${notificationBase}-joined`).set({
+        recipientUid: devProfile.uid,
+        kind: 'activity_joined',
+        title: 'Max ist dabei',
+        body: `Max Krüger ist deiner Activity „${title}“ beigetreten.`,
+        activityId,
+        createdAt: ts(now - 4 * 60 * 1000),
+        expireAt: notificationExpireAt,
+      }),
+      db.doc(`notifications/${notificationBase}-updated`).set({
+        recipientUid: devProfile.uid,
+        kind: 'activity_updated',
+        title: 'Activity aktualisiert',
+        body: `Der Treffpunkt für „${title}“ wurde aktualisiert.`,
+        activityId,
+        createdAt: ts(now - 18 * 60 * 1000),
+        expireAt: notificationExpireAt,
+      }),
+      db.doc(`notifications/${notificationBase}-journey`).set({
+        recipientUid: devProfile.uid,
+        kind: 'journey_reminder',
+        title: `${title} beginnt bald`,
+        body: 'Anreise teilen? Zum Aktivieren tippen.',
+        activityId,
+        createdAt: ts(now - 42 * 60 * 1000),
+        expireAt: notificationExpireAt,
+      }),
+    ]);
+  }
+
   // ── 6. One planning group that opted into "Offen für Dazustoßer": private
   //      room + public teaser doc, audience = the dev account(s).
   const openGroup = {
@@ -372,6 +562,8 @@ async function main() {
   });
   await db.doc(`groupOpenings/${openGroup.id}`).set({
     roomId: openGroup.id,
+    kind: 'joinable',
+    status: 'active',
     title: openGroup.title,
     vibe: openGroup.vibe,
     memberCount: openGroup.members.length,
@@ -385,7 +577,7 @@ async function main() {
   });
 
   console.log(
-    `Seed fertig: ${PEOPLE.length} Personen, ${ACTIVITIES.length} Activities, 1 offene Gruppe, Freundschaften für ${devUids.length} Dev-Account(s) [${devUids.join(', ')}].`,
+    `Seed fertig: ${PEOPLE.length + 1} Personen, ${ACTIVITIES.length + mailboxProfiles.length} Activities, 1 offene Gruppe, ${mailboxProfiles.length} Postfach-Sets, Freundschaften für ${devUids.length} Dev-Account(s) [${devUids.join(', ')}].`,
   );
   console.log(`Zentrum: ${CENTER.lat}, ${CENTER.lng} (überschreibbar mit --lat/--lng).`);
   await app.delete();

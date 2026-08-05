@@ -1,45 +1,34 @@
-# Together — Product roadmap
+# Together roadmap
 
-Together is developed as a production product from the beginning. Firebase
-Emulator Suite is used locally; staging and production are separate Firebase
-projects. Mock mode is only an offline fallback and never defines the product
-contracts.
+The roadmap is constrained by the implemented product and release architecture.
+Development uses the Firebase Emulator Suite; staging is a separate native app
+against the Firebase development project; production uses its own Firebase
+project.
 
-## Product workstreams
+## Release-critical work
 
-1. **Identity and trust**
-   - verified accounts, profile/avatar and account deletion
-   - Circle invitations with explicit acceptance
-   - block, report and abuse-handling flows
+1. **Identity and account safety**
+   - real-device registration, email verification, account deletion and avatar
+     upload checks
+   - App Check rollout for staging before enforcement in production
 
-2. **Together activity lifecycle**
-   - Open / Soon / Now presence and concrete Activities
-   - create, edit, join, leave, cancel and expire
-   - participant limits, chat retention and calendar commitment view
+2. **Meetup lifecycle**
+   - activity creation, editing, joining, leaving, cancellation and expiry
+   - participant limits, retained chat lifecycle and calendar consistency
 
-3. **Communication and delivery**
-   - activity/group chats with proposals
-   - in-app notification inbox
-   - device push notifications and deep links
+3. **Location and movement**
+   - real-device permission, coarse presence and place search checks
+   - explicit Anreise and Heimweg sessions, including automatic stopping and
+     OS-visible background behavior
 
-4. **Places and movement**
-   - privacy-first coarse presence
-   - place selection/search and external navigation
-   - foreground-only Journey sharing with hard expiry
+4. **Operations**
+   - Firebase TTL policies, budget alerts, Cloud Functions monitoring and
+     Crashlytics verification
+   - staging binary validation and protected tagged production release
 
-5. **Socialize**
-   - private discovery until mutual interest
-   - server-authoritative interests, matches and match chat
-   - safety controls, rate limits and account protections
+## Deliberately deferred
 
-6. **Production operations**
-   - Firestore, Storage and RTDB Rules tests
-   - migrations and TTL policies
-   - App Check, monitoring, crash reporting, performance and budget alerts
-   - staging/release builds and automated end-to-end tests
-
-## Non-negotiable principles
-
-No public feed, no follower mechanics and no permanent general messenger.
-Activities remain Circle-scoped, locations are coarse and expiring, and chat
-retention is deliberately limited.
+- Socialize remains disabled until its product scope, moderation, retention and
+  existing-data migration plan are approved together.
+- New always-on listeners, permanent chat history, public rankings and hidden
+  location tracking are outside the product contract.

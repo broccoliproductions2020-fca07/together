@@ -6,8 +6,8 @@ interface ParticipantDisplay {
 }
 
 /**
- * Produces the participant state rendered on a map pin. Mock membership is
- * optimistic, while Firestore membership arrives through the activity listener;
+ * Produces the participant state rendered on a map pin. The local join state is
+ * optimistic while Firestore membership arrives through the activity listener;
  * this keeps the pin truthful during that short gap without double-counting
  * once the document has updated.
  */

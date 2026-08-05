@@ -4,7 +4,8 @@ import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import { AppState, Platform } from 'react-native';
 
-import { BACKEND, getFirebaseAuth } from '@/shared/services/firebase';
+import { getFirebaseAuth } from '@/shared/services/firebase';
+import { SEMANTIC_COLOR } from '@/shared/utils/semanticColors';
 
 import {
   continueSafetyStationaryWindow,
@@ -104,7 +105,7 @@ interface StoredSafetyBackground extends SafetyMotionState {
 }
 
 export function safetyBackgroundRequired(): boolean {
-  return Platform.OS !== 'web' && BACKEND === 'firebase';
+  return Platform.OS !== 'web';
 }
 
 async function readState(): Promise<StoredSafetyBackground | null> {
@@ -151,7 +152,12 @@ async function currentFirebaseUid(): Promise<string | null> {
 
 function locationOptions(status: SafetyStatus): Location.LocationTaskOptions {
   const urgent = status === 'orange' || status === 'red';
-  const color = status === 'red' ? '#FF5A5A' : status === 'orange' ? '#E0A23E' : '#6E8BF7';
+  const color =
+    status === 'red'
+      ? SEMANTIC_COLOR.danger
+      : status === 'orange'
+        ? SEMANTIC_COLOR.safetyAttention
+        : SEMANTIC_COLOR.safetyNormal;
   const notificationBody =
     status === 'red'
       ? 'Hilferuf aktiv · Dein Standort wird häufiger aktualisiert.'

@@ -286,7 +286,9 @@ export function SocializeSetupCard() {
           <View className="flex-row items-center gap-2">
             <Ionicons name="shield-checkmark-outline" size={14} color={SOCIALIZE_COLOR} />
             <Text className="flex-1 text-[11px] text-white/45">
-              {'Andere sehen nur „Person in deiner Nähe“ mit grober Entfernung — dein Name und Profil werden erst nach einem Match sichtbar.'}
+              {
+                'Andere sehen nur „Person in deiner Nähe“ mit grober Entfernung — dein Name und Profil werden erst nach einem Match sichtbar.'
+              }
             </Text>
           </View>
         </>

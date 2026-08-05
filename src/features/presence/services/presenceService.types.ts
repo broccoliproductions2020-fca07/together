@@ -45,7 +45,6 @@ export interface PresenceInput {
   shareLocation: boolean;
   /** Only written when shareLocation is true; otherwise the field is dropped. */
   coarseLocation?: CoarseLocation | null;
-  audienceUids: string[];
 }
 
 /**
@@ -55,6 +54,6 @@ export interface PresenceInput {
  */
 export interface PresenceService {
   subscribeOpenFriends(actor: PresenceActor, cb: (docs: PresenceDoc[]) => void): Unsubscribe;
-  setPresence(actor: PresenceActor, input: PresenceInput): void;
+  setPresence(actor: PresenceActor, input: PresenceInput): Promise<void>;
   clearPresence(actor: PresenceActor): void;
 }

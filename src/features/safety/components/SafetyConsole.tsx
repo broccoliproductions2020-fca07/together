@@ -223,9 +223,9 @@ function ConsoleContent({
               <View
                 key={uid}
                 className="flex-row items-center gap-1.5 rounded-full px-3 py-1.5"
-                style={{ backgroundColor: 'rgba(65,192,141,0.14)' }}
+                style={{ backgroundColor: `${STATUS_COLOR.blue}24` }}
               >
-                <Ionicons name="checkmark-circle" size={13} color="#41C08D" />
+                <Ionicons name="checkmark-circle" size={13} color={STATUS_COLOR.blue} />
                 <Text className="text-xs font-bold text-white/80">
                   {friendByUid.get(uid)?.displayName ?? 'Bestätigt'}{' '}
                   {alertActive ? 'schaut gerade zu' : 'ist erreichbar'}
@@ -290,7 +290,7 @@ function ConsoleContent({
         <HoldButton
           label={endingHeimweg ? 'Wird beendet …' : 'Sicher angekommen'}
           icon="home"
-          color="#41C08D"
+          color={STATUS_COLOR.blue}
           durationMs={1000}
           disabled={endingHeimweg}
           onComplete={arriveSafe}

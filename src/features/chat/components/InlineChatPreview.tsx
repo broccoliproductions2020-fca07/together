@@ -29,9 +29,7 @@ export function InlineChatPreview({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={
-        unread > 0 ? `Chat öffnen, ${unread} neue Nachrichten` : 'Chat öffnen'
-      }
+      accessibilityLabel={unread > 0 ? `Chat öffnen, ${unread} neue Nachrichten` : 'Chat öffnen'}
       onPress={onExpand}
       className="gap-2 rounded-2xl border border-border bg-secondary px-4 py-3 active:opacity-80"
     >

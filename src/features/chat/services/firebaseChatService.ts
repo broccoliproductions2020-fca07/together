@@ -18,7 +18,7 @@ import { httpsCallable } from '@react-native-firebase/functions';
 
 import { getFirebaseDb, getFirebaseFunctions } from '@/shared/services/firebase';
 
-import type { ChatMessage, ChatRoom, GroupOpening } from '../types';
+import type { ChatMessage, ChatRoom, GroupOpening, SpontaneousRound } from '../types';
 import type {
   ChatActor,
   ChatService,
@@ -58,6 +58,7 @@ function mapRoom(id: string, data: DocumentData): ChatRoom {
     memberIds: data.memberIds ?? [],
     ...(Array.isArray(data.adminUids) ? { adminUids: data.adminUids } : {}),
     ...(data.joinable === true ? { joinable: true } : {}),
+    ...(data.roundStatus === 'forming' ? { roundStatus: 'forming' as const } : {}),
     lastMessage: data.lastMessage
       ? { ...data.lastMessage, at: toMillis(data.lastMessage.at) }
       : undefined,
@@ -104,10 +105,12 @@ function roomsQuery(actor: ChatActor) {
 }
 
 function mapRooms(docs: { id: string; data: () => DocumentData }[]): ChatRoom[] {
-  return docs
-    .map((item) => mapRoom(item.id, item.data()))
-    // The UI stays newest-first; expireAt only leads the bounded query.
-    .sort((first, second) => second.createdAt - first.createdAt);
+  return (
+    docs
+      .map((item) => mapRoom(item.id, item.data()))
+      // The UI stays newest-first; expireAt only leads the bounded query.
+      .sort((first, second) => second.createdAt - first.createdAt)
+  );
 }
 
 async function writeMessage(
@@ -190,6 +193,33 @@ export const firebaseChatService: ChatService = {
             limit(MESSAGE_LIMIT),
           )
         : query(messagesRef(roomId), orderBy('createdAt', 'desc'), limit(MESSAGE_LIMIT));
+
+      // Cached proposals are BELOW the listener's anchor, so votes/locks by
+      // others made while this device was away would stay frozen forever.
+      // One bounded read of the newest proposal docs on open refreshes them
+      // (composite index kind+createdAt; a few reads, only when a cache
+      // exists and only for rooms that ever had proposals).
+      if (newestTs && cached.some((m) => m.kind === 'proposal')) {
+        void getDocs(
+          query(
+            messagesRef(roomId),
+            where('kind', '==', 'proposal'),
+            orderBy('createdAt', 'desc'),
+            limit(10),
+          ),
+        )
+          .then((snapshot) => {
+            if (cancelled || snapshot.empty) return;
+            const byId = new Map(known.map((m) => [m.id, m]));
+            snapshot.docs.forEach((d) => {
+              if (byId.has(d.id)) byId.set(d.id, mapMessage(actor, d.id, roomId, d.data()));
+            });
+            known = [...byId.values()].sort((a, b) => a.createdAt - b.createdAt);
+            cb([...known]);
+            saveCachedMessages(roomId, known);
+          })
+          .catch(() => {});
+      }
 
       detach = onSnapshot(
         q,
@@ -303,21 +333,26 @@ export const firebaseChatService: ChatService = {
     const q = query(
       collection(getFirebaseDb(), 'groupOpenings'),
       where('audienceUids', 'array-contains', actor.uid),
+      where('status', '==', 'active'),
+      where('expireAt', '>', Timestamp.fromMillis(Date.now())),
       limit(20),
     );
     return onSnapshot(
       q,
       (snapshot) => {
         cb(
-          snapshot.docs.map((d): GroupOpening => {
+          snapshot.docs.flatMap((d): GroupOpening[] => {
             const data = d.data();
-            return {
-              id: d.id,
-              title: typeof data.title === 'string' ? data.title : 'Planung',
-              ...(typeof data.vibe === 'string' ? { vibe: data.vibe } : {}),
-              memberCount: typeof data.memberCount === 'number' ? data.memberCount : 0,
-              memberPreview: Array.isArray(data.memberPreview) ? data.memberPreview : [],
-            };
+            if (data.kind === 'spontaneous') return [];
+            return [
+              {
+                id: d.id,
+                title: typeof data.title === 'string' ? data.title : 'Planung',
+                ...(typeof data.vibe === 'string' ? { vibe: data.vibe } : {}),
+                memberCount: typeof data.memberCount === 'number' ? data.memberCount : 0,
+                memberPreview: Array.isArray(data.memberPreview) ? data.memberPreview : [],
+              },
+            ];
           }),
         );
       },
@@ -331,5 +366,76 @@ export const firebaseChatService: ChatService = {
 
   async joinOpenGroup(_actor, roomId) {
     await httpsCallable(getFirebaseFunctions(), 'joinOpenGroup')({ roomId });
+  },
+
+  async startSpontaneousRound(_actor, members) {
+    const result = await httpsCallable<{ inviteeUids: string[] }, { ok: true; id: string }>(
+      getFirebaseFunctions(),
+      'startSpontaneousRound',
+    )({ inviteeUids: members.map((member) => member.id) });
+    return result.data.id;
+  },
+
+  async acceptSpontaneousRound(_actor, roundId) {
+    await httpsCallable(getFirebaseFunctions(), 'acceptSpontaneousRound')({ roundId });
+  },
+
+  async leaveSpontaneousRound(_actor, roundId) {
+    await httpsCallable(getFirebaseFunctions(), 'leaveSpontaneousRound')({ roundId });
+  },
+
+  subscribeSpontaneousRound(actor, cb) {
+    const q = query(
+      collection(getFirebaseDb(), 'groupOpenings'),
+      where('audienceUids', 'array-contains', actor.uid),
+      where('kind', '==', 'spontaneous'),
+      where('status', '==', 'active'),
+      where('expireAt', '>', Timestamp.fromMillis(Date.now())),
+      limit(1),
+    );
+    return onSnapshot(
+      q,
+      (snapshot) => {
+        const docSnapshot = snapshot.docs[0];
+        if (!docSnapshot) {
+          cb(null);
+          return;
+        }
+        const data = docSnapshot.data();
+        const memberPreview = Array.isArray(data.memberPreview)
+          ? data.memberPreview.flatMap((member: unknown) => {
+              if (!member || typeof member !== 'object') return [];
+              const value = member as Record<string, unknown>;
+              if (
+                typeof value.uid !== 'string' ||
+                typeof value.displayName !== 'string' ||
+                typeof value.initials !== 'string'
+              ) {
+                return [];
+              }
+              return [
+                {
+                  uid: value.uid,
+                  displayName: value.displayName,
+                  initials: value.initials,
+                  ...(typeof value.avatarUrl === 'string' ? { avatarUrl: value.avatarUrl } : {}),
+                },
+              ];
+            })
+          : [];
+        if (typeof data.hostUid !== 'string' || !Array.isArray(data.memberIds)) {
+          cb(null);
+          return;
+        }
+        cb({
+          id: docSnapshot.id,
+          hostUid: data.hostUid,
+          memberIds: data.memberIds.filter((uid): uid is string => typeof uid === 'string'),
+          memberPreview,
+          expiresAt: toMillis(data.expireAt),
+        } satisfies SpontaneousRound);
+      },
+      () => cb(null),
+    );
   },
 };

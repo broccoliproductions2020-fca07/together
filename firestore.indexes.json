@@ -26,6 +26,15 @@
       ]
     },
     {
+      "collectionGroup": "chats",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "creatorUid", "order": "ASCENDING" },
+        { "fieldPath": "type", "order": "ASCENDING" },
+        { "fieldPath": "expireAt", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "circles",
       "queryScope": "COLLECTION",
       "fields": [
@@ -51,6 +60,38 @@
       ]
     },
     {
+      "collectionGroup": "activities",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "visibleUntil", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "activities",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "hostId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "activities",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "participantUids", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "friendships",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "participantUids", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "presence",
       "queryScope": "COLLECTION",
       "fields": [
@@ -59,10 +100,37 @@
       ]
     },
     {
+      "collectionGroup": "groupOpenings",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "audienceUids", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "expireAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "groupOpenings",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "audienceUids", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "kind", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "expireAt", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "messages",
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "expireAt", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "messages",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "kind", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "DESCENDING" }
       ]
     },
@@ -116,7 +184,7 @@
       "collectionGroup": "presence",
       "fieldPath": "expireAt",
       "ttl": true,
-      "indexes": []
+      "indexes": [{ "queryScope": "COLLECTION", "order": "ASCENDING" }]
     },
     {
       "collectionGroup": "presence",
@@ -182,6 +250,36 @@
       "indexes": []
     },
     {
+      "collectionGroup": "notifications",
+      "fieldPath": "title",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "notifications",
+      "fieldPath": "kind",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "notifications",
+      "fieldPath": "activityId",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "notifications",
+      "fieldPath": "roomId",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "notifications",
+      "fieldPath": "safetyOwnerUid",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "notifications",
+      "fieldPath": "safetyAlertAt",
+      "indexes": []
+    },
+    {
       "collectionGroup": "circleInvites",
       "fieldPath": "expireAt",
       "ttl": true,
@@ -191,12 +289,44 @@
       "collectionGroup": "groupOpenings",
       "fieldPath": "expireAt",
       "ttl": true,
+      "indexes": [{ "queryScope": "COLLECTION", "order": "ASCENDING" }]
+    },
+    {
+      "collectionGroup": "spontaneousRoundInvites",
+      "fieldPath": "expireAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "spontaneousRoundMemberships",
+      "fieldPath": "expireAt",
+      "ttl": true,
       "indexes": []
     },
     {
       "collectionGroup": "pushOutbox",
       "fieldPath": "expireAt",
       "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "pushOutbox",
+      "fieldPath": "items",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "pushOutbox",
+      "fieldPath": "createdAt",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "pushOutbox",
+      "fieldPath": "attempts",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "pushOutbox",
+      "fieldPath": "lastError",
       "indexes": []
     },
     {
@@ -212,6 +342,92 @@
       "indexes": []
     },
     {
+      "collectionGroup": "rateLimits",
+      "fieldPath": "windowStart",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "rateLimits",
+      "fieldPath": "count",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "rateLimits",
+      "fieldPath": "lastMessageAt",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "rateLimits",
+      "fieldPath": "lastMessageFingerprint",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "rateLimits",
+      "fieldPath": "duplicateCount",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "rateLimits",
+      "fieldPath": "displayNameChanges",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "rateLimits",
+      "fieldPath": "avatarChanges",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "rateLimits",
+      "fieldPath": "pendingAvatarId",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "rateLimits",
+      "fieldPath": "avatarPendingUntil",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "chatInternal",
+      "fieldPath": "expireAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "chatInternal",
+      "fieldPath": "messageCount",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "chatInternal",
+      "fieldPath": "lastMessage",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "chatInternal",
+      "fieldPath": "roomRateWindowStart",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "chatInternal",
+      "fieldPath": "roomRateCount",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "chatInternal",
+      "fieldPath": "lastPushAtMs",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "chatInternal",
+      "fieldPath": "roomExpireAtMs",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "chatInternal",
+      "fieldPath": "flushAt",
+      "indexes": []
+    },
+    {
       "collectionGroup": "socialSessions",
       "fieldPath": "expiresAt",
       "ttl": true,
@@ -220,7 +436,7 @@
     {
       "collectionGroup": "users",
       "fieldPath": "pushTokens",
-      "indexes": []
+      "indexes": [{ "queryScope": "COLLECTION", "arrayConfig": "CONTAINS" }]
     },
     {
       "collectionGroup": "friendships",

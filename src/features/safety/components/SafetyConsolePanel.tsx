@@ -295,7 +295,7 @@ function PanelContent({ session, activating }: { session: SafetySession; activat
                 <HoldButton
                   label={endingHeimweg ? 'Wird beendet …' : 'Sicher angekommen'}
                   icon="home"
-                  color="#41C08D"
+                  color={STATUS_COLOR.blue}
                   durationMs={1000}
                   disabled={endingHeimweg}
                   onComplete={arriveSafe}

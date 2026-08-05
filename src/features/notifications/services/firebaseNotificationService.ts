@@ -4,12 +4,11 @@ import {
   onSnapshot,
   orderBy,
   query,
-  serverTimestamp,
   Timestamp,
-  updateDoc,
-  writeBatch,
   where,
   doc,
+  serverTimestamp,
+  updateDoc,
   type DocumentData,
 } from '@react-native-firebase/firestore';
 import Constants from 'expo-constants';
@@ -23,9 +22,26 @@ import type { NotificationDoc, NotificationService } from './notificationService
 
 const NOTIFICATION_LIMIT = 50;
 let registeredToken: string | null = null;
+let lastUnregisteredToken: string | null = null;
 const JOURNEY_CHANNEL_ID = 'journey-status';
 const SAFETY_CHANNEL_ID = 'safety';
 const SAFETY_ALERT_CHANNEL_ID = 'safety-alerts';
+
+function expoProjectId() {
+  return Constants.expoConfig?.extra?.eas?.projectId ?? process.env.EXPO_PUBLIC_EAS_PROJECT_ID;
+}
+
+async function currentExpoToken(requestPermission: boolean) {
+  if (!Device.isDevice) return null;
+  let permission = await Notifications.getPermissionsAsync();
+  if (permission.status !== 'granted' && requestPermission) {
+    permission = await Notifications.requestPermissionsAsync();
+  }
+  if (permission.status !== 'granted') return null;
+  const projectId = expoProjectId();
+  if (!projectId) return null;
+  return (await Notifications.getExpoPushTokenAsync({ projectId })).data;
+}
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -54,19 +70,18 @@ function mapNotification(id: string, data: DocumentData): NotificationDoc {
     safetyOwnerUid: data.safetyOwnerUid,
     safetyAlertAt: typeof data.safetyAlertAt === 'number' ? data.safetyAlertAt : undefined,
     createdAt: toMillis(data.createdAt),
+    expireAt: toMillis(data.expireAt),
     readAt: data.readAt ? toMillis(data.readAt) : undefined,
   };
 }
 
 export const firebaseNotificationService: NotificationService = {
-  subscribeNotifications(actor, cb) {
+  subscribeNotifications(actor, cb, onError) {
     const notificationsRef = collection(getFirebaseDb(), 'notifications');
     const notificationQuery = query(
       notificationsRef,
       where('recipientUid', '==', actor.uid),
       where('expireAt', '>', Timestamp.fromMillis(Date.now())),
-      // The range field must be the first Firestore ordering.
-      orderBy('expireAt', 'asc'),
       orderBy('createdAt', 'desc'),
       limit(NOTIFICATION_LIMIT),
     );
@@ -76,40 +91,21 @@ export const firebaseNotificationService: NotificationService = {
         cb(
           snapshot.docs
             .map((item) => mapNotification(item.id, item.data()))
+            .filter((item) => item.expireAt > Date.now())
             .sort((first, second) => second.createdAt - first.createdAt),
         );
       },
-      () => cb([]),
+      (error) => onError?.(error instanceof Error ? error : new Error(String(error))),
     );
   },
 
-  async markRead(_actor, notificationId) {
-    await updateDoc(doc(getFirebaseDb(), 'notifications', notificationId), {
-      readAt: serverTimestamp(),
+  async markSeen(actor) {
+    await updateDoc(doc(getFirebaseDb(), 'users', actor.uid), {
+      notificationsSeenAt: serverTimestamp(),
     });
-  },
-
-  async markAllRead(_actor, notificationIds) {
-    if (!notificationIds.length) return;
-    const batch = writeBatch(getFirebaseDb());
-    notificationIds.forEach((id) => {
-      batch.update(doc(getFirebaseDb(), 'notifications', id), { readAt: serverTimestamp() });
-    });
-    await batch.commit();
   },
 
   async registerDevice(_actor) {
-    if (!Device.isDevice) return false;
-    const current = await Notifications.getPermissionsAsync();
-    let status = current.status;
-    if (status !== 'granted') {
-      status = (await Notifications.requestPermissionsAsync()).status;
-    }
-    if (status !== 'granted') return false;
-
-    const projectId =
-      Constants.expoConfig?.extra?.eas?.projectId ?? process.env.EXPO_PUBLIC_EAS_PROJECT_ID;
-    if (!projectId) return false;
     if (Device.osName === 'Android') {
       await Notifications.setNotificationChannelAsync('default', {
         name: 'Together',
@@ -133,22 +129,26 @@ export const firebaseNotificationService: NotificationService = {
         lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
       });
     }
-    const token = (await Notifications.getExpoPushTokenAsync({ projectId })).data;
+    const token = await currentExpoToken(true);
+    if (!token) return false;
     await httpsCallable<{ token: string }, { ok: true }>(
       getFirebaseFunctions(),
       'registerPushToken',
     )({ token });
     registeredToken = token;
+    lastUnregisteredToken = null;
     return true;
   },
 
   async unregisterDevice() {
-    if (!registeredToken) return;
+    const token = registeredToken ?? (await currentExpoToken(false));
+    if (!token || token === lastUnregisteredToken) return;
     await httpsCallable<{ token: string }, { ok: true }>(
       getFirebaseFunctions(),
       'unregisterPushToken',
-    )({ token: registeredToken });
+    )({ token });
     registeredToken = null;
+    lastUnregisteredToken = token;
   },
 
   async showJourneyStatus(input) {

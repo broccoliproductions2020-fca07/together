@@ -1,7 +1,6 @@
 export {
   OpenStatusProvider,
   useOpenStatus,
-  OPEN_VIBES,
   OPEN_DURATION_MS,
   OPEN_MAX_DURATION_MS,
 } from './OpenStatusProvider';

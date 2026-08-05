@@ -75,7 +75,7 @@ export const firebasePresenceService: PresenceService = {
 
   setPresence(_actor, input) {
     const publish = httpsCallable(getFirebaseFunctions(), 'publishPresence');
-    void publish({ presence: input });
+    return publish({ presence: input }).then(() => undefined);
   },
 
   clearPresence(actor) {

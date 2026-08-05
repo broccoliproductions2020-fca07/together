@@ -1,12 +1,9 @@
-import { BACKEND } from '@/shared/services/firebase';
-
 import { firebaseActivityService } from './firebaseActivityService';
-import { mockActivityService } from './mockActivityService';
 import type { ActivityService } from './activityService.types';
 
 /**
  * The single activity integration point (service-seam pattern, see AGENTS.md).
- * Selection via EXPO_PUBLIC_BACKEND: mock (offline default) | firebase.
+ * There is one backend: Firebase. Dev talks to the local Emulator Suite,
+ * production to the cloud project — same code, different endpoint.
  */
-export const activityService: ActivityService =
-  BACKEND === 'firebase' ? firebaseActivityService : mockActivityService;
+export const activityService: ActivityService = firebaseActivityService;

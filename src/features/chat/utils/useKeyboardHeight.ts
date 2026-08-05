@@ -1,30 +1,38 @@
-import { useEffect, useState } from 'react';
-import { Keyboard, Platform } from 'react-native';
+import { useReanimatedKeyboardAnimation } from 'react-native-keyboard-controller';
+import { useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
 
 /**
- * Current keyboard height in px (0 when hidden). Chat surfaces use this to
- * push their composer up with plain padding instead of relying on
- * `KeyboardAvoidingView` — which does not reliably resize inside the
- * absolutely-positioned detail sheet / a `<Modal>` on Android (a well-known
- * RN gap: the keyboard visually covers content instead of the layout
- * shrinking). Padding math based on the real keyboard height works
- * regardless of that.
+ * Live keyboard height as a Reanimated shared value (0 when hidden).
+ *
+ * Chat surfaces push their composer up with padding instead of relying on
+ * `KeyboardAvoidingView`, which does not reliably resize inside an
+ * absolutely-positioned sheet or a `<Modal>` on Android — the keyboard just
+ * covers the content instead of the layout shrinking.
+ *
+ * This used to read `Keyboard.addListener`, which only reports the FINAL
+ * height once the system animation has already begun. The composer therefore
+ * snapped into place instead of travelling with the keyboard.
+ * `useReanimatedKeyboardAnimation` reports the frame on every frame, on the UI
+ * thread, so the composer now rides the keyboard exactly.
  */
-export function useKeyboardHeight(): number {
-  const [height, setHeight] = useState(0);
-
-  useEffect(() => {
-    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-    const showSub = Keyboard.addListener(showEvent, (event) => {
-      setHeight(event.endCoordinates?.height ?? 0);
-    });
-    const hideSub = Keyboard.addListener(hideEvent, () => setHeight(0));
-    return () => {
-      showSub.remove();
-      hideSub.remove();
-    };
-  }, []);
-
+export function useKeyboardHeight(): SharedValue<number> {
+  const { height } = useReanimatedKeyboardAnimation();
   return height;
+}
+
+/**
+ * Ready-made bottom padding that clears the keyboard, for a container that is
+ * bottom-anchored. `extra` is the resting inset to keep when the keyboard is
+ * closed (usually the safe-area bottom).
+ *
+ * The library reports height as a NEGATIVE offset while the keyboard rises, so
+ * take the magnitude.
+ */
+export function useKeyboardPadding(extra = 0, enabled = true) {
+  const height = useKeyboardHeight();
+
+  return useAnimatedStyle(() => {
+    const keyboard = enabled ? Math.abs(height.value) : 0;
+    return { paddingBottom: Math.max(extra, keyboard) };
+  }, [extra, enabled]);
 }

@@ -26,7 +26,7 @@ import {
   isCompanionWatchingAlert,
 } from '../types';
 
-const ACCENT = '#6E8BF7';
+const ACCENT = STATUS_COLOR.blue;
 const MAX_COMPANIONS = 25;
 
 type CompanionState = 'watching' | 'reachable' | 'unavailable' | 'expired' | 'pending';
@@ -51,9 +51,13 @@ const STATE_META: Record<
   CompanionState,
   { label: string; icon: keyof typeof Ionicons.glyphMap; color: string }
 > = {
-  watching: { label: 'Schaut gerade zu', icon: 'eye', color: '#41C08D' },
+  watching: { label: 'Schaut gerade zu', icon: 'eye', color: STATUS_COLOR.blue },
   reachable: { label: 'Erreichbar', icon: 'checkmark-circle', color: ACCENT },
-  unavailable: { label: 'Gerade nicht erreichbar', icon: 'remove-circle-outline', color: '#E0A23E' },
+  unavailable: {
+    label: 'Gerade nicht erreichbar',
+    icon: 'remove-circle-outline',
+    color: STATUS_COLOR.orange,
+  },
   expired: { label: 'Bestätigung abgelaufen', icon: 'time-outline', color: '#8B929E' },
   pending: { label: 'Noch keine Rückmeldung', icon: 'time-outline', color: '#8B929E' },
 };
@@ -382,7 +386,7 @@ export function SafetyAudienceManager({
           <ScrollView
             className="flex-1"
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={{ paddingBottom: 10 }}
+            contentContainerStyle={{ paddingBottom: 12 }}
           >
             {companionRows.map((row) => (
               <CompanionRow
@@ -444,7 +448,7 @@ export function SafetyAudienceManager({
             className="flex-1"
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
-            contentContainerStyle={{ paddingBottom: 10 }}
+            contentContainerStyle={{ paddingBottom: 12 }}
           >
             {availableFriends.map((friend) => (
               <AddFriendRow

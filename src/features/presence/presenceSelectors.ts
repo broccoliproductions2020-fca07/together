@@ -1,4 +1,5 @@
-import type { MapCoordinate, NearbyFriend } from '@/features/map/types/map.types';
+import type { GeoCoordinate } from '@/domain/geo';
+import type { NearbyFriend } from '@/features/map/types/map.types';
 
 import type { PresenceDoc } from './services/presenceService.types';
 
@@ -9,7 +10,7 @@ function toRad(deg: number): number {
 }
 
 /** Great-circle distance in km. */
-function haversineKm(a: MapCoordinate, b: MapCoordinate): number {
+function haversineKm(a: GeoCoordinate, b: GeoCoordinate): number {
   const dLat = toRad(b.latitude - a.latitude);
   const dLng = toRad(b.longitude - a.longitude);
   const lat1 = toRad(a.latitude);
@@ -25,7 +26,7 @@ function haversineKm(a: MapCoordinate, b: MapCoordinate): number {
  */
 export function presenceToNearby(
   docs: PresenceDoc[],
-  myLocation: MapCoordinate | null,
+  myLocation: GeoCoordinate | null,
 ): NearbyFriend[] {
   return docs.map((doc) => {
     const activity = doc.vibe
@@ -33,7 +34,7 @@ export function presenceToNearby(
       : 'offen';
 
     if (doc.shareLocation && doc.coarseLocation && myLocation) {
-      const coordinate: MapCoordinate = {
+      const coordinate: GeoCoordinate = {
         latitude: doc.coarseLocation.lat,
         longitude: doc.coarseLocation.lng,
       };

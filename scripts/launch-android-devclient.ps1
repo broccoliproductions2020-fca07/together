@@ -18,8 +18,8 @@ $sdkRoot = Join-Path $androidRoot 'Sdk'
 $avdRoot = Join-Path $androidRoot 'avd'
 $adb = Join-Path $sdkRoot 'platform-tools\adb.exe'
 $deviceId = 'emulator-5554'
-$pkg = 'com.ossabossa.together'
-$scheme = 'together'
+$pkg = 'com.broccolistudio.together.dev'
+$scheme = 'together-dev'
 $apk = 'D:\Dokumente\myapp\android\app\build\outputs\apk\debug\app-debug.apk'
 
 $env:ANDROID_HOME = $sdkRoot
@@ -27,6 +27,10 @@ $env:ANDROID_SDK_ROOT = $sdkRoot
 $env:ANDROID_AVD_HOME = $avdRoot
 $env:EXPO_NO_DEPENDENCY_VALIDATION = '1'
 $env:EXPO_LOCAL_DEV = '1'
+$env:APP_VARIANT = 'development'
+$env:EXPO_PUBLIC_FIREBASE_EMULATORS = 'true'
+$env:EXPO_PUBLIC_FIREBASE_APP_CHECK_ENABLED = 'false'
+$env:EXPO_PUBLIC_CRASH_REPORTING_ENABLED = 'false'
 # The local test setup must not wait for Expo's online configuration schema just
 # to resolve manifest icons. The native dev client already contains these assets.
 $env:EXPO_UNIVERSE_DIR = Join-Path $PSScriptRoot 'expo-universe'
@@ -72,6 +76,8 @@ for ($i = 0; $i -lt 45; $i++) {
 }
 if (-not $packageReady) { throw "Android package service did not become ready." }
 
+& $adb -s $deviceId shell settings put secure show_ime_with_hard_keyboard 1 | Out-Null
+
 # Install the prebuilt dev-client APK only if it isn't on the device already.
 $installed = & $adb -s $deviceId shell pm list packages $pkg 2>$null
 if (-not ($installed -match [regex]::Escape($pkg))) {
@@ -83,7 +89,7 @@ if (-not ($installed -match [regex]::Escape($pkg))) {
 }
 
 & $adb -s $deviceId reverse tcp:8081 tcp:8081 | Out-Null
-# In firebase mode the app talks to the local Firebase emulators. hostUri resolves
+# The local development app talks to the Firebase emulators. hostUri resolves
 # to "localhost" over the dev-client connection, which on the emulator means the
 # device itself — so forward the emulator ports (auth/firestore/database/UI) too,
 # or guest login (anonymous auth) hangs forever. Start them with `npm run emulators`.
@@ -105,9 +111,8 @@ Start-Job -ArgumentList $adb, $deviceId, $pkg, $scheme -ScriptBlock {
   & $adb -s $deviceId shell monkey -p $pkg -c android.intent.category.LAUNCHER 1 | Out-Null
   Start-Sleep -Seconds 1
   $url = 'http%3A%2F%2Flocalhost%3A8081'
-  $devClientScheme = 'exp+' + $scheme
   & $adb -s $deviceId shell am start -a android.intent.action.VIEW `
-    -d "$devClientScheme`://expo-development-client/?url=$url" | Out-Null
+    -d "$scheme`://expo-development-client/?url=$url" | Out-Null
 } | Out-Null
 
 # Free a stale Metro on 8081. A killed/zombied dev server from a previous session

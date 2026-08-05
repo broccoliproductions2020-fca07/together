@@ -10,7 +10,6 @@ import {
 } from 'react';
 
 import { useAuth } from '@/features/auth';
-import { BACKEND } from '@/shared/services/firebase';
 
 import { circleService } from './services/circleService';
 import { loadCachedCircles, saveCachedCircles } from './services/circleCache';
@@ -37,7 +36,7 @@ export function CirclesProvider({ children }: { children: ReactNode }) {
   const saveAndSetCircles = useCallback(
     (next: CircleDoc[]) => {
       setCircles(next);
-      if (BACKEND === 'firebase') void saveCachedCircles(actor.uid, next);
+      void saveCachedCircles(actor.uid, next);
     },
     [actor.uid],
   );
@@ -57,14 +56,8 @@ export function CirclesProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const version = ++requestVersion.current;
     setCircles([]);
-    if (BACKEND === 'firebase') {
-      void loadCachedCircles(actor.uid).then((cached) => {
-        if (cached && version === requestVersion.current) setCircles(cached);
-      });
-      return;
-    }
-    void circleService.listCircles(actor).then((next) => {
-      if (version === requestVersion.current) setCircles(next);
+    void loadCachedCircles(actor.uid).then((cached) => {
+      if (cached && version === requestVersion.current) setCircles(cached);
     });
   }, [actor]);
 

@@ -1,6 +1,12 @@
-import type { ChatMessage, ChatRoom, GroupOpening, ProposalData } from '../types';
+import type {
+  ChatMessage,
+  ChatRoom,
+  GroupOpening,
+  ProposalData,
+  SpontaneousRound,
+} from '../types';
 
-/** Who is acting — real uid in firebase mode, 'u_you' in mock mode. */
+/** The authenticated person performing a chat action. */
 export interface ChatActor {
   uid: string;
   displayName: string;
@@ -24,9 +30,8 @@ export interface RoomMemberProfile {
 export type Unsubscribe = () => void;
 
 /**
- * The chat backend seam (see AGENTS.md / docs/backend-plan.md).
- * Implementations: mockChatService (in-memory, offline) and
- * firebaseChatService (Firestore, emulator/cloud). Swapped in chatService.ts.
+ * The chat backend seam. Its Firebase implementation uses Firestore and
+ * callable Functions against either the emulator or the cloud project.
  *
  * Listener budget: room summaries are fetched on demand and listened to only
  * while their visible list is open. subscribeMessages may only be active for
@@ -90,4 +95,15 @@ export interface ChatService {
   setGroupOpen(actor: ChatActor, roomId: string, open: boolean): Promise<void>;
   /** Join a group via its opening (server re-checks audience + capacity). */
   joinOpenGroup(actor: ChatActor, roomId: string): Promise<void>;
+  /** Starts private, pending winks. Invitees are not room members yet. */
+  startSpontaneousRound(actor: ChatActor, members: GroupMember[]): Promise<string>;
+  /** Accepts one private wink; the server prevents concurrent double-booking. */
+  acceptSpontaneousRound(actor: ChatActor, roundId: string): Promise<void>;
+  /** Leaves a forming round; the host's leave cancels it for everyone. */
+  leaveSpontaneousRound(actor: ChatActor, roundId: string): Promise<void>;
+  /** Exactly one active round, listened to only while the map is visible. */
+  subscribeSpontaneousRound(
+    actor: ChatActor,
+    cb: (round: SpontaneousRound | null) => void,
+  ): Unsubscribe;
 }

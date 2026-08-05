@@ -4,6 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { SelectedPlace } from '@/features/activities';
 import { FloatingSurface } from '@/features/overlay/components/FloatingSurface';
+import type { PlaceSuggestion } from '@/features/places';
 import { AppButton } from '@/shared/components';
 
 import type { ActivityMode, MapCoordinate } from '../types/map.types';
@@ -24,15 +25,17 @@ export interface MapLocationPickerOverlayProps {
   coordinate: MapCoordinate;
   mode: ActivityMode;
   searchQuery: string;
-  searchResults: SelectedPlace[];
+  searchResults: PlaceSuggestion[];
   selectedPlaceCandidate?: SelectedPlace;
   loading?: boolean;
   searchLoading?: boolean;
+  showSearchAttribution?: boolean;
   currentLocationLoading?: boolean;
   onCancel: () => void;
   onConfirm: () => void;
   onSearchQueryChange: (query: string) => void;
-  onSelectSearchResult: (place: SelectedPlace) => void;
+  onSearchSubmit: () => void;
+  onSelectSearchResult: (place: PlaceSuggestion) => void;
   onUseCurrentLocation: () => void;
 }
 
@@ -44,16 +47,18 @@ export function MapLocationPickerOverlay({
   selectedPlaceCandidate,
   loading = false,
   searchLoading = false,
+  showSearchAttribution = false,
   currentLocationLoading = false,
   onCancel,
   onConfirm,
   onSearchQueryChange,
+  onSearchSubmit,
   onSelectSearchResult,
   onUseCurrentLocation,
 }: MapLocationPickerOverlayProps) {
   const insets = useSafeAreaInsets();
   const accent = MODE_ACCENTS[mode];
-  const hasSearchQuery = searchQuery.trim().length >= 2;
+  const hasSearchQuery = searchQuery.trim().length >= 3;
   const hasSearchResults = hasSearchQuery && searchResults.length > 0;
   const displayTitle = selectedPlaceCandidate?.name ?? 'Kartenpunkt';
   const displaySubtitle =
@@ -95,6 +100,7 @@ export function MapLocationPickerOverlay({
             returnKeyType="search"
             value={searchQuery}
             onChangeText={onSearchQueryChange}
+            onSubmitEditing={onSearchSubmit}
           />
         </FloatingSurface>
       </View>
@@ -118,6 +124,7 @@ export function MapLocationPickerOverlay({
                 accessibilityRole="button"
                 accessibilityLabel={`${place.name} auswählen`}
                 className="flex-row items-center gap-3 rounded-2xl px-3 py-3 active:opacity-80"
+                disabled={loading}
                 onPress={() => onSelectSearchResult(place)}
               >
                 <View
@@ -134,6 +141,11 @@ export function MapLocationPickerOverlay({
                 </View>
               </Pressable>
             ))}
+            {showSearchAttribution && hasSearchResults ? (
+              <Text className="px-3 pb-1 pt-1 text-[12px] font-normal text-muted-foreground">
+                Google Maps
+              </Text>
+            ) : null}
           </FloatingSurface>
         </View>
       ) : null}

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Together · Betrieb</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow"><span class="status-dot"></span> Nur auf diesem Computer</p>
+          <h1>Together <span>· Betrieb</span></h1>
+          <p class="subtitle">Kostenquellen und Nutzung für Lokal, Staging und Produktion.</p>
+        </div>
+        <div class="actions">
+          <p id="updated-at" class="updated-at" aria-live="polite">Wird geladen …</p>
+          <button id="refresh-button" type="button">Aktualisieren</button>
+        </div>
+      </header>
+
+      <section id="notice" class="notice hidden" role="status"></section>
+
+      <section class="section-heading">
+        <div>
+          <p class="eyebrow">Firebase</p>
+          <h2>Datenbestand und Firestore-Operationen</h2>
+        </div>
+        <p>
+          Cloud-Metriken sind absichtlich 5 Minuten gecacht und treffen mit einigen Minuten
+          Verzögerung ein.
+        </p>
+      </section>
+      <section id="environment-grid" class="environment-grid" aria-live="polite"></section>
+
+      <section class="section-heading secondary-heading">
+        <div>
+          <p class="eyebrow">Google</p>
+          <h2>Nutzung und externe Dienste</h2>
+        </div>
+        <p>Analytics und Billing erscheinen erst nach der lokalen Einrichtung.</p>
+      </section>
+      <section id="integration-grid" class="integration-grid" aria-live="polite"></section>
+
+      <section class="section-heading secondary-heading">
+        <div>
+          <p class="eyebrow">Cloud Billing</p>
+          <h2>Alle abgerechneten Dienste und SKUs</h2>
+        </div>
+        <p>
+          Der Billing-Export ist die maßgebliche Quelle für tatsächlich berechnete Google- und
+          Firebase-Kosten.
+        </p>
+      </section>
+      <section id="billing-breakdown" class="billing-breakdown" aria-live="polite"></section>
+
+      <section class="privacy-note">
+        <strong>Datenschutz by design.</strong>
+        Dieses Werkzeug zeigt ausschließlich aggregierte Kennzahlen. Es liest keine Chat-Inhalte,
+        keine Namen, keine Suchtexte und keine Standortverläufe.
+      </section>
+    </main>
+    <template id="metric-template">
+      <article class="metric-card">
+        <p class="metric-label"></p>
+        <p class="metric-value"></p>
+        <p class="metric-detail"></p>
+      </article>
+    </template>
+    <script src="/app.js"></script>
+  </body>
+</html>

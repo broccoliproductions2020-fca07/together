@@ -1,6 +1,6 @@
 import Constants from 'expo-constants';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Platform, StyleSheet, UIManager, View } from 'react-native';
+import { Platform, StyleSheet, UIManager, View, type LayoutChangeEvent } from 'react-native';
 import MapView, {
   Marker,
   PROVIDER_DEFAULT,
@@ -11,32 +11,34 @@ import MapView, {
   type Region,
 } from 'react-native-maps';
 
+import {
+  cancelAnimation,
+  Easing,
+  runOnJS,
+  useReducedMotion,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
+
 import { useActivityEntities } from '@/features/activities';
 import { useActivityChatActivity } from '@/features/chat';
 
 import { useMapStyle } from '../mapStyle/useMapStyle';
 import type { MapCoordinate } from '../types/map.types';
 import { countdownBucket } from '../utils/countdown';
-import { darkMapStyle } from '../utils/mapStyle';
 import { markerModeStyles } from '../utils/markerStyles';
 import { participantDisplay } from '../utils/markerParticipants';
-import {
-  detailLevelForDelta,
-  initialDetailLevel,
-  type MapMarkerDetailLevel,
-} from '../utils/markerDetailLevel';
-import { berlinRegion, mockPositionToCoordinate } from '../utils/mockCoordinates';
+import { zoomProgressForDelta } from '../utils/markerDetailLevel';
+import { DEFAULT_MAP_REGION } from '../utils/defaultRegion';
 import { AvatarMarker } from './AvatarMarker';
 import { ClusterMarker } from './ClusterMarker';
 import { JourneyAvatarMarker } from './JourneyAvatarMarker';
-import {
-  ACTIVITY_MARKER_ANCHOR,
-  ACTIVITY_MARKER_AURA_OFFSET_Y,
-  ACTIVITY_MARKER_CAPTURE_SIZE,
-} from './activityMarkerLayout';
+import { ACTIVITY_MARKER_ANCHOR, ACTIVITY_MARKER_AURA_OFFSET_Y } from './activityMarkerLayout';
 import { MapLiveAuraOverlay, type LiveAuraTarget } from './MapLiveAuraOverlay';
+import { MapMarkerMorphOverlay, type MorphCameraValues } from './MapMarkerMorphOverlay';
+import { MarkerLaunchOverlay, type MarkerLaunchRequest } from './MarkerLaunchOverlay';
 import { useMarkerImages } from './markerCapture';
-import { MockMapCanvas, type MockMapCanvasProps } from './MockMapCanvas';
+import { PreviewMapCanvas, type PreviewMapCanvasProps } from './PreviewMapCanvas';
 
 /**
  * Map provider decision ("Option A", see docs/backend-plan.md → Karten/Orte):
@@ -58,9 +60,7 @@ const IS_EXPO_GO = Constants.appOwnership === 'expo';
 const IOS_HAS_GOOGLE_RENDERER =
   Platform.OS === 'ios' && !IS_EXPO_GO && UIManager.hasViewManagerConfig('AIRGoogleMap');
 const MAP_PROVIDER =
-  Platform.OS === 'android' || IOS_HAS_GOOGLE_RENDERER
-    ? PROVIDER_GOOGLE
-    : PROVIDER_DEFAULT;
+  Platform.OS === 'android' || IOS_HAS_GOOGLE_RENDERER ? PROVIDER_GOOGLE : PROVIDER_DEFAULT;
 
 // The detail sheet covers the lower portion of the map. Moving the map center
 // south by this share places the selected location in the visual center of the
@@ -98,65 +98,173 @@ interface MarkerDescriptor {
   anchor?: { x: number; y: number };
   node: ReactNode;
   onPress?: () => void;
-  renderMode?: 'image' | 'live';
+  morphable?: boolean;
 }
 
-const LIVE_ACTIVITY_MARKERS = false;
-const LIVE_MARKER_SETTLE_MS = 1800;
+// Frame count for the captured avatar morph (2×2 quad → unfolded row when an
+// activity has several people). These captures ARE the animation: each step is
+// a distinct PNG rendered from the node at that `zoomProgress`. Lowering it
+// makes the reordering coarse — do not "optimise" this to cut native image
+// swaps while zooming, the swaps are the frames.
+const MORPH_CAPTURE_STEPS = 8;
+const ACTIVITY_MARKER_VISUAL_VERSION = 'avatar-squircle-160-v3';
+const ZOOM_FRAME_EPSILON = 0.0005;
+const MORPH_VIEWPORT_RADIUS = 2.5;
+const MORPH_SETTLE_POINTS = [0, 0.5, 1] as const;
+const MORPH_SETTLE_TRIGGER = 0.055;
+const MORPH_SETTLE_EPSILON = 0.008;
 
-/**
- * Direct custom-view marker for the current Fabric renderer. Tracking is only
- * enabled while a visual state settles; leaving it on permanently makes Google
- * Maps re-snapshot every marker continuously and quickly degrades pan/zoom.
- */
-function LiveActivityMapMarker({ descriptor }: { descriptor: MarkerDescriptor }) {
-  const [tracksViewChanges, setTracksViewChanges] = useState(true);
+function morphCaptureStep(progress: number) {
+  return Math.round(Math.max(0, Math.min(1, progress)) * MORPH_CAPTURE_STEPS);
+}
 
-  useEffect(() => {
-    setTracksViewChanges(true);
-    const timer = setTimeout(() => setTracksViewChanges(false), LIVE_MARKER_SETTLE_MS);
-    return () => clearTimeout(timer);
-  }, [descriptor.captureKey]);
-
+function isNearMorphViewport(descriptor: MarkerDescriptor, region: Region) {
   return (
-    <Marker
-      anchor={descriptor.anchor ?? { x: 0.5, y: 0.5 }}
-      coordinate={descriptor.coordinate}
-      onPress={descriptor.onPress}
-      tracksViewChanges={tracksViewChanges}
-    >
-      <View collapsable={false} style={styles.liveMarkerHost}>
-        {descriptor.node}
-      </View>
-    </Marker>
+    Math.abs(descriptor.coordinate.latitude - region.latitude) <=
+      region.latitudeDelta * MORPH_VIEWPORT_RADIUS &&
+    Math.abs(descriptor.coordinate.longitude - region.longitude) <=
+      region.longitudeDelta * MORPH_VIEWPORT_RADIUS
   );
 }
 
+function markerSettleTarget(start: number, current: number) {
+  const delta = current - start;
+  if (Math.abs(delta) < MORPH_SETTLE_TRIGGER) return start;
+  if (delta > 0) {
+    return MORPH_SETTLE_POINTS.find((point) => point >= current - MORPH_SETTLE_EPSILON) ?? 1;
+  }
+  return (
+    [...MORPH_SETTLE_POINTS].reverse().find((point) => point <= current + MORPH_SETTLE_EPSILON) ?? 0
+  );
+}
+
+function markerSettleDuration(
+  remainingProgress: number,
+  progressVelocity: number,
+  reducedMotion: boolean,
+) {
+  if (reducedMotion) return 0;
+  const speed = Math.abs(progressVelocity);
+  const duration =
+    speed > 0.05 ? (remainingProgress / speed) * 1000 : 170 + remainingProgress * 220;
+  return Math.round(Math.max(120, Math.min(280, duration)));
+}
+
 /**
- * MapCanvas is the single swap point for map rendering.
- * Native platforms use react-native-maps for real pan/zoom. Mock `{ x, y }`
- * positions are mapped to Berlin test coordinates until backend data provides
- * real latitude/longitude values.
+ * MapCanvas is the single rendering swap point. Native builds use
+ * react-native-maps; the browser preview projects the same real coordinates
+ * onto its decorative canvas.
  */
-export function MapCanvas(props: MockMapCanvasProps) {
+export function MapCanvas(props: PreviewMapCanvasProps) {
   const mapRef = useRef<MapView | null>(null);
-  const regionRef = useRef<Region>(berlinRegion);
+  const regionRef = useRef<Region>(DEFAULT_MAP_REGION);
+  const zoomingRef = useRef(false);
+  const settlingZoomRef = useRef(false);
+  const settleTargetRef = useRef(zoomProgressForDelta(DEFAULT_MAP_REGION.latitudeDelta));
+  const pendingSettleRegionRef = useRef<Region>(DEFAULT_MAP_REGION);
+  const settledMorphProgressRef = useRef(zoomProgressForDelta(DEFAULT_MAP_REGION.latitudeDelta));
+  const gestureRawStartProgressRef = useRef(settledMorphProgressRef.current);
+  const gestureVisualStartProgressRef = useRef(settledMorphProgressRef.current);
+  const gestureFallbackTargetRef = useRef<number | null>(null);
+  const gestureLastProgressRef = useRef(settledMorphProgressRef.current);
+  const gestureLastTimestampRef = useRef(0);
+  const gestureProgressVelocityRef = useRef(0);
+  const movingRef = useRef(false);
   const [mapReady, setMapReady] = useState(false);
   const [mapMoving, setMapMoving] = useState(false);
-  const [auraProjectionKey, setAuraProjectionKey] = useState(0);
-  // Level-of-detail for markers. Changes ONLY when a hysteresis band is crossed
-  // (below, in onRegionChangeComplete), so normal panning never re-renders.
-  const [detailLevel, setDetailLevel] = useState<MapMarkerDetailLevel>(() =>
-    initialDetailLevel(berlinRegion.latitudeDelta),
+  const [mapZooming, setMapZooming] = useState(false);
+  const [markerMorphVisible, setMarkerMorphVisible] = useState(false);
+  const [activeMorphIds, setActiveMorphIds] = useState<string[]>([]);
+  const [settledMorphStep, setSettledMorphStep] = useState(() =>
+    morphCaptureStep(zoomProgressForDelta(DEFAULT_MAP_REGION.latitudeDelta)),
   );
+  const [viewport, setViewport] = useState({ width: 0, height: 0 });
+  const [auraProjectionKey, setAuraProjectionKey] = useState(0);
+  const reducedMotion = useReducedMotion();
+  // Camera projection and marker shape deliberately use separate shared values.
+  // That lets the marker finish its morph after release without forcing the
+  // expensive native map itself to keep zooming.
+  const morphFrame = useSharedValue({
+    latitude: DEFAULT_MAP_REGION.latitude,
+    longitude: DEFAULT_MAP_REGION.longitude,
+    latitudeDelta: DEFAULT_MAP_REGION.latitudeDelta,
+    longitudeDelta: DEFAULT_MAP_REGION.longitudeDelta,
+  });
+  const zoomProgress = useSharedValue(zoomProgressForDelta(DEFAULT_MAP_REGION.latitudeDelta));
+  const morphCamera: MorphCameraValues = {
+    frame: morphFrame,
+  };
   const { mapMarkers, markerClusters } = useActivityEntities();
   const { isJoined, getUnreadCount } = useActivityChatActivity();
-  const { effectiveStyle } = useMapStyle();
-  const focusActivityId = props.journeyFocus?.activityId;
-  const { imageUriFor, renderCaptureLayer } = useMarkerImages();
-
+  const { mapStyle, colorScheme } = useMapStyle();
+  // Applying a customMapStyle repaints the native map. That is invisible on a
+  // still map, but lands as a hitch if it happens mid-pan or mid-pinch — the
+  // one moment the eye is tracking the map closely. So the solar palette is
+  // held while a gesture is running and applied on the next settle. Nothing is
+  // dropped: only the LATEST style is kept, and the sun moves far slower than
+  // any gesture lasts.
+  const [appliedMapStyle, setAppliedMapStyle] = useState(mapStyle);
   useEffect(() => {
-    if (!props.focusCoordinate) return;
+    if (mapMoving || mapZooming) return;
+    setAppliedMapStyle(mapStyle);
+  }, [mapStyle, mapMoving, mapZooming]);
+  const focusActivityId = props.journeyFocus?.activityId;
+  const { uris, imageUriFor, renderCaptureLayer } = useMarkerImages();
+
+  const updateMorphCamera = (region: Region) => {
+    morphFrame.value = {
+      latitude: region.latitude,
+      longitude: region.longitude,
+      latitudeDelta: region.latitudeDelta,
+      longitudeDelta: region.longitudeDelta,
+    };
+  };
+
+  const finishRegionChange = (region: Region, progress: number, completedZoom: boolean) => {
+    regionRef.current = region;
+    updateMorphCamera(region);
+    if (completedZoom) {
+      settlingZoomRef.current = false;
+      zoomingRef.current = false;
+      gestureFallbackTargetRef.current = null;
+      settledMorphProgressRef.current = progress;
+      zoomProgress.value = progress;
+      setSettledMorphStep(morphCaptureStep(progress));
+      setMapZooming(false);
+    }
+    props.onRegionChange?.({
+      latitude: region.latitude,
+      longitude: region.longitude,
+      latitudeDelta: region.latitudeDelta,
+      longitudeDelta: region.longitudeDelta,
+    });
+    movingRef.current = false;
+    setMapMoving(false);
+    setAuraProjectionKey((current) => current + 1);
+  };
+
+  const finishMarkerSettle = (target: number) => {
+    // A new pinch may have cancelled this timing before its UI-thread callback
+    // reached JS. Never let that stale callback end the newer gesture.
+    if (!settlingZoomRef.current || settleTargetRef.current !== target) return;
+    finishRegionChange(pendingSettleRegionRef.current, target, true);
+  };
+
+  const handleViewportLayout = (event: LayoutChangeEvent) => {
+    const { width, height } = event.nativeEvent.layout;
+    setViewport((current) =>
+      current.width === width && current.height === height ? current : { width, height },
+    );
+  };
+
+  // `mapReady` is part of the guard AND the deps on purpose. The first location
+  // fix usually resolves from a cached position before the native map has
+  // finished initialising, so animating then hits a null/unready mapRef and is
+  // silently dropped — and because focusCoordinate never changes again, nothing
+  // ever retries and the camera stays on the Berlin initialRegion. Depending on
+  // mapReady replays the pending focus the moment the map can accept it.
+  useEffect(() => {
+    if (!mapReady || !props.focusCoordinate) return;
 
     mapRef.current?.animateToRegion(
       {
@@ -167,7 +275,7 @@ export function MapCanvas(props: MockMapCanvasProps) {
       },
       280,
     );
-  }, [props.focusCoordinate]);
+  }, [mapReady, props.focusCoordinate]);
 
   useEffect(() => {
     if (!mapReady || !props.selectionFocus) return;
@@ -211,10 +319,6 @@ export function MapCanvas(props: MockMapCanvasProps) {
     });
   }, [mapReady, props.bottomOverlayHeight, props.fitRequest]);
 
-  if (Platform.OS === 'web') {
-    return <MockMapCanvas {...props} />;
-  }
-
   // Build one descriptor per marker. Each carries the off-screen `node` to
   // capture and a `captureKey` encoding its full visual state; the map then
   // renders `<Marker image>` from the captured PNG (see markerCapture.tsx for
@@ -253,37 +357,41 @@ export function MapCanvas(props: MockMapCanvasProps) {
         const bucket = countdownBucket(cluster.mode, cluster.startsAt, cluster.endsAt);
         descriptors.push({
           id: cluster.id,
-          captureKey: `cluster:${display.count}:${cluster.mode}:${cluster.maxParticipants ?? 0}:${cluster.category ?? ''}:${bucket ?? ''}:${avatarKey}:${props.journeyUnderwayCounts?.[cluster.id] ?? 0}:${selected}:${detailLevel}:${cluster.label ?? ''}`,
+          captureKey: `${ACTIVITY_MARKER_VISUAL_VERSION}:cluster:${display.count}:${cluster.mode}:${cluster.maxParticipants ?? 0}:${cluster.category ?? ''}:${bucket ?? ''}:${avatarKey}:${props.journeyUnderwayCounts?.[cluster.id] ?? 0}:${selected}:${cluster.label ?? ''}:morph:${settledMorphStep}`,
           coordinate:
             focusActivityId === cluster.id && props.journeyTargetCoordinate
               ? props.journeyTargetCoordinate
-              : mockPositionToCoordinate(cluster.position),
+              : cluster.coordinate,
           anchor: ACTIVITY_MARKER_ANCHOR,
-          renderMode: LIVE_ACTIVITY_MARKERS ? 'live' : 'image',
+          morphable: true,
           onPress: () => props.onClusterPress?.(cluster),
           node: (
-              <ClusterMarker
+            <ClusterMarker
               avatars={display.avatars}
               count={display.count}
               label={cluster.label}
               mode={cluster.mode}
-              detailLevel={detailLevel}
-              titlePriority={selected || joined || cluster.mode === 'now'}
+              progress={zoomProgress}
+              titlePriority={selected || joined}
               maxParticipants={cluster.maxParticipants}
               category={cluster.category}
               remainingFraction={bucket}
               journeyUnderwayCount={props.journeyUnderwayCounts?.[cluster.id] ?? 0}
-                selected={selected}
+              selected={selected}
             />
           ),
         });
-        if (cluster.mode === 'now' || selected || (props.journeyUnderwayCounts?.[cluster.id] ?? 0) > 0) {
+        if (
+          cluster.mode === 'now' ||
+          selected ||
+          (props.journeyUnderwayCounts?.[cluster.id] ?? 0) > 0
+        ) {
           auraTargets.push({
             id: cluster.id,
             coordinate:
               focusActivityId === cluster.id && props.journeyTargetCoordinate
                 ? props.journeyTargetCoordinate
-                : mockPositionToCoordinate(cluster.position),
+                : cluster.coordinate,
             color: markerModeStyles[cluster.mode].color,
             offsetY: ACTIVITY_MARKER_AURA_OFFSET_Y,
             selected,
@@ -322,13 +430,13 @@ export function MapCanvas(props: MockMapCanvasProps) {
           .join(',');
         descriptors.push({
           id: marker.id,
-          captureKey: `avatar:${marker.mode}:${marker.avatarUrl ?? marker.initials}:${marker.displayName}:${avatarKey}:${joined}:${unreadCount}:${display.count}:${marker.maxParticipants ?? 0}:${marker.category ?? ''}:${bucket ?? ''}:${props.journeyUnderwayCounts?.[marker.id] ?? 0}:${selected}:${detailLevel}:${marker.title ?? ''}:${marker.friendId ?? ''}`,
+          captureKey: `${ACTIVITY_MARKER_VISUAL_VERSION}:avatar:${marker.mode}:${marker.avatarUrl ?? marker.initials}:${marker.displayName}:${avatarKey}:${joined}:${unreadCount}:${display.count}:${marker.maxParticipants ?? 0}:${marker.category ?? ''}:${bucket ?? ''}:${props.journeyUnderwayCounts?.[marker.id] ?? 0}:${selected}:${marker.title ?? ''}:${marker.friendId ?? ''}:morph:${settledMorphStep}`,
           coordinate:
             focusActivityId === marker.id && props.journeyTargetCoordinate
               ? props.journeyTargetCoordinate
-              : mockPositionToCoordinate(marker.position),
+              : marker.coordinate,
           anchor: ACTIVITY_MARKER_ANCHOR,
-          renderMode: LIVE_ACTIVITY_MARKERS ? 'live' : 'image',
+          morphable: true,
           onPress: () => props.onMarkerPress?.(marker),
           node: (
             <AvatarMarker
@@ -336,9 +444,9 @@ export function MapCanvas(props: MockMapCanvasProps) {
               displayName={marker.displayName}
               initials={marker.initials}
               avatars={display.avatars}
-              label={marker.friendId ? marker.displayName : marker.title ?? marker.displayName}
-              detailLevel={detailLevel}
-              titlePriority={selected || joined || marker.mode === 'now'}
+              label={marker.friendId ? marker.displayName : (marker.title ?? marker.displayName)}
+              progress={zoomProgress}
+              titlePriority={selected || joined}
               mode={marker.mode}
               unreadCount={unreadCount}
               participantCount={display.count}
@@ -350,13 +458,17 @@ export function MapCanvas(props: MockMapCanvasProps) {
             />
           ),
         });
-        if (marker.mode === 'now' || selected || (props.journeyUnderwayCounts?.[marker.id] ?? 0) > 0) {
+        if (
+          marker.mode === 'now' ||
+          selected ||
+          (props.journeyUnderwayCounts?.[marker.id] ?? 0) > 0
+        ) {
           auraTargets.push({
             id: marker.id,
             coordinate:
               focusActivityId === marker.id && props.journeyTargetCoordinate
                 ? props.journeyTargetCoordinate
-                : mockPositionToCoordinate(marker.position),
+                : marker.coordinate,
             color: markerModeStyles[marker.mode].color,
             offsetY: ACTIVITY_MARKER_AURA_OFFSET_Y,
             selected,
@@ -367,7 +479,7 @@ export function MapCanvas(props: MockMapCanvasProps) {
 
   if (!props.pickingLocation && !props.hideActivities && focusActivityId) {
     (props.journeyParticipants ?? [])
-      .filter((participant) => participant.position)
+      .filter((participant) => participant.coordinate)
       .forEach((participant) => {
         const highlighted = props.journeyFocus?.participantId === participant.userId;
         descriptors.push({
@@ -378,7 +490,7 @@ export function MapCanvas(props: MockMapCanvasProps) {
           // for nothing during an active Anreise). The position goes to
           // `<Marker coordinate>` separately.
           captureKey: `journey:${participant.userId}:${participant.status}:${participant.avatarUrl ?? participant.initials}:${highlighted}`,
-          coordinate: participant.coordinate ?? mockPositionToCoordinate(participant.position!),
+          coordinate: participant.coordinate!,
           onPress: () => props.onJourneyParticipantPress?.(participant),
           node: <JourneyAvatarMarker participant={participant} highlighted={highlighted} />,
         });
@@ -420,29 +532,78 @@ export function MapCanvas(props: MockMapCanvasProps) {
     .sort((left, right) => Number(Boolean(right.selected)) - Number(Boolean(left.selected)))
     .slice(0, 4);
 
+  const activeMorphIdSet = new Set(activeMorphIds);
+  const morphDescriptors = descriptors.filter((descriptor) => activeMorphIdSet.has(descriptor.id));
+  const morphImagesReady = morphDescriptors.every((descriptor) =>
+    Boolean(uris[descriptor.captureKey]),
+  );
+
+  useEffect(() => {
+    if (!markerMorphVisible || mapZooming || !morphImagesReady) return;
+    const frame = requestAnimationFrame(() => {
+      setMarkerMorphVisible(false);
+      setActiveMorphIds([]);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [mapZooming, markerMorphVisible, morphImagesReady]);
+
+  if (Platform.OS === 'web') {
+    return <PreviewMapCanvas {...props} />;
+  }
+
+  // Publish "Wurf & Pop": a just-created marker is thrown in from the composer.
+  // The map has recentred on it (MapScreen), so it lands at screen centre. We
+  // reuse the marker's own live node so the flying pin is identical to the one
+  // that settles, and hide the real raster marker until the launch completes.
+  const launchDescriptor = props.launchMarkerId
+    ? descriptors.find((descriptor) => descriptor.id === props.launchMarkerId)
+    : undefined;
+  const launchSource = props.launchMarkerId
+    ? (mapMarkers.find((marker) => marker.id === props.launchMarkerId) ??
+      markerClusters.find((cluster) => cluster.id === props.launchMarkerId))
+    : undefined;
+  const launchRequest: MarkerLaunchRequest | null =
+    launchDescriptor && launchSource
+      ? {
+          id: launchDescriptor.id,
+          node: launchDescriptor.node,
+          accent: markerModeStyles[launchSource.mode].color,
+          land: { x: viewport.width / 2, y: viewport.height / 2 },
+        }
+      : null;
+
   return (
-    <View style={StyleSheet.absoluteFill}>
+    <View onLayout={handleViewportLayout} style={StyleSheet.absoluteFill}>
       {renderCaptureLayer(
-        descriptors
-          .filter((descriptor) => descriptor.renderMode !== 'live')
-          .map((descriptor) => ({
-            markerId: descriptor.id,
-            captureKey: descriptor.captureKey,
-            node: descriptor.node,
-          })),
+        descriptors.map((descriptor) => ({
+          markerId: descriptor.id,
+          captureKey: descriptor.captureKey,
+          node: descriptor.node,
+        })),
       )}
       <MapView
         ref={mapRef}
         provider={MAP_PROVIDER}
-        mapType={effectiveStyle === 'satellite' ? 'hybrid' : 'standard'}
-        customMapStyle={effectiveStyle === 'night' ? darkMapStyle : undefined}
-        initialRegion={berlinRegion}
+        mapType="standard"
+        // Ignored on the Apple fallback (PROVIDER_DEFAULT) — see MAP_PROVIDER above.
+        customMapStyle={appliedMapStyle}
+        // Sets `overrideUserInterfaceStyle` on the native Google map view. With
+        // an empty customMapStyle this is what renders Google's OWN dark map,
+        // which no style JSON can reproduce.
+        userInterfaceStyle={colorScheme}
+        initialRegion={DEFAULT_MAP_REGION}
         loadingEnabled
         mapPadding={{ top: 0, right: 0, bottom: props.bottomOverlayHeight ?? 0, left: 0 }}
         poiClickEnabled={!props.hideActivities}
+        pitchEnabled={false}
         scrollEnabled
         rotateEnabled={false}
+        // Google's building footprints. Was `false`, which is why the map read
+        // as empty ground with roads on it — no palette change can bring back
+        // geometry the MapView is not drawing.
+        showsBuildings
         showsCompass={false}
+        showsIndoors={false}
         showsMyLocationButton={false}
         showsPointsOfInterests={!props.hideActivities}
         style={StyleSheet.absoluteFill}
@@ -457,31 +618,153 @@ export function MapCanvas(props: MockMapCanvasProps) {
           props.onPlacePress?.(placeFromLongPress(event));
         }}
         onPoiClick={(event: PoiClickEvent) => {
-          if (props.pickingLocation || props.hideActivities) return;
+          if (props.hideActivities) return;
           props.onPlacePress?.(placeFromPoi(event));
         }}
-        onRegionChange={() => {
-          // Native map movement and a React overlay have independent clocks.
-          // Hide the aura while panning, then reproject exactly once on settle.
-          setMapMoving((currentlyMoving) => (currentlyMoving ? currentlyMoving : true));
+        onRegionChange={(region: Region) => {
+          // Compare to the last SETTLED viewport, not just the previous frame.
+          // Otherwise a deliberately slow pinch can move less than the epsilon
+          // per callback and never be recognized as zooming at all.
+          const settled = regionRef.current;
+          const latitudeZoomChange =
+            Math.abs(region.latitudeDelta - settled.latitudeDelta) /
+            Math.max(settled.latitudeDelta, 0.000001);
+          const longitudeZoomChange =
+            Math.abs(region.longitudeDelta - settled.longitudeDelta) /
+            Math.max(settled.longitudeDelta, 0.000001);
+          const zoomFrame = Math.max(latitudeZoomChange, longitudeZoomChange) > ZOOM_FRAME_EPSILON;
+          const rawProgress = zoomProgressForDelta(region.latitudeDelta);
+
+          // A fresh pinch can take over an in-flight marker-only settle. Start
+          // from its exact current visual value so there is no jump backwards.
+          if (zoomFrame && settlingZoomRef.current) {
+            const interruptedProgress = zoomProgress.value;
+            cancelAnimation(zoomProgress);
+            settlingZoomRef.current = false;
+            gestureFallbackTargetRef.current = settleTargetRef.current;
+            gestureRawStartProgressRef.current = zoomProgressForDelta(
+              regionRef.current.latitudeDelta,
+            );
+            gestureVisualStartProgressRef.current = interruptedProgress;
+            gestureLastProgressRef.current = interruptedProgress;
+            gestureLastTimestampRef.current = Date.now();
+            gestureProgressVelocityRef.current = 0;
+          }
+
+          if (zoomFrame && !zoomingRef.current) {
+            zoomingRef.current = true;
+            gestureRawStartProgressRef.current = zoomProgressForDelta(settled.latitudeDelta);
+            gestureVisualStartProgressRef.current = settledMorphProgressRef.current;
+            gestureFallbackTargetRef.current = null;
+            gestureLastProgressRef.current = settledMorphProgressRef.current;
+            gestureLastTimestampRef.current = Date.now();
+            gestureProgressVelocityRef.current = 0;
+            setActiveMorphIds(
+              descriptors
+                .filter(
+                  (descriptor) =>
+                    descriptor.morphable && isNearMorphViewport(descriptor, regionRef.current),
+                )
+                .map((descriptor) => descriptor.id),
+            );
+            setMapZooming(true);
+            setMarkerMorphVisible(true);
+          }
+
+          if (zoomingRef.current && !settlingZoomRef.current) {
+            const liveProgress = Math.max(
+              0,
+              Math.min(
+                1,
+                gestureVisualStartProgressRef.current +
+                  rawProgress -
+                  gestureRawStartProgressRef.current,
+              ),
+            );
+            const now = Date.now();
+            const elapsed = now - gestureLastTimestampRef.current;
+            if (elapsed > 0) {
+              const instantVelocity =
+                ((liveProgress - gestureLastProgressRef.current) / elapsed) * 1000;
+              gestureProgressVelocityRef.current =
+                gestureProgressVelocityRef.current * 0.65 + instantVelocity * 0.35;
+              gestureLastProgressRef.current = liveProgress;
+              gestureLastTimestampRef.current = now;
+            }
+            zoomProgress.value = liveProgress;
+          }
+          // Keep the short-lived overlay spatially attached even when the user
+          // starts panning immediately while the settled PNG is still capturing.
+          if (zoomFrame || zoomingRef.current || markerMorphVisible) {
+            updateMorphCamera(region);
+          }
+          if (!movingRef.current) {
+            movingRef.current = true;
+            setMapMoving(true);
+          }
         }}
         onRegionChangeComplete={(region: Region) => {
-          // Keep the current native viewport without putting it in React state.
-          // We use it only for the next detail-sheet focus, so panning remains
-          // free of costly MapScreen renders.
-          regionRef.current = region;
-          // Cross a zoom band → re-render markers at the new detail level. The
-          // hysteresis in detailLevelForDelta keeps this from firing near a
-          // boundary; identical levels return the same value → no state change.
-          setDetailLevel((current) => detailLevelForDelta(current, region.latitudeDelta));
-          props.onRegionChange?.({
-            latitude: region.latitude,
-            longitude: region.longitude,
-            latitudeDelta: region.latitudeDelta,
-            longitudeDelta: region.longitudeDelta,
-          });
-          setMapMoving(false);
-          setAuraProjectionKey((current) => current + 1);
+          const rawProgress = zoomProgressForDelta(region.latitudeDelta);
+          updateMorphCamera(region);
+
+          if (settlingZoomRef.current) {
+            // The user may pan while the marker finishes. Keep its projection
+            // current without interrupting the independent shape animation.
+            pendingSettleRegionRef.current = region;
+            regionRef.current = region;
+            return;
+          }
+
+          if (zoomingRef.current) {
+            const liveProgress = Math.max(
+              0,
+              Math.min(
+                1,
+                gestureVisualStartProgressRef.current +
+                  rawProgress -
+                  gestureRawStartProgressRef.current,
+              ),
+            );
+            zoomProgress.value = liveProgress;
+            let target = markerSettleTarget(gestureVisualStartProgressRef.current, liveProgress);
+            if (
+              Math.abs(liveProgress - gestureVisualStartProgressRef.current) <
+                MORPH_SETTLE_TRIGGER &&
+              gestureFallbackTargetRef.current != null
+            ) {
+              target = gestureFallbackTargetRef.current;
+            }
+            const remaining = Math.abs(target - liveProgress);
+            pendingSettleRegionRef.current = region;
+            regionRef.current = region;
+            settleTargetRef.current = target;
+
+            if (remaining > MORPH_SETTLE_EPSILON && !reducedMotion) {
+              settlingZoomRef.current = true;
+              zoomProgress.value = withTiming(
+                target,
+                {
+                  duration: markerSettleDuration(
+                    remaining,
+                    gestureProgressVelocityRef.current,
+                    reducedMotion,
+                  ),
+                  easing: Easing.out(Easing.cubic),
+                },
+                (finished) => {
+                  if (finished) runOnJS(finishMarkerSettle)(target);
+                },
+              );
+              return;
+            }
+            zoomProgress.value = target;
+            finishRegionChange(region, target, true);
+            return;
+          }
+
+          // A pure pan keeps the already-settled marker layout and only updates
+          // the camera projection. No marker image needs to be regenerated.
+          finishRegionChange(region, settledMorphProgressRef.current, false);
         }}
         onPress={(event: MapPressEvent) => {
           if (event.nativeEvent.action === 'marker-press') return;
@@ -489,10 +772,6 @@ export function MapCanvas(props: MockMapCanvasProps) {
         }}
       >
         {descriptors.map((descriptor) => {
-          if (descriptor.renderMode === 'live') {
-            return <LiveActivityMapMarker key={descriptor.id} descriptor={descriptor} />;
-          }
-
           // Keep the current raster marker on the map while a changed state
           // (for example a countdown-ring step) is captured off-screen.
           // Rendering `null` here created a visible blink every time the
@@ -506,10 +785,23 @@ export function MapCanvas(props: MockMapCanvasProps) {
               coordinate={descriptor.coordinate}
               image={{ uri }}
               onPress={descriptor.onPress}
+              opacity={
+                props.launchMarkerId === descriptor.id ||
+                (descriptor.morphable && markerMorphVisible && activeMorphIdSet.has(descriptor.id))
+                  ? 0
+                  : 1
+              }
             />
           );
         })}
       </MapView>
+      <MapMarkerMorphOverlay
+        camera={morphCamera}
+        height={viewport.height}
+        targets={morphDescriptors}
+        visible={markerMorphVisible}
+        width={viewport.width}
+      />
       <MapLiveAuraOverlay
         mapReady={mapReady}
         mapRef={mapRef}
@@ -517,13 +809,13 @@ export function MapCanvas(props: MockMapCanvasProps) {
         projectionKey={auraProjectionKey}
         targets={visibleAuraTargets}
       />
+      <MarkerLaunchOverlay
+        request={launchRequest}
+        width={viewport.width}
+        height={viewport.height}
+        reducedMotion={reducedMotion}
+        onComplete={() => props.onLaunchComplete?.()}
+      />
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  liveMarkerHost: {
-    height: ACTIVITY_MARKER_CAPTURE_SIZE,
-    width: ACTIVITY_MARKER_CAPTURE_SIZE,
-  },
-});

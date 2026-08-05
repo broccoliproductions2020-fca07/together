@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Pressable, Text, View } from 'react-native';
 
 import { useAuth } from '@/features/auth';
+import { AnimatedToggleIcon } from '@/shared/components/AnimatedToggleIcon';
 
 import type { ChatMessage } from '../types';
 import { useThemeColors } from '@/features/theme';
@@ -88,14 +89,22 @@ export function ProposalCard({
           <View className="flex-row gap-2 pt-1">
             <Pressable
               onPress={onToggleConfirm}
-              className="flex-1 items-center justify-center rounded-xl border py-2 active:opacity-80"
+              className="flex-1 flex-row items-center justify-center gap-1.5 rounded-xl border py-2 active:opacity-80"
               style={{
                 borderColor: accent,
                 backgroundColor: confirmed ? accent : 'transparent',
               }}
             >
+              <AnimatedToggleIcon
+                icon="checkmark-circle"
+                outlineIcon="ellipse-outline"
+                active={confirmed}
+                size={15}
+                activeColor="#fff"
+                inactiveColor={accent}
+              />
               <Text className="text-sm font-bold" style={{ color: confirmed ? '#fff' : accent }}>
-                {confirmed ? 'Dabei ✓' : 'Bin dabei'}
+                {confirmed ? 'Dabei' : 'Bin dabei'}
               </Text>
             </Pressable>
             <Pressable

@@ -14,6 +14,7 @@ import {
 import { Alert } from 'react-native';
 
 import { useAuth } from '@/features/auth';
+import { claimNotificationResponse } from '@/features/notifications/notificationResponse';
 
 import {
   continueSafetyAfterStationary,
@@ -134,8 +135,8 @@ function initialsOf(name: string): string {
 }
 
 /**
- * Owns the Heimweg session: persistent native background updates in Firebase
- * mode (with a foreground watcher only for mock/web or as an honest fallback),
+ * Owns the Heimweg session: persistent native background updates when the OS
+ * permits them, with a foreground watcher as an honest fallback,
  * the check-in state machine after Orange, the on-device 15-minute trail and
  * the local incident log (Orange/Rot). See docs/safety-mode.md.
  */
@@ -184,7 +185,6 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
   const startingHeimwegRef = useRef(false);
   const pendingOwnCheckInResponseRef = useRef(false);
   const pendingOwnerActionRef = useRef<SafetyOwnerNotificationAction | null>(null);
-  const handledNotificationResponsesRef = useRef(new Set<string>());
   const companionConfirmationNotificationRefs = useRef(
     new Map<string, { confirmedAt: number; identifier: string | null }>(),
   );
@@ -290,7 +290,10 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
       ) {
         return;
       }
-      const dueAt = confirmation.confirmedAt + COMPANION_CONFIRMATION_MS - COMPANION_CONFIRMATION_REMINDER_LEAD_MS;
+      const dueAt =
+        confirmation.confirmedAt +
+        COMPANION_CONFIRMATION_MS -
+        COMPANION_CONFIRMATION_REMINDER_LEAD_MS;
       if (dueAt > now) {
         active.set(friendSession.uid, {
           confirmedAt: confirmation.confirmedAt,
@@ -374,9 +377,7 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
     void registerSafetyNotificationCategory().catch(() => undefined);
 
     const handleResponse = (response: Notifications.NotificationResponse) => {
-      const key = `${response.notification.request.identifier}:${response.actionIdentifier}`;
-      if (handledNotificationResponsesRef.current.has(key)) return;
-      handledNotificationResponsesRef.current.add(key);
+      if (!claimNotificationResponse('safety', response)) return;
       const ownerAction = safetyOwnerActionFromResponse(response);
       if (ownerAction) {
         if (sessionRef.current) runOwnerNotificationAction(ownerAction);

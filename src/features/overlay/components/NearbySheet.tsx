@@ -1,12 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useRef, useState } from 'react';
-import { Image, Modal, Pressable, ScrollView, Text, View } from 'react-native';
+import { Alert, Image, Modal, Pressable, ScrollView, Text, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useActivityChat, type GroupMember, type GroupOpening } from '@/features/chat';
 import type { NearbyFriend } from '@/features/map/types/map.types';
 import { RadiusSlider } from '@/features/settings';
+import { AnimatedToggleIcon } from '@/shared/components/AnimatedToggleIcon';
+import { SquircleButton } from '@/shared/components/SquircleButton';
+import { openLocationSettings } from '@/shared/utils/locationPermission';
 
 import { OpenStatusCard } from './OpenStatusCard';
 
@@ -198,7 +201,14 @@ function OpenFriendDetail({
           className="min-h-12 flex-row items-center justify-center gap-2 rounded-2xl active:opacity-85"
           style={{ backgroundColor: selected ? 'rgba(255,255,255,0.1)' : OPEN_COLOR }}
         >
-          <Ionicons name={selected ? 'checkmark' : 'add'} size={18} color="#fff" />
+          <AnimatedToggleIcon
+            icon="checkmark"
+            outlineIcon="add"
+            active={selected}
+            size={18}
+            activeColor="#fff"
+            inactiveColor="#fff"
+          />
           <Text className="font-bold text-white">
             {selected ? 'Ausgewählt' : 'Zur Planung hinzufügen'}
           </Text>
@@ -239,16 +249,15 @@ function OpeningRow({ opening, onJoin }: { opening: GroupOpening; onJoin: () => 
           </Text>
         </View>
       </View>
-      <Pressable
-        accessibilityRole="button"
+      <SquircleButton
+        label="Dazustoßen"
+        color={OPEN_COLOR}
+        size="md"
+        icon="enter-outline"
+        fullWidth={false}
         accessibilityLabel={`Bei ${opening.title} dazustoßen`}
         onPress={onJoin}
-        className="min-h-11 flex-row items-center justify-center gap-2 rounded-2xl active:opacity-85"
-        style={{ backgroundColor: OPEN_COLOR }}
-      >
-        <Ionicons name="enter-outline" size={17} color="#fff" />
-        <Text className="text-sm font-bold text-white">Dazustoßen</Text>
-      </Pressable>
+      />
     </View>
   );
 }
@@ -265,8 +274,15 @@ export interface NearbySheetProps {
   visible: boolean;
   friends: NearbyFriend[];
   friendsWithoutLocation: NearbyFriend[];
+  /** Why "In deiner Nähe" is empty — decides which honest hint (and fix) shows.
+   * 'quiet' = open friends exist but none has a distance basis; the
+   * "Ohne Näheangabe" section right below already explains itself. */
+  emptyReason?: 'no-friends' | 'none-open' | 'out-of-range' | 'quiet';
+  /** Foreground location permission is denied → distances cannot be computed. */
+  locationDenied?: boolean;
+  onAddFriends?: () => void;
   onClose: () => void;
-  onStartPlanning: (members: GroupMember[]) => void;
+  onStartSpontaneousRound: (members: GroupMember[]) => Promise<void>;
   onJoinOpening: (opening: GroupOpening) => void;
 }
 
@@ -274,8 +290,11 @@ export function NearbySheet({
   visible,
   friends,
   friendsWithoutLocation,
+  emptyReason = 'out-of-range',
+  locationDenied = false,
+  onAddFriends,
   onClose,
-  onStartPlanning,
+  onStartSpontaneousRound,
   onJoinOpening,
 }: NearbySheetProps) {
   const insets = useSafeAreaInsets();
@@ -307,24 +326,32 @@ export function NearbySheet({
     setSelected((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
-      else next.add(id);
+      else if (next.size >= 20) {
+        Alert.alert('Bis zu 20 Personen', 'Eine spontane Runde kann hoechstens 20 Winks enthalten.');
+        return current;
+      } else next.add(id);
       return next;
     });
   }
 
-  function handleStartPlanning() {
+  async function handleStartPlanning() {
     if (startingRef.current) return;
     const members: GroupMember[] = allFriends
       .filter((friend) => selected.has(friend.id))
       .map((friend) => ({ id: friend.id, displayName: friend.displayName }));
     if (!members.length) return;
     startingRef.current = true;
-    setSelected(new Set());
-    onStartPlanning(members);
+    try {
+      await onStartSpontaneousRound(members);
+      setSelected(new Set());
+    } finally {
+      startingRef.current = false;
+    }
   }
 
   const footerLabel =
     count === 0 ? 'Freunde auswählen' : count === 1 ? 'Chat öffnen' : `Gemeinsam planen (${count})`;
+  const winkFooterLabel = count === 0 ? footerLabel : `Winken senden (${count})`;
 
   return (
     <Modal
@@ -386,6 +413,21 @@ export function NearbySheet({
               <RadiusSlider compact />
             </View>
 
+            {locationDenied ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Standortzugriff in den Einstellungen erlauben"
+                onPress={openLocationSettings}
+                className="mx-5 mb-2 flex-row items-center gap-2.5 rounded-xl border border-[#E0A23E]/40 bg-[#E0A23E]/10 px-3.5 py-2.5 active:opacity-80"
+              >
+                <Ionicons name="location-outline" size={16} color="#E0A23E" />
+                <Text className="flex-1 text-xs leading-4 text-white/70">
+                  Standort ist aus — Entfernungen lassen sich nicht berechnen.{' '}
+                  <Text className="font-semibold text-[#E0A23E]">Einstellungen öffnen</Text>
+                </Text>
+              </Pressable>
+            ) : null}
+
             <ScrollView
               className="px-5"
               contentContainerStyle={{ paddingBottom: 12 }}
@@ -420,11 +462,29 @@ export function NearbySheet({
                         ))}
                       </View>
                     </>
-                  ) : (
+                  ) : emptyReason === 'no-friends' ? (
+                    <View className="items-center gap-3 py-6">
+                      <Text className="text-center text-sm leading-5 text-white/40">
+                        Du hast noch niemanden bei Together. Füge zuerst Freunde hinzu — erst
+                        dann siehst du hier, wer offen ist.
+                      </Text>
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={onAddFriends}
+                        className="rounded-full bg-white/10 px-5 py-2.5 active:opacity-80"
+                      >
+                        <Text className="text-sm font-semibold text-white">Freunde hinzufügen</Text>
+                      </Pressable>
+                    </View>
+                  ) : emptyReason === 'none-open' ? (
+                    <Text className="py-6 text-center text-sm text-white/40">
+                      Gerade ist niemand offen. Stell dich offen — deine Freunde sehen es sofort.
+                    </Text>
+                  ) : emptyReason === 'out-of-range' ? (
                     <Text className="py-6 text-center text-sm text-white/40">
                       Niemand offen in diesem Umkreis. Zieh den Nähe-Filter größer.
                     </Text>
-                  )}
+                  ) : null}
 
                   {friendsWithoutLocation.length ? (
                     <>
@@ -467,21 +527,13 @@ export function NearbySheet({
               className="border-t border-white/8 px-5 pt-3"
               style={{ paddingBottom: Math.max(insets.bottom, 12) }}
             >
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={footerLabel}
+              <SquircleButton
+                label={winkFooterLabel}
+                color={OPEN_COLOR}
+                icon="hand-left-outline"
                 disabled={count === 0}
                 onPress={handleStartPlanning}
-                className="flex-row items-center justify-center gap-2 rounded-2xl py-4 active:opacity-90"
-                style={{ backgroundColor: count === 0 ? 'rgba(110,139,247,0.3)' : OPEN_COLOR }}
-              >
-                <Ionicons
-                  name={count === 1 ? 'chatbubble-outline' : 'people'}
-                  size={18}
-                  color="#fff"
-                />
-                <Text className="text-base font-bold text-white">{footerLabel}</Text>
-              </Pressable>
+              />
             </View>
           </Pressable>
         </Pressable>

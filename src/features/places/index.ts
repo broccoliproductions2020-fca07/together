@@ -1,2 +1,8 @@
 export { placeService } from './services/placeService';
-export type { PlaceSearchInput, PlaceService } from './services/placeService.types';
+export { readPlaceSearchCache, storePlaceSearchCache } from './services/placeSearchCache';
+export type {
+  PlaceResolveInput,
+  PlaceSearchInput,
+  PlaceService,
+  PlaceSuggestion,
+} from './services/placeService.types';

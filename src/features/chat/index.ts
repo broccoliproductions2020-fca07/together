@@ -7,4 +7,10 @@ export { InlineActivityChat } from './components/InlineActivityChat';
 export { InlineChatPreview } from './components/InlineChatPreview';
 export { ChatRoomInfoSheet } from './components/ChatRoomInfoSheet';
 export { formatListTimestamp } from './utils/chatRows';
-export type { ChatMessage, ChatGroup, GroupOpening, ProposalData } from './types';
+export type {
+  ChatMessage,
+  ChatGroup,
+  GroupOpening,
+  ProposalData,
+  SpontaneousRound,
+} from './types';

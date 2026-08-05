@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
 import { InteractionManager, Modal, Pressable, Text, View } from 'react-native';
 
-import { mockCurrentPlace } from '@/data/mock';
+import { CURRENT_LOCATION_PLACE } from '../utils/currentPlace';
 import { AppButton } from '@/shared/components';
 
 import type { ActivityDraft, SelectedPlace } from '../types';
@@ -93,12 +93,11 @@ export function LocationPicker({ draft, onChange, onOpenMapPicker }: LocationPic
                 className="rounded-3xl border border-white/10 px-4 py-4"
                 style={{ backgroundColor: 'rgba(255,255,255,0.08)' }}
                 onPress={() => {
-                  onChange(applyPlace(draft, mockCurrentPlace));
+                  onChange(applyPlace(draft, CURRENT_LOCATION_PLACE));
                   setOpen(false);
                 }}
               >
                 <Text className="text-base font-bold text-white">Aktuellen Standort verwenden</Text>
-                <Text className="mt-1 text-sm text-white/55">{mockCurrentPlace.address}</Text>
               </Pressable>
 
               <Pressable

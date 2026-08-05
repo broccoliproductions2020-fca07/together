@@ -84,7 +84,7 @@ export function BlockedUsersSheet({ visible, onClose }: BlockedUsersSheetProps) 
             </Pressable>
           </View>
 
-          <ScrollView className="mt-4" contentContainerStyle={{ gap: 10, paddingBottom: 8 }}>
+          <ScrollView className="mt-4" contentContainerStyle={{ gap: 12, paddingBottom: 8 }}>
             {blockedUids.length === 0 ? (
               <View className="items-center gap-3 rounded-3xl border border-white/10 bg-white/[0.04] px-6 py-10">
                 <View className="h-14 w-14 items-center justify-center rounded-full bg-white/8">
@@ -92,8 +92,8 @@ export function BlockedUsersSheet({ visible, onClose }: BlockedUsersSheetProps) 
                 </View>
                 <Text className="text-base font-bold text-white">Niemand blockiert</Text>
                 <Text className="text-center text-sm leading-5 text-white/50">
-                  Blockieren kannst du Personen direkt in Chats oder Activities — sie
-                  sehen dich danach nirgendwo mehr.
+                  Blockieren kannst du Personen direkt in Chats oder Activities — sie sehen dich
+                  danach nirgendwo mehr.
                 </Text>
               </View>
             ) : loading && profiles.length === 0 ? (

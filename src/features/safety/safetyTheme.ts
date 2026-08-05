@@ -4,14 +4,15 @@ import {
   type SafetySession,
   type SafetyStatus,
 } from './types';
+import { SEMANTIC_COLOR } from '@/shared/utils/semanticColors';
 
 /** One color/word source for every safety surface (console, panel, pill,
  * shield, markers) — two diverging vocabularies here would directly undermine
  * the overview page that teaches them. */
 export const STATUS_COLOR: Record<SafetyStatus, string> = {
-  blue: '#6E8BF7',
-  orange: '#E0A23E',
-  red: '#FF5A5A',
+  blue: SEMANTIC_COLOR.safetyNormal,
+  orange: SEMANTIC_COLOR.safetyAttention,
+  red: SEMANTIC_COLOR.danger,
 };
 
 // Wording rule (docs/safety-mode.md): describe what the PERSON did and what

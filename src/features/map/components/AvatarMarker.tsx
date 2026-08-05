@@ -1,8 +1,13 @@
 import { Pressable, StyleSheet, View } from 'react-native';
+import type { SharedValue } from 'react-native-reanimated';
 
 import type { ActivityCategory, ActivityMode, MarkerAvatar } from '../types/map.types';
-import { buildMarkerFaces, type MapMarkerDetailLevel } from '../utils/markerDetailLevel';
+import { buildMarkerFaces } from '../utils/markerDetailLevel';
 import { ActivityMarkerChrome } from './ActivityMarkerChrome';
+import {
+  ACTIVITY_MARKER_CAPTURE_HEIGHT,
+  ACTIVITY_MARKER_CAPTURE_WIDTH,
+} from './activityMarkerLayout';
 
 export interface AvatarMarkerProps {
   initials: string;
@@ -12,8 +17,8 @@ export interface AvatarMarkerProps {
   avatars?: MarkerAvatar[];
   /** Text under the marker — activity title (concrete) or friend name (presence). */
   label?: string;
-  detailLevel: MapMarkerDetailLevel;
-  /** Keep the label visible even when zoomed out (selected / joined / now). */
+  progress: SharedValue<number>;
+  /** Keep the label visible even when zoomed out (selected / joined). */
   titlePriority?: boolean;
   unreadCount?: number;
   participantCount?: number;
@@ -37,7 +42,7 @@ export function AvatarMarker({
   avatarUrl,
   avatars,
   label,
-  detailLevel,
+  progress,
   titlePriority = false,
   unreadCount = 0,
   participantCount,
@@ -61,7 +66,7 @@ export function AvatarMarker({
       mode={mode}
       faces={faces}
       count={count}
-      detailLevel={detailLevel}
+      progress={progress}
       category={category}
       unreadCount={unreadCount}
       remainingFraction={remainingFraction}
@@ -95,5 +100,8 @@ export function AvatarMarker({
 }
 
 const styles = StyleSheet.create({
-  root: { height: 112, width: 112 },
+  root: {
+    height: ACTIVITY_MARKER_CAPTURE_HEIGHT,
+    width: ACTIVITY_MARKER_CAPTURE_WIDTH,
+  },
 });

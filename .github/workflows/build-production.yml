@@ -1,0 +1,69 @@
+name: Build production binary
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_ref:
+        description: Immutable release tag, for example v1.0.0
+        required: true
+        type: string
+      platform:
+        description: Platform to build
+        required: true
+        default: all
+        type: choice
+        options: [all, android, ios]
+      confirmation:
+        description: Type BUILD_PRODUCTION to continue
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: inputs.confirmation == 'BUILD_PRODUCTION' && startsWith(inputs.release_ref, 'v')
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_ref }}
+          fetch-depth: 0
+
+      - name: Require an exact release tag
+        env:
+          RELEASE_REF: ${{ inputs.release_ref }}
+        run: test "$(git describe --tags --exact-match HEAD)" = "$RELEASE_REF"
+
+      - name: Require the tag to match app.json
+        env:
+          RELEASE_REF: ${{ inputs.release_ref }}
+        run: node scripts/assert-release-tag.cjs "$RELEASE_REF"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            functions/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - run: npm ci
+      - run: npm ci --prefix functions
+      - run: npm run verify:release
+      - run: npx --no-install eas build --profile production --platform "$BUILD_PLATFORM" --non-interactive
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          BUILD_PLATFORM: ${{ inputs.platform }}

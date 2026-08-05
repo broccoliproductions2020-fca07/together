@@ -24,11 +24,27 @@
         },
         "location": {
           ".write": "auth != null && auth.uid === $uid && data.parent().child('expiresAt').val() > now && ((data.parent().child('status').val() === 'blue' && newData.parent().child('updatedAt').val() >= data.parent().child('updatedAt').val() + 25000) || ((data.parent().child('status').val() === 'orange' || data.parent().child('status').val() === 'red') && newData.parent().child('updatedAt').val() >= data.parent().child('updatedAt').val() + 4000))",
-          ".validate": "newData.hasChildren(['lat', 'lng', 'at']) && newData.child('lat').isNumber() && newData.child('lat').val() >= -90 && newData.child('lat').val() <= 90 && newData.child('lng').isNumber() && newData.child('lng').val() >= -180 && newData.child('lng').val() <= 180 && newData.child('at').isNumber() && newData.child('at').val() <= now + 60000"
+          ".validate": "newData.hasChildren(['lat', 'lng', 'at']) && newData.child('lat').isNumber() && newData.child('lat').val() >= -90 && newData.child('lat').val() <= 90 && newData.child('lng').isNumber() && newData.child('lng').val() >= -180 && newData.child('lng').val() <= 180 && newData.child('at').isNumber() && newData.child('at').val() <= now + 60000",
+          "lat": {
+            ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90"
+          },
+          "lng": {
+            ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180"
+          },
+          "at": { ".validate": "newData.isNumber() && newData.val() <= now + 60000" },
+          "$other": { ".validate": false }
         },
         "checkIn": {
           ".write": "auth != null && auth.uid === $uid && data.parent().child('expiresAt').val() > now && data.hasChildren(['requestedAt', 'dueAt']) && newData.child('requestedAt').val() === data.child('requestedAt').val() && newData.child('dueAt').val() === data.child('dueAt').val() && !data.hasChild('answeredAt') && newData.child('answeredAt').isNumber()",
-          ".validate": "newData.hasChildren(['requestedAt', 'dueAt']) && newData.child('requestedAt').isNumber() && newData.child('dueAt').isNumber() && newData.child('dueAt').val() >= newData.child('requestedAt').val() && (!newData.hasChild('answeredAt') || newData.child('answeredAt').isNumber())"
+          ".validate": "newData.hasChildren(['requestedAt', 'dueAt']) && newData.child('requestedAt').isNumber() && newData.child('dueAt').isNumber() && newData.child('dueAt').val() >= newData.child('requestedAt').val() && (!newData.hasChild('answeredAt') || (newData.child('answeredAt').isNumber() && newData.child('answeredAt').val() >= newData.child('requestedAt').val() && newData.child('answeredAt').val() <= now + 60000))",
+          "requestedAt": { ".validate": "newData.isNumber()" },
+          "dueAt": {
+            ".validate": "newData.isNumber() && newData.val() >= newData.parent().child('requestedAt').val()"
+          },
+          "answeredAt": {
+            ".validate": "newData.isNumber() && newData.val() >= newData.parent().child('requestedAt').val() && newData.val() <= now + 60000"
+          },
+          "$other": { ".validate": false }
         },
         "companions": { ".write": false }
       }
@@ -53,7 +69,21 @@
           ".read": "auth != null && root.child('journeys').child($activityId).child('expiresAt').val() > now && root.child('journeys').child($activityId).child('members').child(auth.uid).val() === true",
           "$uid": {
             ".write": "auth != null && auth.uid === $uid && root.child('journeys').child($activityId).child('expiresAt').val() > now && root.child('journeys').child($activityId).child('members').child(auth.uid).val() === true",
-            ".validate": "newData.hasChildren(['lat', 'lng', 'status', 'updatedAt', 'expiresAt']) && newData.child('lat').isNumber() && newData.child('lat').val() >= -90 && newData.child('lat').val() <= 90 && newData.child('lng').isNumber() && newData.child('lng').val() >= -180 && newData.child('lng').val() <= 180 && newData.child('status').isString() && (newData.child('status').val() === 'onTheWay' || newData.child('status').val() === 'arrived') && newData.child('updatedAt').isNumber() && newData.child('updatedAt').val() <= now && (!data.exists() || newData.child('updatedAt').val() >= data.child('updatedAt').val() + 20000) && newData.child('expiresAt').isNumber() && newData.child('expiresAt').val() >= now && newData.child('expiresAt').val() <= root.child('journeys').child($activityId).child('expiresAt').val()"
+            ".validate": "newData.hasChildren(['lat', 'lng', 'status', 'updatedAt', 'expiresAt']) && newData.child('lat').isNumber() && newData.child('lat').val() >= -90 && newData.child('lat').val() <= 90 && newData.child('lng').isNumber() && newData.child('lng').val() >= -180 && newData.child('lng').val() <= 180 && newData.child('status').isString() && (newData.child('status').val() === 'onTheWay' || newData.child('status').val() === 'arrived') && newData.child('updatedAt').isNumber() && newData.child('updatedAt').val() <= now && (!data.exists() || newData.child('updatedAt').val() >= data.child('updatedAt').val() + 20000) && newData.child('expiresAt').isNumber() && newData.child('expiresAt').val() >= now && newData.child('expiresAt').val() <= root.child('journeys').child($activityId).child('expiresAt').val()",
+            "lat": {
+              ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90"
+            },
+            "lng": {
+              ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180"
+            },
+            "status": {
+              ".validate": "newData.isString() && (newData.val() === 'onTheWay' || newData.val() === 'arrived')"
+            },
+            "updatedAt": { ".validate": "newData.isNumber() && newData.val() <= now" },
+            "expiresAt": {
+              ".validate": "newData.isNumber() && newData.val() >= now && newData.val() <= root.child('journeys').child($activityId).child('expiresAt').val()"
+            },
+            "$other": { ".validate": false }
           }
         }
       }

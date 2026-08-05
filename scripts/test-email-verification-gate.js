@@ -1,18 +1,16 @@
-const path = require('path');
-
 const PROJECT_ID = 'demo-together';
 const AUTH_PORT = Number(process.env.TEST_AUTH_EMULATOR_PORT ?? 9199);
 const FIRESTORE_PORT = Number(process.env.TEST_FIRESTORE_EMULATOR_PORT ?? 8180);
 const FUNCTIONS_PORT = Number(process.env.TEST_FUNCTIONS_EMULATOR_PORT ?? 5001);
 const DATABASE_PORT = Number(process.env.TEST_DATABASE_EMULATOR_PORT ?? 8281);
 const AUTH_BASE = `http://127.0.0.1:${AUTH_PORT}/identitytoolkit.googleapis.com/v1`;
-const FUNCTIONS_BASE = `http://127.0.0.1:${FUNCTIONS_PORT}/${PROJECT_ID}/us-central1`;
+const FUNCTIONS_BASE = `http://127.0.0.1:${FUNCTIONS_PORT}/${PROJECT_ID}/europe-west3`;
 
 process.env.FIRESTORE_EMULATOR_HOST = `127.0.0.1:${FIRESTORE_PORT}`;
 process.env.FIREBASE_AUTH_EMULATOR_HOST = `127.0.0.1:${AUTH_PORT}`;
 process.env.FIREBASE_DATABASE_EMULATOR_HOST = `127.0.0.1:${DATABASE_PORT}`;
 
-const admin = require(path.join(__dirname, '..', 'functions', 'node_modules', 'firebase-admin'));
+const admin = require('./firebase-admin-tools.cjs');
 
 async function createAnonymousUser() {
   const response = await fetch(`${AUTH_BASE}/accounts:signUp?key=demo-key`, {
@@ -82,13 +80,21 @@ async function main() {
         activity: { mode: 'now', title: 'Gate Test', audienceContext: { kind: 'all_friends' } },
       }),
   );
+  await expectError(
+    'unverified caller cannot use place autocomplete while the gate is on',
+    'FAILED_PRECONDITION',
+    () =>
+      callFunction(anonymous.token, 'autocompletePlaces', {
+        query: 'Kino',
+        sessionToken: 'email-gate-session-token-1234',
+      }),
+  );
   await expectOk(
     'unverified caller can still block another user (self-protection stays open)',
     () => callFunction(anonymous.token, 'blockUser', { targetUid: 'someone-else' }),
   );
-  await expectOk(
-    'unverified caller can still claim a username (runs during sign-up itself)',
-    () => callFunction(anonymous.token, 'claimUsername', { username: 'gatetestuser' }),
+  await expectOk('unverified caller can still claim a username (runs during sign-up itself)', () =>
+    callFunction(anonymous.token, 'claimUsername', { username: 'gatetestuser' }),
   );
 
   const verified = await createVerifiedUser(
@@ -105,7 +111,18 @@ async function main() {
   await expectOk('verified caller can create an activity while the gate is on', () =>
     callFunction(verified.token, 'createActivity', {
       activityId: 'gate-test-activity-allowed',
-      activity: { mode: 'now', title: 'Gate Test Verified', audienceContext: { kind: 'all_friends' } },
+      activity: {
+        mode: 'now',
+        title: 'Gate Test Verified',
+        audienceContext: { kind: 'all_friends' },
+      },
+    }),
+  );
+
+  await expectOk('verified caller can use place autocomplete while the gate is on', () =>
+    callFunction(verified.token, 'autocompletePlaces', {
+      query: 'Kino',
+      sessionToken: 'email-gate-session-token-5678',
     }),
   );
 

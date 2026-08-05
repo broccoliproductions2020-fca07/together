@@ -102,7 +102,13 @@ export function ProposalComposer({ visible, onClose, onSubmit }: ProposalCompose
           </Text>
 
           <View className="gap-3">
-            <Field label="Was" placeholder="z. B. Bier" value={what} autoFocus onChangeText={setWhat} />
+            <Field
+              label="Was"
+              placeholder="z. B. Bier"
+              value={what}
+              autoFocus
+              onChangeText={setWhat}
+            />
             <Field
               label="Wann"
               placeholder="z. B. Heute 20:00"

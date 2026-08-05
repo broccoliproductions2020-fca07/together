@@ -1,11 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
+import Animated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useActivityChat } from '../useActivityChat';
 import type { ProposalData } from '../types';
-import { useKeyboardHeight } from '../utils/useKeyboardHeight';
+import { useKeyboardPadding } from '../utils/useKeyboardHeight';
 import { useThemeColors } from '@/features/theme';
 import { ChatInputBar } from './ChatInputBar';
 import { ChatRoomInfoSheet } from './ChatRoomInfoSheet';
@@ -63,7 +64,7 @@ export function ActivityChatView({
 }: ActivityChatViewProps) {
   const insets = useSafeAreaInsets();
   const colors = useThemeColors();
-  const keyboardHeight = useKeyboardHeight();
+  const keyboardPadding = useKeyboardPadding(insets.bottom);
   const { isJoined, getRoom, sendMessage, sendProposal } = useActivityChat();
   const [infoOpen, setInfoOpen] = useState(false);
   const [proposalOpen, setProposalOpen] = useState(false);
@@ -131,18 +132,18 @@ export function ActivityChatView({
         ) : null}
       </View>
 
-      {/* Manual keyboard offset instead of KeyboardAvoidingView — this Modal's
-          own resize behavior for its content is unreliable on Android, and
-          the composer would end up hidden behind the keyboard. Plain padding
-          based on the real keyboard height always clears it. */}
+      {/* Keyboard padding instead of KeyboardAvoidingView — this Modal's own
+          resize behavior is unreliable on Android and would hide the composer.
+          The padding is driven by the live keyboard frame (UI thread), so the
+          composer travels with the keyboard rather than snapping. */}
       <View className="flex-1">
         <ChatThread activityId={activityId} onCreateActivity={onCreateActivity} />
-        <View style={{ paddingBottom: Math.max(insets.bottom, keyboardHeight) }}>
+        <Animated.View style={keyboardPadding}>
           <ChatInputBar
             onSend={(text) => sendMessage(activityId, text)}
             onProposal={isGroup ? () => setProposalOpen(true) : undefined}
           />
-        </View>
+        </Animated.View>
       </View>
 
       <ProposalComposer

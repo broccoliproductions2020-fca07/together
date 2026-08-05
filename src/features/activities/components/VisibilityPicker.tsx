@@ -4,10 +4,20 @@ import { Modal, Pressable, ScrollView, Text, TextInput, View } from 'react-nativ
 
 import { useCircles, type CircleDoc } from '@/features/circles';
 import { useFriends, type FriendProfile } from '@/features/friends';
+import { AnimatedToggleIcon } from '@/shared/components/AnimatedToggleIcon';
 
 import type { ActivityDraft, ActivityVisibility } from '../types';
 
+type IconName = keyof typeof Ionicons.glyphMap;
+
 const ACCENT = '#6E8BF7';
+
+// One-accent-per-screen: on the composer only the mode switch carries colour.
+// The visibility context is a secondary choice, so its selected state reads in
+// neutral white instead of introducing a second (blue) accent that competes.
+const SELECTED_BG = 'rgba(255,255,255,0.16)';
+const SELECTED_BORDER = 'rgba(255,255,255,0.6)';
+const SELECTED_FG = '#F4F5F7';
 
 function ContextChip({
   label,
@@ -28,17 +38,24 @@ function ContextChip({
       onPress={onPress}
       className="h-10 flex-row items-center gap-1.5 rounded-full border px-3.5 active:opacity-75"
       style={{
-        backgroundColor: selected ? `${ACCENT}22` : 'rgba(255,255,255,0.055)',
-        borderColor: selected ? ACCENT : 'rgba(255,255,255,0.14)',
+        backgroundColor: selected ? SELECTED_BG : 'rgba(255,255,255,0.055)',
+        borderColor: selected ? SELECTED_BORDER : 'rgba(255,255,255,0.14)',
       }}
     >
       {icon ? (
-        <Ionicons name={icon} size={15} color={selected ? ACCENT : 'rgba(244,245,247,0.68)'} />
+        <AnimatedToggleIcon
+          icon={icon.replace('-outline', '') as IconName}
+          outlineIcon={icon}
+          active={selected}
+          size={15}
+          activeColor={SELECTED_FG}
+          inactiveColor="rgba(244,245,247,0.68)"
+        />
       ) : null}
-      <Text className="text-sm font-semibold" style={{ color: selected ? '#F4F5F7' : '#D5D7DD' }}>
+      <Text className="text-sm font-semibold" style={{ color: selected ? SELECTED_FG : '#D5D7DD' }}>
         {label}
       </Text>
-      {selected ? <Ionicons name="checkmark" size={15} color={ACCENT} /> : null}
+      {selected ? <Ionicons name="checkmark" size={15} color={SELECTED_FG} /> : null}
     </Pressable>
   );
 }
@@ -72,10 +89,13 @@ function FriendChoiceRow({
         <Text className="text-base font-semibold text-white">{friend.displayName}</Text>
         {friend.username ? <Text className="text-xs text-white/45">@{friend.username}</Text> : null}
       </View>
-      <Ionicons
-        name={selected ? 'checkmark-circle' : 'ellipse-outline'}
+      <AnimatedToggleIcon
+        icon="checkmark-circle"
+        outlineIcon="ellipse-outline"
+        active={selected}
         size={22}
-        color={selected ? ACCENT : 'rgba(244,245,247,0.3)'}
+        activeColor={ACCENT}
+        inactiveColor="rgba(244,245,247,0.3)"
       />
     </Pressable>
   );
@@ -245,8 +265,8 @@ export function VisibilityPicker({ draft, onChange }: VisibilityPickerProps) {
             onPress={() => openEditGroup(selectedGroup)}
             className="flex-row items-center gap-1 py-1 active:opacity-70"
           >
-            <Ionicons name="pencil-outline" size={14} color={ACCENT} />
-            <Text className="text-xs font-semibold" style={{ color: ACCENT }}>
+            <Ionicons name="pencil-outline" size={14} color="rgba(244,245,247,0.7)" />
+            <Text className="text-xs font-semibold" style={{ color: 'rgba(244,245,247,0.7)' }}>
               Bearbeiten
             </Text>
           </Pressable>

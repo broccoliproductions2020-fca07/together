@@ -5,6 +5,7 @@ import {
   limit,
   onSnapshot,
   query,
+  setDoc,
   where,
   type DocumentData,
 } from '@react-native-firebase/firestore';
@@ -91,10 +92,14 @@ export const firebaseFriendService: FriendService = {
       (snapshot) => {
         const data = snapshot.data();
         const closeFriendUids = data?.closeFriendUids;
+        const heimwegGroupUids = data?.heimwegGroupUids;
         const policy = data?.friendRequestPolicy;
         cb({
           closeFriendUids: Array.isArray(closeFriendUids)
             ? closeFriendUids.filter((uid): uid is string => typeof uid === 'string')
+            : [],
+          heimwegGroupUids: Array.isArray(heimwegGroupUids)
+            ? heimwegGroupUids.filter((uid): uid is string => typeof uid === 'string')
             : [],
           friendRequestPolicy:
             policy === 'shared_activity' || policy === 'nobody' ? policy : 'anyone',
@@ -105,14 +110,17 @@ export const firebaseFriendService: FriendService = {
               ? data.friendshipsVersion
               : 0,
           journeyRemindersEnabled: data?.journeyRemindersEnabled !== false,
+          notificationsSeenAt: toMillis(data?.notificationsSeenAt ?? 0),
         } satisfies FriendSettings);
       },
       () =>
         cb({
           closeFriendUids: [],
+          heimwegGroupUids: [],
           friendRequestPolicy: 'anyone',
           friendshipsVersion: 0,
           journeyRemindersEnabled: true,
+          notificationsSeenAt: 0,
         }),
     );
   },
@@ -149,6 +157,16 @@ export const firebaseFriendService: FriendService = {
       getFirebaseFunctions(),
       'setCloseFriend',
     )({ uid, isClose });
+  },
+
+  async setHeimwegGroup(actor, uids) {
+    // merge:true — the rules validate the WHOLE future document, and this must
+    // not disturb the server-owned fields (pushTokens, friendshipsVersion …).
+    await setDoc(
+      doc(getFirebaseDb(), 'users', actor.uid),
+      { heimwegGroupUids: [...new Set(uids)].slice(0, 20) },
+      { merge: true },
+    );
   },
 
   async setFriendRequestPolicy(_actor, policy) {

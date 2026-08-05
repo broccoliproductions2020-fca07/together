@@ -10,9 +10,7 @@ import {
 } from 'react';
 import { AppState } from 'react-native';
 
-import { SOCIALIZE_SEED } from './data/socializeSeed';
 import { useAuth } from '@/features/auth';
-import { BACKEND } from '@/shared/services/firebase';
 import { socializeService } from './services/socializeService';
 import type { SocializeActor } from './services/socializeService.types';
 import type {
@@ -41,7 +39,6 @@ export const SOCIAL_RADII_KM = [1, 3, 5];
 // 1-tap defaults ("Jetzt sichtbar werden" — refine afterwards, never a wizard).
 const DEFAULT_RADIUS_KM = 5;
 const DEFAULT_DURATION_MS = 60 * 60 * 1000;
-const AUTO_MATCH_DELAY_MS = 2400;
 const DISCOVERY_REFRESH_MS = 2 * 60 * 1000;
 
 interface SocializeContextValue {
@@ -65,14 +62,7 @@ interface SocializeContextValue {
 
 const SocializeContext = createContext<SocializeContextValue | null>(null);
 
-/**
- * Client-side mock backend for the Socialize mode (see AGENTS.md). Interest on
- * `autoMatch` seed cards reciprocates after a short delay to demo the mutual
- * consent flow. Matches and chats deliberately SURVIVE stopping visibility —
- * an interest/match must not evaporate just because someone's session ended
- * (cold-start decision). Firebase mode runs through the Socialize callable
- * functions; mock mode keeps the deterministic offline seed.
- */
+/** State adapter for the currently disabled Socialize callable surface. */
 export function SocializeProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const actor = useMemo<SocializeActor>(
@@ -83,15 +73,13 @@ export function SocializeProvider({ children }: { children: ReactNode }) {
     }),
     [user?.displayName, user?.id],
   );
-  const useFirebase = BACKEND === 'firebase';
   const [session, setSession] = useState<SocialSession | null>(null);
-  const [cards, setCards] = useState<DiscoverCard[]>(() => (useFirebase ? [] : SOCIALIZE_SEED));
+  const [cards, setCards] = useState<DiscoverCard[]>([]);
   const [discovering, setDiscovering] = useState(false);
   const [cardStates, setCardStates] = useState<Record<string, DiscoverState>>({});
   const [messages, setMessages] = useState<Record<string, MatchMessage[]>>({});
   const [screenActive, setScreenActive] = useState(false);
   const [appActive, setAppActive] = useState(AppState.currentState === 'active');
-  const matchTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const discoverInFlight = useRef(false);
 
   useEffect(() => {
@@ -102,10 +90,7 @@ export function SocializeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!session || !useFirebase || !screenActive || !appActive) {
-      if (!useFirebase) setCards(SOCIALIZE_SEED);
-      return;
-    }
+    if (!session || !screenActive || !appActive) return;
     let cancelled = false;
     const load = async () => {
       if (discoverInFlight.current) return;
@@ -127,7 +112,7 @@ export function SocializeProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [actor, appActive, screenActive, session, useFirebase]);
+  }, [actor, appActive, screenActive, session]);
 
   // Auto-expire visibility when the session's end time passes.
   useEffect(() => {
@@ -141,12 +126,6 @@ export function SocializeProvider({ children }: { children: ReactNode }) {
     return () => clearTimeout(timer);
   }, [session]);
 
-  // Clear pending demo match timers on unmount.
-  useEffect(() => {
-    const timers = matchTimers.current;
-    return () => timers.forEach((timer) => clearTimeout(timer));
-  }, []);
-
   const goVisible = useCallback(() => {
     const nextSession: SocialSession = {
       radiusKm: DEFAULT_RADIUS_KM,
@@ -155,32 +134,26 @@ export function SocializeProvider({ children }: { children: ReactNode }) {
       vibes: [],
     };
     setSession(nextSession);
-    if (useFirebase) {
-      void socializeService.startSession(actor, nextSession).catch((error) => {
-        console.warn('[socialize] session start failed', error);
-        setSession(null);
-      });
-    }
-  }, [actor, useFirebase]);
+    void socializeService.startSession(actor, nextSession).catch((error) => {
+      console.warn('[socialize] session start failed', error);
+      setSession(null);
+    });
+  }, [actor]);
 
   const stopVisible = useCallback(() => {
     setSession(null);
-    if (useFirebase) {
-      void socializeService
-        .stopSession(actor)
-        .catch((error) => console.warn('[socialize] session stop failed', error));
-    }
-  }, [actor, useFirebase]);
+    void socializeService
+      .stopSession(actor)
+      .catch((error) => console.warn('[socialize] session stop failed', error));
+  }, [actor]);
 
   const syncSession = useCallback(
     (next: SocialSession) => {
-      if (useFirebase) {
-        void socializeService
-          .updateSession(actor, next)
-          .catch((error) => console.warn('[socialize] session update failed', error));
-      }
+      void socializeService
+        .updateSession(actor, next)
+        .catch((error) => console.warn('[socialize] session update failed', error));
     },
-    [actor, useFirebase],
+    [actor],
   );
 
   const setRadius = useCallback(
@@ -237,43 +210,16 @@ export function SocializeProvider({ children }: { children: ReactNode }) {
 
   const showInterest = useCallback(
     (cardId: string) => {
-      if (useFirebase) {
-        void socializeService
-          .showInterest(actor, cardId)
-          .then((state) => setCardStates((current) => ({ ...current, [cardId]: state })))
-          .catch((error) => console.warn('[socialize] interest failed', error));
-        return;
-      }
-      setCardStates((current) => {
-        if (current[cardId] && current[cardId] !== 'idle') return current;
-        return { ...current, [cardId]: 'interested' };
-      });
-
-      const card = SOCIALIZE_SEED.find((item) => item.id === cardId);
-      if (!card?.autoMatch || matchTimers.current.has(cardId)) return;
-
-      const timer = setTimeout(() => {
-        matchTimers.current.delete(cardId);
-        setCardStates((current) =>
-          current[cardId] === 'interested' ? { ...current, [cardId]: 'matched' } : current,
-        );
-        if (card.greeting) {
-          setMessages((current) => ({
-            ...current,
-            [cardId]: current[cardId]?.length
-              ? current[cardId]
-              : [{ id: `${cardId}-greeting`, fromMe: false, text: card.greeting!, at: Date.now() }],
-          }));
-        }
-      }, AUTO_MATCH_DELAY_MS);
-      matchTimers.current.set(cardId, timer);
+      void socializeService
+        .showInterest(actor, cardId)
+        .then((state) => setCardStates((current) => ({ ...current, [cardId]: state })))
+        .catch((error) => console.warn('[socialize] interest failed', error));
     },
-    [actor, useFirebase],
+    [actor],
   );
 
   const loadMessages = useCallback(
     async (cardId: string) => {
-      if (!useFirebase) return;
       try {
         const next = await socializeService.getMessages(actor, cardId);
         setMessages((current) => ({ ...current, [cardId]: next }));
@@ -281,34 +227,24 @@ export function SocializeProvider({ children }: { children: ReactNode }) {
         console.warn('[socialize] messages failed', error);
       }
     },
-    [actor, useFirebase],
+    [actor],
   );
 
   const sendMessage = useCallback(
     (cardId: string, text: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
-      if (useFirebase) {
-        void socializeService
-          .sendMessage(actor, cardId, trimmed)
-          .then((message) =>
-            setMessages((current) => ({
-              ...current,
-              [cardId]: [...(current[cardId] ?? []), message],
-            })),
-          )
-          .catch((error) => console.warn('[socialize] message send failed', error));
-        return;
-      }
-      setMessages((current) => ({
-        ...current,
-        [cardId]: [
-          ...(current[cardId] ?? []),
-          { id: `${cardId}-${Date.now()}`, fromMe: true, text: trimmed, at: Date.now() },
-        ],
-      }));
+      void socializeService
+        .sendMessage(actor, cardId, trimmed)
+        .then((message) =>
+          setMessages((current) => ({
+            ...current,
+            [cardId]: [...(current[cardId] ?? []), message],
+          })),
+        )
+        .catch((error) => console.warn('[socialize] message send failed', error));
     },
-    [actor, useFirebase],
+    [actor],
   );
 
   const value = useMemo<SocializeContextValue>(

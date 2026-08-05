@@ -1,7 +1,17 @@
 // German labels are hardcoded to stay independent of Hermes Intl support.
 export const MONTHS_FULL = [
-  'Januar', 'Februar', 'März', 'April', 'Mai', 'Juni',
-  'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember',
+  'Januar',
+  'Februar',
+  'März',
+  'April',
+  'Mai',
+  'Juni',
+  'Juli',
+  'August',
+  'September',
+  'Oktober',
+  'November',
+  'Dezember',
 ];
 
 const WEEKDAYS_LONG = [

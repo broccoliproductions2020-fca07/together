@@ -6,12 +6,12 @@ import * as TaskManager from 'expo-task-manager';
 import { Platform } from 'react-native';
 
 import { notificationService } from '@/features/notifications/services/notificationService';
-import { BACKEND, getFirebaseAuth } from '@/shared/services/firebase';
+import { getFirebaseAuth } from '@/shared/services/firebase';
 
 import { journeyService } from './services/journeyService';
 import type { JourneyActor } from './services/journeyService.types';
 import type { JourneyActivityContext, JourneyStartResult, UserJourneyRecord } from './types';
-import type { MapCoordinate } from '@/features/map/types/map.types';
+import type { GeoCoordinate } from '@/domain/geo';
 
 export const JOURNEY_LOCATION_TASK = 'together.journey.location.v1';
 export const JOURNEY_NOTIFICATION_TASK = 'together.journey.notification.v1';
@@ -43,13 +43,13 @@ const MAX_MOVEMENT_SAMPLE_GAP_MS = 4 * 60 * 1000;
 type AutomationStatus = 'armed' | 'underway' | 'arrived';
 
 interface MovementObservation {
-  coordinate: MapCoordinate;
+  coordinate: GeoCoordinate;
   accuracyMeters?: number;
   at: number;
 }
 
 interface StoredJourney {
-  version: 1;
+  version: 2;
   actor: JourneyActor;
   activity: JourneyActivityContext;
   status: AutomationStatus;
@@ -57,7 +57,7 @@ interface StoredJourney {
   detectionStartsAt: number;
   startedAt?: string;
   updatedAt: string;
-  currentCoordinate?: MapCoordinate;
+  currentCoordinate?: GeoCoordinate;
   lastObservation?: MovementObservation;
   arrivalHits: number;
   arrivalExpiresAt?: number;
@@ -66,19 +66,25 @@ interface StoredJourney {
   armTriggerNotificationId?: string;
 }
 
+interface LegacyStoredJourney {
+  actor?: JourneyActor;
+  activity?: { id?: string };
+  armTriggerNotificationId?: string;
+}
+
 interface JourneyNotificationPayload {
   activityId: string;
   title: string;
   startsAt?: string;
   endsAt?: string;
-  target?: MapCoordinate;
+  target?: GeoCoordinate;
 }
 
-function coordinateFromLocation(location: Location.LocationObject): MapCoordinate {
+function coordinateFromLocation(location: Location.LocationObject): GeoCoordinate {
   return { latitude: location.coords.latitude, longitude: location.coords.longitude };
 }
 
-function distanceMeters(a?: MapCoordinate, b?: MapCoordinate): number | undefined {
+function distanceMeters(a?: GeoCoordinate, b?: GeoCoordinate): number | undefined {
   if (!a || !b) return undefined;
   const earthRadiusMeters = 6_371_000;
   const latitudeDelta = ((b.latitude - a.latitude) * Math.PI) / 180;
@@ -118,7 +124,6 @@ function recordFromStored(state: StoredJourney): UserJourneyRecord {
     detectionStartsAt: new Date(state.detectionStartsAt).toISOString(),
     updatedAt: state.updatedAt,
     targetCoordinate: state.activity.targetCoordinate,
-    targetPosition: state.activity.targetPosition,
     currentCoordinate: coordinate,
     endsAt: state.activity.endsAt,
     backgroundManaged: true,
@@ -129,8 +134,29 @@ async function readStoredJourney(): Promise<StoredJourney | null> {
   const raw = await AsyncStorage.getItem(STORAGE_KEY);
   if (!raw) return null;
   try {
-    const state = JSON.parse(raw) as StoredJourney;
-    if (state.version !== 1 || !state.activity?.id || !state.actor?.uid) return null;
+    const parsed = JSON.parse(raw) as StoredJourney | LegacyStoredJourney;
+    if ((parsed as StoredJourney).version !== 2) {
+      // v1 stored destinations could have passed through the obsolete Berlin
+      // canvas projection. End that consent instead of continuing to share a
+      // journey against a potentially wrong destination.
+      const legacy = parsed as LegacyStoredJourney;
+      if (typeof legacy.armTriggerNotificationId === 'string') {
+        await Notifications.cancelScheduledNotificationAsync(legacy.armTriggerNotificationId).catch(
+          () => {},
+        );
+      }
+      if (legacy.actor?.uid && legacy.activity?.id) {
+        await journeyService.stopJourney(legacy.actor, legacy.activity.id).catch(() => {});
+        await stopNativeLocationUpdates().catch(() => {});
+      }
+      await AsyncStorage.removeItem(STORAGE_KEY);
+      return null;
+    }
+    const state = parsed as StoredJourney;
+    if (!state.activity?.id || !state.actor?.uid) {
+      await AsyncStorage.removeItem(STORAGE_KEY);
+      return null;
+    }
     if (state.status === 'arrived' && (state.arrivalExpiresAt ?? 0) <= Date.now()) {
       await AsyncStorage.removeItem(STORAGE_KEY);
       return null;
@@ -304,7 +330,7 @@ async function stopNativeLocationUpdates() {
 
 async function publishLocation(
   state: StoredJourney,
-  coordinate: MapCoordinate,
+  coordinate: GeoCoordinate,
   status: 'onTheWay' | 'arrived',
   now: number,
   initial = false,
@@ -341,7 +367,7 @@ async function finishForExpiry(state: StoredJourney) {
  * trigger (best-effort, may be throttled by the OS while backgrounded).
  */
 export async function ensureBackgroundWatcherArmed() {
-  if (Platform.OS === 'web' || BACKEND !== 'firebase') return;
+  if (Platform.OS === 'web') return;
   const state = await readStoredJourney();
   if (!state || state.status !== 'armed') return;
   if (!(await hasMatchingSignedInUser(state))) return;
@@ -358,7 +384,7 @@ export async function ensureBackgroundWatcherArmed() {
 
 async function processLocation(location: Location.LocationObject) {
   const state = await readStoredJourney();
-  if (!state || state.status === 'arrived' || BACKEND !== 'firebase') return;
+  if (!state || state.status === 'arrived') return;
   if (!(await hasMatchingSignedInUser(state))) return;
 
   const now = Date.now();
@@ -482,7 +508,7 @@ if (Platform.OS !== 'web' && !TaskManager.isTaskDefined(JOURNEY_NOTIFICATION_TAS
 
 /** Registers the silent notification action and its Android headless handler. */
 export async function prepareJourneyAutomation() {
-  if (Platform.OS === 'web' || BACKEND !== 'firebase') return false;
+  if (Platform.OS === 'web') return false;
   if (!(await TaskManager.isAvailableAsync())) return false;
 
   await Notifications.setNotificationCategoryAsync(JOURNEY_REMINDER_CATEGORY, [
@@ -519,7 +545,7 @@ export async function prepareJourneyAutomation() {
 
 /** Requests the explicit, system-level permission required before any silent action can work. */
 export async function requestJourneyAutomationPermission() {
-  if (Platform.OS === 'web' || BACKEND !== 'firebase') return false;
+  if (Platform.OS === 'web') return false;
   const foreground = await Location.getForegroundPermissionsAsync();
   const foregroundResult = foreground.granted
     ? foreground
@@ -538,7 +564,7 @@ export async function armBackgroundJourney(input: {
   actor: JourneyActor;
   requestPermission: boolean;
 }): Promise<JourneyStartResult> {
-  if (Platform.OS === 'web' || BACKEND !== 'firebase') {
+  if (Platform.OS === 'web') {
     return { ok: false, reason: 'background-unavailable' };
   }
   if (!input.activity.targetCoordinate) return { ok: false, reason: 'destination-required' };
@@ -572,7 +598,7 @@ export async function armBackgroundJourney(input: {
       ? Math.max(now, startsAt - DETECTION_LEAD_MS)
       : now;
     const state: StoredJourney = {
-      version: 1,
+      version: 2,
       actor: input.actor,
       activity: input.activity,
       status: 'armed',

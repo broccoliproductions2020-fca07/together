@@ -20,7 +20,9 @@ interface CacheEntry {
 function normalize(rooms: ChatRoom[]) {
   const now = Date.now();
   return rooms
-    .filter((room) => room && typeof room.id === 'string' && (!room.expireAt || room.expireAt > now))
+    .filter(
+      (room) => room && typeof room.id === 'string' && (!room.expireAt || room.expireAt > now),
+    )
     .sort((first, second) => second.createdAt - first.createdAt)
     .slice(0, MAX_ROOMS);
 }

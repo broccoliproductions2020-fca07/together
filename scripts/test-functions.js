@@ -1,4 +1,6 @@
-const path = require('path');
+/* global __dirname */
+
+const { createHash } = require('node:crypto');
 
 const PROJECT_ID = 'demo-together';
 const AUTH_PORT = Number(process.env.TEST_AUTH_EMULATOR_PORT ?? 9199);
@@ -7,13 +9,14 @@ const FUNCTIONS_PORT = Number(process.env.TEST_FUNCTIONS_EMULATOR_PORT ?? 5001);
 const DATABASE_PORT = Number(process.env.TEST_DATABASE_EMULATOR_PORT ?? 8281);
 const ACTIVITY_CHAT_RETENTION_MS = 12 * 60 * 60 * 1000;
 const AUTH_BASE = `http://127.0.0.1:${AUTH_PORT}/identitytoolkit.googleapis.com/v1`;
-const FUNCTIONS_BASE = `http://127.0.0.1:${FUNCTIONS_PORT}/${PROJECT_ID}/us-central1`;
+const FUNCTIONS_BASE = `http://127.0.0.1:${FUNCTIONS_PORT}/${PROJECT_ID}/europe-west3`;
 
 process.env.FIRESTORE_EMULATOR_HOST = `127.0.0.1:${FIRESTORE_PORT}`;
 process.env.FIREBASE_AUTH_EMULATOR_HOST = `127.0.0.1:${AUTH_PORT}`;
 process.env.FIREBASE_DATABASE_EMULATOR_HOST = `127.0.0.1:${DATABASE_PORT}`;
 
-const admin = require(path.join(__dirname, '..', 'functions', 'node_modules', 'firebase-admin'));
+const admin = require('./firebase-admin-tools.cjs');
+const { cleanupExpiredSurfaces } = require('../functions/cleanup-expired-surfaces');
 
 function initialsOf(name) {
   return (
@@ -76,10 +79,14 @@ function friendshipId(firstUid, secondUid) {
   return [firstUid, secondUid].sort().join('__');
 }
 
+function pushTokenClaimId(token) {
+  return createHash('sha256').update(token).digest('hex');
+}
+
 /** Polls for an async RTDB-trigger side effect (e.g. cleanupSafetyIndexOnSessionDeleted)
  * instead of racing it — the callable that causes the deletion returns before
  * the trigger necessarily finishes. */
-async function waitFor(check, { attempts = 20, delayMs = 250 } = {}) {
+async function waitFor(check, { attempts = 60, delayMs = 250 } = {}) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const result = await check();
     if (result) return result;
@@ -246,9 +253,94 @@ async function main() {
   });
   await batch.commit();
 
+  const avatarBase64 = Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64');
+  const renamedProfile = await expectOk('profile display name change is server-owned', () =>
+    callFunction(alice.token, 'updateOwnProfile', { displayName: 'Alice Neu' }),
+  );
+  const [renamedUser, renamedPublicProfile] = await Promise.all([
+    db.doc(`users/${alice.uid}`).get(),
+    db.doc(`publicProfiles/${alice.uid}`).get(),
+  ]);
+  if (
+    renamedProfile.displayName !== 'Alice Neu' ||
+    renamedUser.data()?.displayName !== 'Alice Neu' ||
+    renamedPublicProfile.data()?.displayName !== 'Alice Neu' ||
+    renamedPublicProfile.data()?.initials !== 'AN'
+  ) {
+    throw new Error('Profile display name was not updated consistently.');
+  }
+  await expectError('profile display name cooldown is enforced', 'RESOURCE_EXHAUSTED', () =>
+    callFunction(alice.token, 'updateOwnProfile', { displayName: 'Alice Noch Neuer' }),
+  );
+  await db.doc(`rateLimits/${alice.uid}_profile`).set(
+    {
+      displayNameChanges: [
+        admin.firestore.Timestamp.fromMillis(Date.now() - 18 * 60 * 1000),
+        admin.firestore.Timestamp.fromMillis(Date.now() - 17 * 60 * 1000),
+        admin.firestore.Timestamp.fromMillis(Date.now() - 16 * 60 * 1000),
+      ],
+    },
+    { merge: true },
+  );
+  await expectError('profile display name daily limit is enforced', 'RESOURCE_EXHAUSTED', () =>
+    callFunction(alice.token, 'updateOwnProfile', { displayName: 'Alice Zu Oft' }),
+  );
+  await db.doc(`rateLimits/${alice.uid}_profile`).set({ displayNameChanges: [] }, { merge: true });
+
+  const avatarProfile = await expectOk('profile avatar upload is server-owned', () =>
+    callFunction(alice.token, 'updateOwnProfile', { displayName: 'Alice Neu', avatarBase64 }),
+  );
+  const avatarUrl = avatarProfile.avatarUrl;
+  const [avatarUser, avatarPublicProfile] = await Promise.all([
+    db.doc(`users/${alice.uid}`).get(),
+    db.doc(`publicProfiles/${alice.uid}`).get(),
+  ]);
+  if (
+    typeof avatarUrl !== 'string' ||
+    !avatarUrl.includes(`avatars%2F${alice.uid}%2F`) ||
+    avatarUser.data()?.avatarUrl !== avatarUrl ||
+    avatarPublicProfile.data()?.avatarUrl !== avatarUrl
+  ) {
+    throw new Error('Profile avatar was not written through the server-owned path.');
+  }
+  await db.doc(`rateLimits/${alice.uid}_profile`).set(
+    {
+      avatarChanges: Array.from({ length: 5 }, (_, index) =>
+        admin.firestore.Timestamp.fromMillis(Date.now() - (index + 1) * 60_000),
+      ),
+    },
+    { merge: true },
+  );
+  await expectError('profile avatar daily limit is enforced', 'RESOURCE_EXHAUSTED', () =>
+    callFunction(alice.token, 'updateOwnProfile', { displayName: 'Alice Neu', avatarBase64 }),
+  );
+
+  const createdPrivateCircle = await expectOk('private Circle mutations stay server-owned', () =>
+    callFunction(alice.token, 'createPrivateCircle', { name: 'Enger Kreis', emoji: '✨' }),
+  );
+  const createdPrivateCircleId = createdPrivateCircle.id;
+  const createdPrivateCircleSnapshot = await db
+    .doc(`users/${alice.uid}/privateCircles/${createdPrivateCircleId}`)
+    .get();
+  if (createdPrivateCircleSnapshot.data()?.name !== 'Enger Kreis') {
+    throw new Error('Private Circle callable did not create the expected document.');
+  }
+  await expectOk('private Circle deletion stays server-owned', () =>
+    callFunction(alice.token, 'deletePrivateCircle', { circleId: createdPrivateCircleId }),
+  );
+  if ((await db.doc(`users/${alice.uid}/privateCircles/${createdPrivateCircleId}`).get()).exists) {
+    throw new Error('Private Circle callable did not delete the expected document.');
+  }
+
   const createdActivityId = `visible-until-${now}`;
   const createdStartsAt = new Date(now + 5 * 60 * 60 * 1000).toISOString();
   const createdEndsAt = new Date(now + 7 * 60 * 60 * 1000).toISOString();
+  const createdPlace = {
+    label: 'Koordinaten-Regression',
+    latitude: 48.137154,
+    longitude: 11.576124,
+    visibility: 'pin',
+  };
   await expectOk('new activity writes feed visibility separate from chat retention', () =>
     callFunction(alice.token, 'createActivity', {
       activityId: createdActivityId,
@@ -258,6 +350,7 @@ async function main() {
         audienceContext: { kind: 'all_friends' },
         startsAt: createdStartsAt,
         endsAt: createdEndsAt,
+        place: createdPlace,
       },
     }),
   );
@@ -271,9 +364,13 @@ async function main() {
   if (
     createdActivity?.visibleUntil?.toMillis?.() !== Date.parse(createdEndsAt) ||
     createdActivity?.expireAt?.toMillis?.() !== expectedCreatedExpiry ||
-    createdRoom?.expireAt?.toMillis?.() !== expectedCreatedExpiry
+    createdRoom?.expireAt?.toMillis?.() !== expectedCreatedExpiry ||
+    createdActivity?.place?.latitude !== createdPlace.latitude ||
+    createdActivity?.place?.longitude !== createdPlace.longitude
   ) {
-    throw new Error('New activity did not separate map visibility from chat retention.');
+    throw new Error(
+      'New activity did not preserve its visibility, retention and real coordinates.',
+    );
   }
   const activeFeed = await db
     .collection('activities')
@@ -296,6 +393,24 @@ async function main() {
       },
     }),
   );
+  const openedPresence = await db.doc(`presence/${alice.uid}`).get();
+  const openedAudience = openedPresence.data()?.audienceUids ?? [];
+  if (openedAudience.includes(alice.uid)) {
+    throw new Error('Presence audience must not include its owner.');
+  }
+  await expectOk('open presence refinement reuses its server-derived audience', () =>
+    callFunction(alice.token, 'publishPresence', {
+      presence: {
+        expiresAt: Date.now() + 10 * 60 * 60 * 1000,
+        shareLocation: false,
+        vibe: { label: 'Kaffee?' },
+      },
+    }),
+  );
+  const refinedPresence = await db.doc(`presence/${alice.uid}`).get();
+  if ((refinedPresence.data()?.audienceUids ?? []).join(',') !== openedAudience.join(',')) {
+    throw new Error('Presence refinement recalculated its audience instead of reusing it.');
+  }
   await expectError('open presence rejects a duration above twelve hours', 'INVALID_ARGUMENT', () =>
     callFunction(alice.token, 'publishPresence', {
       presence: {
@@ -348,6 +463,123 @@ async function main() {
   }
   console.log('OK group chat lifecycle is bounded and refreshed atomically');
 
+  // Winks are private, short-lived invitations â€” not client-writable group
+  // membership. Dave may receive more than one while open, but accepting one
+  // atomically removes every competing pending wink and his open presence.
+  await db.doc(`friendships/${friendshipId(bob.uid, dave.uid)}`).set({
+    participantUids: [bob.uid, dave.uid].sort(),
+    requesterUid: bob.uid,
+    status: 'accepted',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  await expectOk('Dave publishes open presence for direct friends', () =>
+    callFunction(dave.token, 'publishPresence', {
+      presence: { expiresAt: Date.now() + 60 * 60 * 1000, shareLocation: false },
+    }),
+  );
+  const bobRound = await expectOk('first friend can send a private wink', () =>
+    callFunction(bob.token, 'startSpontaneousRound', { inviteeUids: [dave.uid] }),
+  );
+  const aliceRound = await expectOk('second friend can send a competing private wink', () =>
+    callFunction(alice.token, 'startSpontaneousRound', { inviteeUids: [dave.uid] }),
+  );
+  if (typeof bobRound?.id !== 'string' || typeof aliceRound?.id !== 'string') {
+    throw new Error('Spontaneous round did not return a server-generated id.');
+  }
+  const [pendingOpening, pendingRoom, pendingInvite, pendingNotification] = await Promise.all([
+    db.doc(`groupOpenings/${aliceRound.id}`).get(),
+    db.doc(`chats/${aliceRound.id}`).get(),
+    db.doc(`spontaneousRoundInvites/${aliceRound.id}_${dave.uid}`).get(),
+    db.doc(`notifications/${aliceRound.id}_${dave.uid}`).get(),
+  ]);
+  if (
+    pendingOpening.data()?.audienceUids?.join(',') !== alice.uid ||
+    pendingRoom.exists ||
+    !pendingInvite.exists ||
+    !pendingNotification.exists
+  ) {
+    throw new Error('A pending wink exposed a room or did not create private server projections.');
+  }
+  await expectError('a non-recipient cannot accept a private wink', 'PERMISSION_DENIED', () =>
+    callFunction(charlie.token, 'acceptSpontaneousRound', { roundId: aliceRound.id }),
+  );
+  await expectOk('returning one wink forms exactly one temporary round', () =>
+    callFunction(dave.token, 'acceptSpontaneousRound', { roundId: aliceRound.id }),
+  );
+  await expectError('a member cannot accept a competing wink', 'FAILED_PRECONDITION', () =>
+    callFunction(dave.token, 'acceptSpontaneousRound', { roundId: bobRound.id }),
+  );
+  const [formedOpening, formedRoom, davePresence, daveMembership, bobInvite, bobNotification] =
+    await Promise.all([
+      db.doc(`groupOpenings/${aliceRound.id}`).get(),
+      db.doc(`chats/${aliceRound.id}`).get(),
+      db.doc(`presence/${dave.uid}`).get(),
+      db.doc(`spontaneousRoundMemberships/${dave.uid}`).get(),
+      db.doc(`spontaneousRoundInvites/${bobRound.id}_${dave.uid}`).get(),
+      db.doc(`notifications/${bobRound.id}_${dave.uid}`).get(),
+    ]);
+  if (
+    formedOpening.data()?.memberIds?.length !== 2 ||
+    formedOpening.data()?.audienceUids?.length !== 2 ||
+    formedRoom.data()?.roundStatus !== 'forming' ||
+    formedRoom.data()?.memberIds?.length !== 2 ||
+    davePresence.exists ||
+    daveMembership.data()?.roundId !== aliceRound.id ||
+    bobInvite.exists ||
+    bobNotification.exists
+  ) {
+    throw new Error('Returning a wink did not atomically form and exclusively claim the round.');
+  }
+  const roundMessageAt = Date.now();
+  await expectOk('forming round messages keep the short round expiry', () =>
+    callFunction(alice.token, 'sendChatMessage', { roomId: aliceRound.id, text: 'Lust auf einen Kaffee?' }),
+  );
+  const formingMessage = (await db.collection(`chats/${aliceRound.id}/messages`).limit(1).get()).docs[0]
+    ?.data();
+  if (
+    !formingMessage?.expireAt ||
+    formingMessage.expireAt.toMillis() > roundMessageAt + 31 * 60 * 1000
+  ) {
+    throw new Error('A forming round message received normal 30-day chat retention.');
+  }
+  const promotedStartsAt = new Date(Date.now() + 45 * 60 * 1000).toISOString();
+  const promotedEndsAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
+  await expectOk('a forming round promotes into one shared activity chat', () =>
+    callFunction(alice.token, 'createActivity', {
+      activityId: aliceRound.id,
+      activity: {
+        mode: 'soon',
+        title: 'Spontaner Kaffee',
+        audienceContext: { kind: 'all_friends' },
+        startsAt: promotedStartsAt,
+        endsAt: promotedEndsAt,
+      },
+    }),
+  );
+  const [promotedActivity, promotedRoom, deletedOpening, aliceMembership, deletedDaveMembership] =
+    await Promise.all([
+      db.doc(`activities/${aliceRound.id}`).get(),
+      db.doc(`chats/${aliceRound.id}`).get(),
+      db.doc(`groupOpenings/${aliceRound.id}`).get(),
+      db.doc(`spontaneousRoundMemberships/${alice.uid}`).get(),
+      db.doc(`spontaneousRoundMemberships/${dave.uid}`).get(),
+    ]);
+  if (
+    promotedActivity.data()?.participantUids?.length !== 2 ||
+    promotedRoom.data()?.type !== 'activity' ||
+    promotedRoom.data()?.roundStatus !== undefined ||
+    deletedOpening.exists ||
+    aliceMembership.exists ||
+    deletedDaveMembership.exists
+  ) {
+    throw new Error('Round promotion did not convert membership, retention, and private guards together.');
+  }
+  // Restore the fixture's original friendship graph for the independent guest
+  // invite tests below, where Bob deliberately must not be able to invite Dave.
+  await db.doc(`friendships/${friendshipId(bob.uid, dave.uid)}`).delete();
+  console.log('OK winks are private, exclusive, temporary, and promote safely');
+
   const editedStartsAt = new Date(now + 45 * 60 * 1000).toISOString();
   const editedEndsAt = new Date(now + 3 * 60 * 60 * 1000).toISOString();
   await expectError('non-host cannot edit an activity', 'PERMISSION_DENIED', () =>
@@ -361,8 +593,17 @@ async function main() {
       activityId: 'shared-activity',
       activity: {
         title: 'Kaffee im Park',
+        note: 'Mit Decke',
         startsAt: editedStartsAt,
         endsAt: editedEndsAt,
+        place: {
+          label: 'Volkspark',
+          latitude: 52.5301,
+          longitude: 13.4012,
+          visibility: 'pin',
+        },
+        maxParticipants: 3,
+        category: 'kaffee',
       },
     }),
   );
@@ -375,6 +616,11 @@ async function main() {
   const expectedEditedExpiry = Date.parse(editedEndsAt) + ACTIVITY_CHAT_RETENTION_MS;
   if (
     editedActivity?.title !== 'Kaffee im Park' ||
+    editedActivity?.note !== 'Mit Decke' ||
+    editedActivity?.place?.label !== 'Volkspark' ||
+    editedActivity?.place?.visibility !== 'pin' ||
+    editedActivity?.maxParticipants !== 3 ||
+    editedActivity?.category !== 'kaffee' ||
     editedActivity?.startsAt !== editedStartsAt ||
     editedActivity?.endsAt !== editedEndsAt ||
     editedActivity?.visibleUntil?.toMillis?.() !== Date.parse(editedEndsAt) ||
@@ -385,6 +631,96 @@ async function main() {
     throw new Error('Activity edit did not keep visibility and chat lifecycle in sync.');
   }
   console.log('OK activity edit moves visibility and chat expiry together');
+
+  const firstActivityUpdateNotifications = await waitFor(async () => {
+    const snapshot = await db
+      .collection('notifications')
+      .where('recipientUid', '==', bob.uid)
+      .where('kind', '==', 'activity_updated')
+      .where('activityId', '==', 'shared-activity')
+      .get();
+    return snapshot.size === 1 ? snapshot : null;
+  });
+  const firstActivityUpdate = firstActivityUpdateNotifications.docs[0]?.data();
+  if (
+    firstActivityUpdate?.roomId !== 'shared-activity' ||
+    !firstActivityUpdate?.body?.includes('Titel') ||
+    !firstActivityUpdate?.body?.includes('Zeit') ||
+    !firstActivityUpdate?.body?.includes('Ort')
+  ) {
+    throw new Error('Relevant activity edits did not produce one actionable participant update.');
+  }
+  console.log('OK relevant activity edits notify participants exactly once');
+
+  await expectError('activity edit cannot rewrite its audience', 'INVALID_ARGUMENT', () =>
+    callFunction(alice.token, 'updateActivity', {
+      activityId: 'shared-activity',
+      activity: { audienceUids: [alice.uid] },
+    }),
+  );
+  await expectError('location-free edit cannot retain coordinates', 'INVALID_ARGUMENT', () =>
+    callFunction(alice.token, 'updateActivity', {
+      activityId: 'shared-activity',
+      activity: {
+        place: {
+          label: 'Noch offen',
+          latitude: 52.53,
+          longitude: 13.4,
+          visibility: 'none',
+        },
+      },
+    }),
+  );
+  await db.doc('activities/shared-activity').update({ journeyUnderwayCount: 1 });
+  await expectError('active journey locks the activity place', 'FAILED_PRECONDITION', () =>
+    callFunction(alice.token, 'updateActivity', {
+      activityId: 'shared-activity',
+      activity: {
+        place: {
+          label: 'Alexanderplatz',
+          latitude: 52.5219,
+          longitude: 13.4132,
+          visibility: 'pin',
+        },
+      },
+    }),
+  );
+  await expectError('active journey locks the activity start time', 'FAILED_PRECONDITION', () =>
+    callFunction(alice.token, 'updateActivity', {
+      activityId: 'shared-activity',
+      activity: { startsAt: new Date(now + 60 * 60 * 1000).toISOString() },
+    }),
+  );
+  await db.doc('activities/shared-activity').update({
+    journeyUnderwayCount: admin.firestore.FieldValue.delete(),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 750));
+  const afterJourneyCounterNotifications = await db
+    .collection('notifications')
+    .where('recipientUid', '==', bob.uid)
+    .where('kind', '==', 'activity_updated')
+    .where('activityId', '==', 'shared-activity')
+    .get();
+  if (afterJourneyCounterNotifications.size !== firstActivityUpdateNotifications.size) {
+    throw new Error('Journey counter churn created a misleading activity update notification.');
+  }
+  console.log('OK journey counter changes stay out of participant update notifications');
+  await expectOk('host can remove optional activity fields explicitly', () =>
+    callFunction(alice.token, 'updateActivity', {
+      activityId: 'shared-activity',
+      activity: { note: null, place: null, maxParticipants: null, category: null },
+    }),
+  );
+  const clearedActivity = (await db.doc('activities/shared-activity').get()).data();
+  if (
+    Object.prototype.hasOwnProperty.call(clearedActivity, 'note') ||
+    Object.prototype.hasOwnProperty.call(clearedActivity, 'place') ||
+    Object.prototype.hasOwnProperty.call(clearedActivity, 'maxParticipants') ||
+    Object.prototype.hasOwnProperty.call(clearedActivity, 'category')
+  ) {
+    throw new Error('Activity edit did not remove optional fields cleanly.');
+  }
+  console.log('OK activity edit deletes optional fields without stale private data');
 
   const activityChatExpiry = editedRoom?.expireAt?.toMillis?.();
   await expectOk('activity message keeps the end-based chat retention', () =>
@@ -404,9 +740,9 @@ async function main() {
   console.log('OK activity chat keeps its fixed retention window');
 
   const burstWindow = Math.floor(Date.now() / 60_000) * 60_000;
-  await db.doc('rateLimits/room_shared-activity').set({
-    windowStart: burstWindow,
-    count: 60,
+  await db.doc('chats/shared-activity/chatInternal/summary').set({
+    roomRateWindowStart: burstWindow,
+    roomRateCount: 60,
     expireAt: admin.firestore.Timestamp.fromMillis(burstWindow + 60_000),
   });
   await expectError('room message burst is capped server-side', 'RESOURCE_EXHAUSTED', () =>
@@ -415,10 +751,114 @@ async function main() {
       text: 'Zu schnell',
     }),
   );
-  await db.doc('rateLimits/room_shared-activity').delete();
+  await db.doc('chats/shared-activity/chatInternal/summary').delete();
+
+  const repeatedText = 'Automatischer Wiederholungstext';
+  const repeatedFingerprint = createHash('sha256')
+    .update(repeatedText.normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('de-DE'))
+    .digest('hex');
+  await db.doc(`rateLimits/${bob.uid}`).set({
+    windowStart: burstWindow,
+    count: 0,
+    lastMessageAt: Date.now() - 1_000,
+    lastMessageFingerprint: repeatedFingerprint,
+    duplicateCount: 3,
+    expireAt: admin.firestore.Timestamp.fromMillis(burstWindow + 60_000),
+  });
+  await expectError(
+    'repeated automated chat text is capped server-side',
+    'RESOURCE_EXHAUSTED',
+    () =>
+      callFunction(bob.token, 'sendChatMessage', {
+        roomId: 'shared-activity',
+        text: repeatedText,
+      }),
+  );
+  await db.doc(`rateLimits/${bob.uid}`).delete();
 
   await expectError('cannot join an already ended activity', 'FAILED_PRECONDITION', () =>
     callFunction(bob.token, 'joinActivity', { activityId: 'ended-activity' }),
+  );
+
+  // ── Guest invites (participant-vouched, host opt-in) ──
+  await db.doc('activities/guest-activity').set({
+    hostId: alice.uid,
+    mode: 'soon',
+    title: 'Bouldern',
+    audienceUids: [alice.uid, bob.uid],
+    startsAt: sharedStartsAt,
+    endsAt: sharedEndsAt,
+    participantUids: [alice.uid, bob.uid],
+    participants: [
+      { uid: alice.uid, displayName: 'Alice Adams', initials: 'AA' },
+      { uid: bob.uid, displayName: 'Bob Berger', initials: 'BB' },
+    ],
+    status: 'active',
+    createdAt: timestamp,
+    visibleUntil: admin.firestore.Timestamp.fromMillis(Date.parse(sharedEndsAt)),
+    expireAt: admin.firestore.Timestamp.fromMillis(now + 26 * 60 * 60 * 1000),
+  });
+  await expectError(
+    'guest invite is rejected while the host has not opted in',
+    'FAILED_PRECONDITION',
+    () =>
+      callFunction(alice.token, 'inviteFriendToActivity', {
+        activityId: 'guest-activity',
+        targetUid: dave.uid,
+      }),
+  );
+  await db.doc('activities/guest-activity').update({ guestInvitesEnabled: true });
+  await expectError('non-participant cannot send a guest invite', 'PERMISSION_DENIED', () =>
+    callFunction(charlie.token, 'inviteFriendToActivity', {
+      activityId: 'guest-activity',
+      targetUid: dave.uid,
+    }),
+  );
+  await expectError(
+    'participant cannot invite a stranger (not their friend)',
+    'PERMISSION_DENIED',
+    () =>
+      callFunction(bob.token, 'inviteFriendToActivity', {
+        activityId: 'guest-activity',
+        targetUid: dave.uid,
+      }),
+  );
+  const inviteResult = await expectOk('participant invites their own confirmed friend', () =>
+    callFunction(alice.token, 'inviteFriendToActivity', {
+      activityId: 'guest-activity',
+      targetUid: dave.uid,
+    }),
+  );
+  if (inviteResult?.state !== 'invited') {
+    throw new Error(`Guest invite expected state "invited", got ${JSON.stringify(inviteResult)}`);
+  }
+  const invitedActivity = (await db.doc('activities/guest-activity').get()).data();
+  if (!(invitedActivity?.audienceUids ?? []).includes(dave.uid)) {
+    throw new Error('Guest invite did not widen the activity audience.');
+  }
+  const inviteNotifications = await db
+    .collection('notifications')
+    .where('recipientUid', '==', dave.uid)
+    .where('kind', '==', 'activity_invite')
+    .limit(1)
+    .get();
+  if (inviteNotifications.empty) {
+    throw new Error('Guest invite did not create the invite notification.');
+  }
+  console.log('OK guest invite widens the audience and notifies the guest');
+  const repeatInvite = await expectOk('repeated guest invite is idempotent', () =>
+    callFunction(alice.token, 'inviteFriendToActivity', {
+      activityId: 'guest-activity',
+      targetUid: dave.uid,
+    }),
+  );
+  if (repeatInvite?.state !== 'already_invited') {
+    throw new Error(
+      `Repeated invite expected "already_invited", got ${JSON.stringify(repeatInvite)}`,
+    );
+  }
+  await expectOk('invited guest can join the activity', () =>
+    callFunction(dave.token, 'joinActivity', { activityId: 'guest-activity' }),
   );
 
   await expectOk('participant starts a location-free journey summary', () =>
@@ -462,6 +902,7 @@ async function main() {
       locations: { [alice.uid]: { lat: 52.5, lng: 13.4, updatedAt: now } },
     }),
   ]);
+  const cancellationStartedAt = Date.now();
   await expectOk('host cancels an activity and revokes its journey', () =>
     callFunction(alice.token, 'cancelActivity', { activityId: 'cancel-activity' }),
   );
@@ -474,11 +915,12 @@ async function main() {
     ]);
   const cancelledActivity = cancelledActivitySnapshot.data();
   const cancelledRoom = cancelledRoomSnapshot.data();
-  const cancellationExpiry = now + ACTIVITY_CHAT_RETENTION_MS;
+  const cancellationExpiry = cancellationStartedAt + ACTIVITY_CHAT_RETENTION_MS;
   if (
     cancelledActivity?.status !== 'cancelled' ||
     cancelledActivity?.journeyUnderwayCount !== 0 ||
-    Math.abs((cancelledActivity?.visibleUntil?.toMillis?.() ?? 0) - now) > 60_000 ||
+    Math.abs((cancelledActivity?.visibleUntil?.toMillis?.() ?? 0) - cancellationStartedAt) >
+      60_000 ||
     Math.abs((cancelledActivity?.expireAt?.toMillis?.() ?? 0) - cancellationExpiry) > 60_000 ||
     Math.abs((cancelledRoom?.expireAt?.toMillis?.() ?? 0) - cancellationExpiry) > 60_000 ||
     journeySnapshot.exists() ||
@@ -489,6 +931,93 @@ async function main() {
     throw new Error('Cancellation did not close the planned activity lifecycle cleanly.');
   }
   console.log('OK cancellation removes live journey data and keeps a 12-hour chat window');
+
+  await waitFor(async () => {
+    const snapshot = await db
+      .collection('notifications')
+      .where('recipientUid', '==', bob.uid)
+      .where('kind', '==', 'activity_cancelled')
+      .where('activityId', '==', 'cancel-activity')
+      .get();
+    return snapshot.empty ? null : snapshot;
+  });
+  const cancellationUpdates = await db
+    .collection('notifications')
+    .where('recipientUid', '==', bob.uid)
+    .where('kind', '==', 'activity_updated')
+    .where('activityId', '==', 'cancel-activity')
+    .get();
+  if (!cancellationUpdates.empty) {
+    throw new Error('Activity cancellation also produced a redundant update notification.');
+  }
+  console.log('OK cancellation emits its dedicated notification without a duplicate update');
+
+  const nowJoinActivityId = 'now-join-reminder-activity';
+  await db.doc(`activities/${nowJoinActivityId}`).set({
+    hostId: alice.uid,
+    mode: 'now',
+    title: 'Spontan im Park',
+    audienceUids: [alice.uid, bob.uid, charlie.uid],
+    startsAt: new Date(now - 5 * 60 * 1000).toISOString(),
+    endsAt: new Date(now + 60 * 60 * 1000).toISOString(),
+    place: {
+      label: 'Volkspark',
+      latitude: 52.5301,
+      longitude: 13.4012,
+      visibility: 'pin',
+    },
+    participantUids: [alice.uid],
+    participants: [{ uid: alice.uid, displayName: 'Alice Adams', initials: 'AA' }],
+    status: 'active',
+    createdAt: timestamp,
+    visibleUntil: admin.firestore.Timestamp.fromMillis(now + 60 * 60 * 1000),
+    expireAt: admin.firestore.Timestamp.fromMillis(now + 13 * 60 * 60 * 1000),
+  });
+  await expectOk('user disables journey reminders', () =>
+    callFunction(bob.token, 'setJourneyRemindersEnabled', { enabled: false }),
+  );
+  await expectOk('opted-out user joins a running activity', () =>
+    callFunction(bob.token, 'joinActivity', { activityId: nowJoinActivityId }),
+  );
+  const optedOutJourneyReminders = await db
+    .collection('notifications')
+    .where('recipientUid', '==', bob.uid)
+    .where('kind', '==', 'journey_reminder')
+    .where('activityId', '==', nowJoinActivityId)
+    .get();
+  if (!optedOutJourneyReminders.empty) {
+    throw new Error('Joining a running activity ignored the journey reminder opt-out.');
+  }
+  await expectOk('default-enabled user joins a running activity', () =>
+    callFunction(charlie.token, 'joinActivity', { activityId: nowJoinActivityId }),
+  );
+  const defaultJourneyReminders = await db
+    .collection('notifications')
+    .where('recipientUid', '==', charlie.uid)
+    .where('kind', '==', 'journey_reminder')
+    .where('activityId', '==', nowJoinActivityId)
+    .get();
+  if (defaultJourneyReminders.size !== 1) {
+    throw new Error('A default-enabled running-activity join did not create one journey reminder.');
+  }
+  await waitFor(async () => {
+    const snapshot = await db
+      .collection('notifications')
+      .where('recipientUid', '==', alice.uid)
+      .where('kind', '==', 'activity_joined')
+      .where('activityId', '==', nowJoinActivityId)
+      .get();
+    return snapshot.size === 2 ? snapshot : null;
+  });
+  const joinUpdateNotifications = await db
+    .collection('notifications')
+    .where('kind', '==', 'activity_updated')
+    .where('activityId', '==', nowJoinActivityId)
+    .get();
+  if (!joinUpdateNotifications.empty) {
+    throw new Error('Joining an activity produced a misleading activity update notification.');
+  }
+  console.log('OK running-activity joins honor reminder opt-out without duplicate update notices');
 
   const leaveJourneyActivityId = 'leave-journey-activity';
   await Promise.all([
@@ -525,21 +1054,32 @@ async function main() {
       expiresAt: now + 2 * 60 * 60 * 1000,
       members: { [alice.uid]: true, [bob.uid]: true },
       locations: {
-        [bob.uid]: { lat: 52.5, lng: 13.4, status: 'onTheWay', updatedAt: now, expiresAt: now + 60 * 60 * 1000 },
+        [bob.uid]: {
+          lat: 52.5,
+          lng: 13.4,
+          status: 'onTheWay',
+          updatedAt: now,
+          expiresAt: now + 60 * 60 * 1000,
+        },
       },
     }),
   ]);
   await expectOk('leaving an activity revokes its live journey access', () =>
     callFunction(bob.token, 'leaveActivity', { activityId: leaveJourneyActivityId }),
   );
-  const [leftActivitySnapshot, leftRoomSnapshot, leftJourneyState, leftJourneyMember, leftJourneyLocation] =
-    await Promise.all([
-      db.doc(`activities/${leaveJourneyActivityId}`).get(),
-      db.doc(`chats/${leaveJourneyActivityId}`).get(),
-      db.doc(`activities/${leaveJourneyActivityId}/journeyStates/${bob.uid}`).get(),
-      realtimeDb.ref(`journeys/${leaveJourneyActivityId}/members/${bob.uid}`).get(),
-      realtimeDb.ref(`journeys/${leaveJourneyActivityId}/locations/${bob.uid}`).get(),
-    ]);
+  const [
+    leftActivitySnapshot,
+    leftRoomSnapshot,
+    leftJourneyState,
+    leftJourneyMember,
+    leftJourneyLocation,
+  ] = await Promise.all([
+    db.doc(`activities/${leaveJourneyActivityId}`).get(),
+    db.doc(`chats/${leaveJourneyActivityId}`).get(),
+    db.doc(`activities/${leaveJourneyActivityId}/journeyStates/${bob.uid}`).get(),
+    realtimeDb.ref(`journeys/${leaveJourneyActivityId}/members/${bob.uid}`).get(),
+    realtimeDb.ref(`journeys/${leaveJourneyActivityId}/locations/${bob.uid}`).get(),
+  ]);
   if (
     leftActivitySnapshot.data()?.participantUids?.includes(bob.uid) ||
     leftActivitySnapshot.data()?.journeyUnderwayCount !== 0 ||
@@ -594,7 +1134,30 @@ async function main() {
   ) {
     throw new Error('A new friendship request did not invalidate both friendship caches.');
   }
+  const incomingRequestNotificationDocs = (
+    await db.collection('notifications').where('recipientUid', '==', bob.uid).get()
+  ).docs.filter((snapshot) => snapshot.data()?.title === 'Neue Freundschaftsanfrage');
+  if (incomingRequestNotificationDocs.length) {
+    throw new Error('Incoming friendship request was duplicated as a notification document.');
+  }
+  await expectOk('retrying the same pending request stays idempotent', () =>
+    callFunction(alice.token, 'sendFriendRequest', {
+      targetUid: bob.uid,
+      activityId: 'shared-activity',
+    }),
+  );
+  const [aliceAfterRequestRetry, bobAfterRequestRetry] = await Promise.all([
+    db.doc(`users/${alice.uid}`).get(),
+    db.doc(`users/${bob.uid}`).get(),
+  ]);
+  if (
+    aliceAfterRequestRetry.data()?.friendshipsVersion !== 1 ||
+    bobAfterRequestRetry.data()?.friendshipsVersion !== 1
+  ) {
+    throw new Error('Retrying a pending friendship request created another relation change.');
+  }
   console.log('OK pending friendship stores contact-only snapshots');
+  console.log('OK incoming friendship requests stay single-source and idempotent');
 
   await expectOk('request recipient can accept', () =>
     callFunction(bob.token, 'respondToFriendRequest', {
@@ -930,6 +1493,7 @@ async function main() {
   if (resolvedNotifications.empty) {
     throw new Error('Safety all-clear did not notify the current companion audience.');
   }
+  const resolvedBeforeExplicitEnd = resolvedNotifications.size;
   console.log('OK Safety all-clear notifies companions');
 
   await expectOk('owner ends Safety session and fan-out', () =>
@@ -944,19 +1508,31 @@ async function main() {
   }
   console.log('OK Safety end removes all live data');
 
-  // cleanupSafetyIndexOnSessionDeleted is what actually sends this — it must
-  // fire for a callable-triggered delete just as it does for a direct client
-  // remove(), otherwise companions never learn their friend arrived safely.
-  await waitFor(async () => {
-    const snapshot = await db
-      .collection('notifications')
-      .where('recipientUid', '==', bob.uid)
-      .where('kind', '==', 'safety_resolved')
-      .get();
-    return snapshot.empty ? null : snapshot;
-  });
-  console.log('OK Safety end notifies companions of the safe arrival');
+  const resolvedAfterExplicitEnd = await db
+    .collection('notifications')
+    .where('recipientUid', '==', bob.uid)
+    .where('kind', '==', 'safety_resolved')
+    .get();
+  if (resolvedAfterExplicitEnd.size !== resolvedBeforeExplicitEnd + 1) {
+    throw new Error('Explicit Safety end did not create exactly one safe-arrival notification.');
+  }
+  await new Promise((resolve) => setTimeout(resolve, 750));
+  const resolvedAfterDeleteTrigger = await db
+    .collection('notifications')
+    .where('recipientUid', '==', bob.uid)
+    .where('kind', '==', 'safety_resolved')
+    .get();
+  if (resolvedAfterDeleteTrigger.size !== resolvedAfterExplicitEnd.size) {
+    throw new Error('Generic Safety deletion duplicated the explicit safe-arrival notification.');
+  }
+  console.log('OK explicit Safety end sends one safe-arrival notification');
+  console.log('OK generic Safety delete cleanup never invents a resolved event');
 
+  const daveResolvedBeforeRevocation = await db
+    .collection('notifications')
+    .where('recipientUid', '==', dave.uid)
+    .where('kind', '==', 'safety_resolved')
+    .get();
   await expectOk('friend starts another Safety session before removing friendship', () =>
     callFunction(alice.token, 'startSafetySession', { audienceUids: [dave.uid] }),
   );
@@ -976,6 +1552,15 @@ async function main() {
     daveAfterRemoval.data()?.friendshipsVersion !== 1
   ) {
     throw new Error('Removing friendship left an active Safety entitlement behind.');
+  }
+  await new Promise((resolve) => setTimeout(resolve, 750));
+  const daveResolvedAfterRevocation = await db
+    .collection('notifications')
+    .where('recipientUid', '==', dave.uid)
+    .where('kind', '==', 'safety_resolved')
+    .get();
+  if (daveResolvedAfterRevocation.size !== daveResolvedBeforeRevocation.size) {
+    throw new Error('Safety revocation was incorrectly reported as a safe arrival.');
   }
   console.log('OK removing friendship revokes the live Safety entitlement');
 
@@ -998,7 +1583,11 @@ async function main() {
       friendshipsVersion: 0,
       createdAt: blockTimestamp,
     });
-    blockBatch.set(db.doc(`publicProfiles/${person.uid}`), { ...profile, username, createdAt: blockTimestamp });
+    blockBatch.set(db.doc(`publicProfiles/${person.uid}`), {
+      ...profile,
+      username,
+      createdAt: blockTimestamp,
+    });
   });
   blockBatch.set(db.doc(`friendships/${friendshipId(frank.uid, gina.uid)}`), {
     participantUids: [frank.uid, gina.uid].sort(),
@@ -1051,14 +1640,26 @@ async function main() {
       expiresAt: blockExpiry,
       members: { [frank.uid]: true, [gina.uid]: true },
       locations: {
-        [gina.uid]: { lat: 52.5, lng: 13.4, status: 'onTheWay', updatedAt: now, expiresAt: blockExpiry },
+        [gina.uid]: {
+          lat: 52.5,
+          lng: 13.4,
+          status: 'onTheWay',
+          updatedAt: now,
+          expiresAt: blockExpiry,
+        },
       },
     },
     'journeys/block-hosted-by-gina': {
       expiresAt: blockExpiry,
       members: { [frank.uid]: true, [gina.uid]: true },
       locations: {
-        [frank.uid]: { lat: 52.5, lng: 13.4, status: 'onTheWay', updatedAt: now, expiresAt: blockExpiry },
+        [frank.uid]: {
+          lat: 52.5,
+          lng: 13.4,
+          status: 'onTheWay',
+          updatedAt: now,
+          expiresAt: blockExpiry,
+        },
       },
     },
   });
@@ -1119,7 +1720,9 @@ async function main() {
     frankAfterBlock.data()?.friendshipsVersion !== 1 ||
     ginaAfterBlock.data()?.friendshipsVersion !== 1
   ) {
-    throw new Error('Blocking left a friendship, shared Activity, chat, presence, or Journey entitlement behind.');
+    throw new Error(
+      'Blocking left a friendship, shared Activity, chat, presence, or Journey entitlement behind.',
+    );
   }
   console.log('OK blocking revokes every shared Activity and Journey entitlement');
 
@@ -1155,21 +1758,176 @@ async function main() {
   await realtimeDb.ref(`journeys/${eveActivityId}`).set({
     members: { [eve.uid]: true },
     locations: {
-      [eve.uid]: { lat: 52.5, lng: 13.4, status: 'onTheWay', updatedAt: now, expiresAt: now + 60 * 60 * 1000 },
+      [eve.uid]: {
+        lat: 52.5,
+        lng: 13.4,
+        status: 'onTheWay',
+        updatedAt: now,
+        expiresAt: now + 60 * 60 * 1000,
+      },
     },
   });
+  const evePushToken = 'ExponentPushToken[functions-deleted-account]';
+  await expectOk('account registers a token before deletion', () =>
+    callFunction(eve.token, 'registerPushToken', { token: evePushToken }),
+  );
   await expectOk('user deletes their own account', () =>
     callFunction(eve.token, 'deleteMyAccount', {}),
   );
-  const [deletedActivity, deletedJourneyMember, deletedJourneyLocation] = await Promise.all([
-    db.doc(`activities/${eveActivityId}`).get(),
-    realtimeDb.ref(`journeys/${eveActivityId}/members/${eve.uid}`).get(),
-    realtimeDb.ref(`journeys/${eveActivityId}/locations/${eve.uid}`).get(),
-  ]);
-  if (deletedActivity.exists || deletedJourneyMember.exists() || deletedJourneyLocation.exists()) {
-    throw new Error('Account deletion left the hosted activity or its live journey entry behind.');
+  const [deletedActivity, deletedJourneyMember, deletedJourneyLocation, deletedPushClaim] =
+    await Promise.all([
+      db.doc(`activities/${eveActivityId}`).get(),
+      realtimeDb.ref(`journeys/${eveActivityId}/members/${eve.uid}`).get(),
+      realtimeDb.ref(`journeys/${eveActivityId}/locations/${eve.uid}`).get(),
+      db.doc(`pushTokenOwners/${pushTokenClaimId(evePushToken)}`).get(),
+    ]);
+  if (
+    deletedActivity.exists ||
+    deletedJourneyMember.exists() ||
+    deletedJourneyLocation.exists() ||
+    deletedPushClaim.exists
+  ) {
+    throw new Error(
+      'Account deletion left Activity, live Journey, or push-token ownership behind.',
+    );
   }
-  console.log('OK account deletion also clears the live journey entry');
+  console.log('OK account deletion clears live journey data and push-token ownership');
+
+  const sharedPushToken = 'ExponentPushToken[functions-shared-device]';
+  await expectOk('first account registers a push token', () =>
+    callFunction(alice.token, 'registerPushToken', { token: sharedPushToken }),
+  );
+  await expectOk('second account takes over the same device push token', () =>
+    callFunction(bob.token, 'registerPushToken', { token: sharedPushToken }),
+  );
+  let [alicePushTokens, bobPushTokens] = await Promise.all([
+    db.doc(`users/${alice.uid}`).get(),
+    db.doc(`users/${bob.uid}`).get(),
+  ]);
+  const sharedTokenClaim = await db
+    .doc(`pushTokenOwners/${pushTokenClaimId(sharedPushToken)}`)
+    .get();
+  if (
+    (alicePushTokens.data()?.pushTokens ?? []).includes(sharedPushToken) ||
+    (bobPushTokens.data()?.pushTokens ?? []).filter((token) => token === sharedPushToken).length !==
+      1 ||
+    sharedTokenClaim.data()?.uid !== bob.uid
+  ) {
+    throw new Error('Push token takeover left the same device token on multiple accounts.');
+  }
+  await expectOk('re-registering the current push token is idempotent', () =>
+    callFunction(bob.token, 'registerPushToken', { token: sharedPushToken }),
+  );
+  const [bobAfterIdempotentRegistration, claimAfterIdempotentRegistration] = await Promise.all([
+    db.doc(`users/${bob.uid}`).get(),
+    db.doc(`pushTokenOwners/${pushTokenClaimId(sharedPushToken)}`).get(),
+  ]);
+  if (
+    bobAfterIdempotentRegistration.updateTime?.toMillis?.() !==
+      bobPushTokens.updateTime?.toMillis?.() ||
+    claimAfterIdempotentRegistration.updateTime?.toMillis?.() !==
+      sharedTokenClaim.updateTime?.toMillis?.()
+  ) {
+    throw new Error('Idempotent push registration caused avoidable Firestore writes.');
+  }
+  const cappedTokens = Array.from(
+    { length: 11 },
+    (_, index) => `ExponentPushToken[functions-device-${index}]`,
+  );
+  for (const token of cappedTokens) {
+    await expectOk('registers a bounded push token', () =>
+      callFunction(bob.token, 'registerPushToken', { token }),
+    );
+  }
+  bobPushTokens = await db.doc(`users/${bob.uid}`).get();
+  const finalPushTokens = bobPushTokens.data()?.pushTokens ?? [];
+  const evictedSharedClaim = await db
+    .doc(`pushTokenOwners/${pushTokenClaimId(sharedPushToken)}`)
+    .get();
+  if (
+    finalPushTokens.length !== 10 ||
+    new Set(finalPushTokens).size !== 10 ||
+    evictedSharedClaim.exists
+  ) {
+    throw new Error(
+      'Push token registration did not deduplicate and cap the account at ten tokens.',
+    );
+  }
+  console.log('OK push token ownership is unique, idempotent, and capped at ten');
+
+  const cleanupCutoff = admin.firestore.Timestamp.fromMillis(Date.now());
+  await db
+    .doc('presence/expired-presence')
+    .set({ expireAt: cleanupCutoff, audienceUids: [alice.uid] });
+  await db.doc('presence/current-presence').set({
+    expireAt: admin.firestore.Timestamp.fromMillis(Date.now() + 60_000),
+    audienceUids: [alice.uid],
+  });
+  await db.doc('activities/expired-surface-activity').set({
+    status: 'active',
+    visibleUntil: cleanupCutoff,
+  });
+  await db.doc('activities/current-surface-activity').set({
+    status: 'active',
+    visibleUntil: admin.firestore.Timestamp.fromMillis(Date.now() + 60_000),
+  });
+  await db.doc('groupOpenings/expired-opening').set({ expireAt: cleanupCutoff });
+  await db.doc('groupOpenings/current-opening').set({
+    expireAt: admin.firestore.Timestamp.fromMillis(Date.now() + 60_000),
+  });
+  await db.doc('spontaneousRoundInvites/expired-round-invite').set({ expireAt: cleanupCutoff });
+  await db.doc('spontaneousRoundInvites/current-round-invite').set({
+    expireAt: admin.firestore.Timestamp.fromMillis(Date.now() + 60_000),
+  });
+  await db.doc('spontaneousRoundMemberships/expired-round-member').set({ expireAt: cleanupCutoff });
+  await db.doc('spontaneousRoundMemberships/current-round-member').set({
+    expireAt: admin.firestore.Timestamp.fromMillis(Date.now() + 60_000),
+  });
+
+  const expiredSurfaceResult = await cleanupExpiredSurfaces(db, cleanupCutoff);
+  const [
+    expiredPresence,
+    currentPresence,
+    expiredActivity,
+    currentActivity,
+    expiredOpening,
+    currentOpening,
+    expiredRoundInvite,
+    currentRoundInvite,
+    expiredRoundMember,
+    currentRoundMember,
+  ] = await Promise.all([
+    db.doc('presence/expired-presence').get(),
+    db.doc('presence/current-presence').get(),
+    db.doc('activities/expired-surface-activity').get(),
+    db.doc('activities/current-surface-activity').get(),
+    db.doc('groupOpenings/expired-opening').get(),
+    db.doc('groupOpenings/current-opening').get(),
+    db.doc('spontaneousRoundInvites/expired-round-invite').get(),
+    db.doc('spontaneousRoundInvites/current-round-invite').get(),
+    db.doc('spontaneousRoundMemberships/expired-round-member').get(),
+    db.doc('spontaneousRoundMemberships/current-round-member').get(),
+  ]);
+  if (
+    expiredSurfaceResult.presence < 1 ||
+    expiredSurfaceResult.activities < 1 ||
+    expiredSurfaceResult.groupOpenings < 1 ||
+    expiredSurfaceResult.spontaneousRoundInvites < 1 ||
+    expiredSurfaceResult.spontaneousRoundMemberships < 1 ||
+    expiredPresence.exists ||
+    !currentPresence.exists ||
+    expiredActivity.data()?.status !== 'expired' ||
+    currentActivity.data()?.status !== 'active' ||
+    expiredOpening.exists ||
+    !currentOpening.exists ||
+    expiredRoundInvite.exists ||
+    !currentRoundInvite.exists ||
+    expiredRoundMember.exists ||
+    !currentRoundMember.exists
+  ) {
+    throw new Error('Expired public-surface data was not removed or sealed server-side.');
+  }
+  console.log('OK expired public-surface data is removed or sealed server-side');
 
   await app.delete();
 }

@@ -1,25 +1,56 @@
 import { httpsCallable } from '@react-native-firebase/functions';
 
-import type { SelectedPlace } from '@/features/activities';
 import { getFirebaseFunctions } from '@/shared/services/firebase';
 
-import type { PlaceSearchInput, PlaceService } from './placeService.types';
+import type {
+  PlaceResolveInput,
+  PlaceSearchInput,
+  PlaceService,
+  PlaceSuggestion,
+} from './placeService.types';
 
-interface SearchPlacesResponse {
-  places: SelectedPlace[];
+interface AutocompletePlacesResponse {
+  suggestions: PlaceSuggestion[];
+}
+
+interface ResolvePlaceResponse {
+  place: {
+    id: string;
+    latitude: number;
+    longitude: number;
+  };
 }
 
 export const firebasePlaceService: PlaceService = {
   async search(input: PlaceSearchInput) {
-    const search = httpsCallable<PlaceSearchInput, SearchPlacesResponse>(
+    const autocomplete = httpsCallable<PlaceSearchInput, AutocompletePlacesResponse>(
       getFirebaseFunctions(),
-      'searchPlaces',
+      'autocompletePlaces',
     );
-    const result = await search({
+    const result = await autocomplete({
       query: input.query.trim(),
+      sessionToken: input.sessionToken,
       center: input.center,
       radiusMeters: input.radiusMeters,
     });
-    return result.data.places ?? [];
+    return result.data.suggestions ?? [];
+  },
+
+  async resolve(input: PlaceResolveInput) {
+    const resolve = httpsCallable<PlaceResolveInput, ResolvePlaceResponse>(
+      getFirebaseFunctions(),
+      'resolvePlaceLocation',
+    );
+    const result = await resolve(input);
+    const place = result.data.place;
+    return {
+      id: place.id,
+      // `displayName` would promote the details request to the expensive Pro
+      // SKU. The selected Autocomplete label is already available locally.
+      name: input.name,
+      latitude: place.latitude,
+      longitude: place.longitude,
+      source: 'map',
+    };
   },
 };

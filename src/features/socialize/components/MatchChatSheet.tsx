@@ -1,15 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useState } from 'react';
-import {
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { SafetyActionsSheet } from '@/features/moderation';
@@ -18,7 +10,7 @@ import { SOCIALIZE_COLOR, useSocialize } from '../SocializeProvider';
 import type { DiscoverCard } from '../types/socialize.types';
 
 /**
- * Minimal mock chat for a Socialize match. Deliberately nudges toward a public
+ * Minimal chat surface for a Socialize match. Deliberately nudges toward a public
  * meeting place — later the "Treffpunkt vorschlagen" action opens the existing
  * location picker and can turn the meetup into a regular Together activity.
  */
@@ -117,7 +109,7 @@ export function MatchChatSheet({
             {/* Messages */}
             <ScrollView
               className="flex-1 px-5"
-              contentContainerStyle={{ paddingVertical: 14, gap: 8 }}
+              contentContainerStyle={{ paddingVertical: 16, gap: 8 }}
               keyboardShouldPersistTaps="handled"
             >
               {thread.length === 0 ? (

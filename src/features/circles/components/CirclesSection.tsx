@@ -4,6 +4,7 @@ import { Alert, Modal, Pressable, ScrollView, Text, TextInput, View } from 'reac
 
 import { useFriends, type FriendProfile } from '@/features/friends';
 import { AppButton, AppText } from '@/shared/components';
+import { AnimatedToggleIcon } from '@/shared/components/AnimatedToggleIcon';
 
 import { useCircles } from '../CirclesProvider';
 import type { CircleDoc } from '../services/circleService.types';
@@ -151,10 +152,13 @@ function CircleEditor({
                 >
                   <Avatar friend={friend} />
                   <Text className="flex-1 font-bold text-white">{friend.displayName}</Text>
-                  <Ionicons
-                    name={checked ? 'checkmark-circle' : 'ellipse-outline'}
+                  <AnimatedToggleIcon
+                    icon="checkmark-circle"
+                    outlineIcon="ellipse-outline"
+                    active={checked}
                     size={22}
-                    color={checked ? ACCENT : 'rgba(255,255,255,0.35)'}
+                    activeColor={ACCENT}
+                    inactiveColor="rgba(255,255,255,0.35)"
                   />
                 </Pressable>
               );

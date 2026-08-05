@@ -1,16 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import Animated, {
-  Easing,
   Extrapolation,
   interpolate,
   useAnimatedProps,
   useAnimatedStyle,
   useDerivedValue,
-  useReducedMotion,
-  useSharedValue,
-  withTiming,
   type SharedValue,
 } from 'react-native-reanimated';
 import Svg, { Rect } from 'react-native-svg';
@@ -18,46 +13,51 @@ import Svg, { Rect } from 'react-native-svg';
 import type { ActivityCategory, ActivityMode } from '../types/map.types';
 import { categoryMeta } from '../utils/activityCategories';
 import {
-  DETAIL_PROGRESS,
   quadCenters,
   rowCenters,
   type FacePoint,
-  type MapMarkerDetailLevel,
   type MarkerFace,
 } from '../utils/markerDetailLevel';
 import { colorWithAlpha, markerModeStyles } from '../utils/markerStyles';
 import { MarkerImage } from './markerCapture';
 
-import { ACTIVITY_MARKER_CAPTURE_SIZE } from './activityMarkerLayout';
+import {
+  ACTIVITY_MARKER_CAPTURE_HEIGHT,
+  ACTIVITY_MARKER_CAPTURE_WIDTH,
+} from './activityMarkerLayout';
+
+import { TEXT_FIXED } from '@/shared/theme';
 
 const AnimatedRect = Animated.createAnimatedComponent(Rect);
 
 const INK = '#14211C';
 const WARM_SURFACE = '#EFEAE1';
-const CX = ACTIVITY_MARKER_CAPTURE_SIZE / 2;
+const CX = ACTIVITY_MARKER_CAPTURE_WIDTH / 2;
 
 // Constant height: the marker only ever grows sideways as the map zooms in.
 const SHELL_H = 48;
 const SHELL_TOP = 6;
 const CY = SHELL_TOP + SHELL_H / 2;
-const SHELL_RADIUS = SHELL_H / 2; // pill ends; a circle while width ≈ height
+const GROUP_SQUIRCLE_RADIUS = 16;
+const FACE_SQUIRCLE_RADIUS = 13;
 
-// Mode ring / countdown geometry. The stadium (rounded-rect) stroke is a clean
-// circle while width ≈ height and a capsule border once the shell unfolds, so a
-// single primitive draws the ring at every zoom level.
+// Mode ring / countdown geometry. One rounded rectangle follows the same
+// squircle radius at every width, including the fully unfolded row.
 const RING_STROKE = 2.5;
 const RING_INNER_H = SHELL_H - RING_STROKE;
 
-const GROUP_FACE_CITY = 20;
-const GROUP_FACE_STREET = 28;
-const SOLO_FACE_CITY = 36;
-const SOLO_FACE_STREET = 42;
-const ROW_STEP = 20; // overlap of the unfolded row
-const MORPH_MS = 300;
+const GROUP_FACE_CITY = 16;
+const GROUP_FACE_NEIGHBORHOOD = 18;
+const GROUP_FACE_STREET = 42;
+const SOLO_FACE_CITY = 43;
+const SOLO_FACE_NEIGHBORHOOD = 43;
+const SOLO_FACE_STREET = 43;
+const ROW_STEP = 32; // restrained 10 px overlap at the unfolded 42 px size
 
 /** Shell width per detail progress [city, neighborhood, street]. */
 function shellWidths(faceCount: number, solo: boolean): [number, number, number] {
-  if (solo) return [46, 50, 54];
+  // 43 px is exactly the 48 px shell's inner diameter after the 2.5 px ring.
+  if (solo) return [SHELL_H, SHELL_H, SHELL_H];
   const streetSpan = GROUP_FACE_STREET + Math.max(0, faceCount - 1) * ROW_STEP + 10;
   return [50, 54, streetSpan];
 }
@@ -67,7 +67,9 @@ export interface ActivityMarkerChromeProps {
   faces: MarkerFace[];
   /** Total participants — drives nothing visual directly; faces already encode +N. */
   count: number;
-  detailLevel: MapMarkerDetailLevel;
+  /** Live morph driver in [0,1]: 0 = compact quad, 1 = unfolded row. Fed by the
+   * map's zoom so the marker morphs during the pinch, not only after it ends. */
+  progress: SharedValue<number>;
   category?: ActivityCategory;
   unreadCount?: number;
   /** Remaining share (0–1) of a running `now` activity → depleting mode ring. */
@@ -75,24 +77,23 @@ export interface ActivityMarkerChromeProps {
   selected?: boolean;
   /** Activity title (concrete activity) or friend name (presence pin). */
   title?: string;
-  /** Show the title even at city zoom (selected / joined / now get priority). */
+  /** Show the title even at city zoom (selected / joined get priority). */
   titlePriority?: boolean;
   journeyUnderwayCount?: number;
 }
 
 /**
  * Zoom-aware activity marker. A constant-height shell morphs from a compact
- * circle (2×2 quad of faces) to a wide capsule (a single overlapping row) as the
- * map zooms in. The animation runs on the UI thread and is captured onto the
- * native marker during LiveActivityMapMarker's tracking window, so there is no
- * per-frame work once a level settles. Never more than four faces; a fifth+
+ * squircle (2×2 quad of faces) to a wide squircle (a single overlapping row) as the
+ * map zooms in. A lightweight overlay owns the live gesture; once it settles,
+ * MapCanvas hands back to a cached PNG. Never more than four faces; a fifth+
  * collapses into a "+N" chip handed in via `faces`.
  */
 export function ActivityMarkerChrome({
   mode,
   faces,
   count,
-  detailLevel,
+  progress,
   category,
   unreadCount = 0,
   remainingFraction,
@@ -101,137 +102,108 @@ export function ActivityMarkerChrome({
   titlePriority = false,
   journeyUnderwayCount = 0,
 }: ActivityMarkerChromeProps) {
-  const reducedMotion = useReducedMotion();
   const modeStyle = markerModeStyles[mode];
   const solo = count <= 1;
   const faceCount = Math.max(1, faces.length);
   const hasCountdown = remainingFraction != null;
-
-  const progress = useSharedValue(DETAIL_PROGRESS[detailLevel]);
-  useEffect(() => {
-    progress.value = withTiming(DETAIL_PROGRESS[detailLevel], {
-      duration: reducedMotion ? 0 : MORPH_MS,
-      easing: Easing.out(Easing.cubic),
-    });
-  }, [detailLevel, progress, reducedMotion]);
+  const shellRadius = GROUP_SQUIRCLE_RADIUS;
 
   const widths = shellWidths(faceCount, solo);
   const grid = quadCenters(faceCount, CX, CY);
-  const row = rowCenters(
-    faceCount,
-    CX,
-    CY,
-    solo ? SOLO_FACE_STREET : GROUP_FACE_STREET,
-    ROW_STEP,
-  );
+  const row = rowCenters(faceCount, CX, CY, solo ? SOLO_FACE_STREET : GROUP_FACE_STREET, ROW_STEP);
 
   const shellW = useDerivedValue(() => interpolate(progress.value, [0, 0.5, 1], widths));
   const shellX = useDerivedValue(() => CX - shellW.value / 2);
 
-  // Corner radius morphs squircle (compact) → capsule ends (wide). Because the
-  // height is constant, a radius of SHELL_H/2 at the wide end rounds the caps
-  // fully into a pill, while the smaller compact radius reads as a squircle.
+  // Groups remain squircles at every width. Only a single-person marker is a
+  // true circle; widening a group must never silently morph it into a pill.
   const shellStyle = useAnimatedStyle(() => ({
     left: shellX.value,
     width: shellW.value,
-    borderRadius: interpolate(progress.value, [0, 0.5, 1], [16, 17, SHELL_RADIUS]),
+    borderRadius: shellRadius,
   }));
   const shadowStyle = useAnimatedStyle(() => ({
-    left: CX - (shellW.value * 0.68) / 2,
-    width: shellW.value * 0.68,
+    transform: [{ scaleX: shellW.value / widths[2] }],
   }));
   const glowStyle = useAnimatedStyle(() => ({
-    left: shellX.value - 5,
-    width: shellW.value + 10,
+    transform: [{ scaleX: (shellW.value + 10) / (widths[2] + 10) }],
   }));
-  const categoryStyle = useAnimatedStyle(() => ({ left: shellX.value - 4 }));
-  const unreadStyle = useAnimatedStyle(() => ({ left: shellX.value + shellW.value - 20 }));
+  const categoryStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: Math.max(0, shellX.value - 4) }],
+  }));
+  const unreadStyle = useAnimatedStyle(() => ({
+    transform: [
+      {
+        translateX: Math.min(ACTIVITY_MARKER_CAPTURE_WIDTH - 24, shellX.value + shellW.value - 20),
+      },
+    ],
+  }));
   const titleStyle = useAnimatedStyle(() => ({
     opacity: titlePriority
       ? 1
       : interpolate(progress.value, [0.28, 0.55], [0, 1], Extrapolation.CLAMP),
     transform: [
       {
-        translateY: interpolate(
-          progress.value,
-          [0.28, 0.55],
-          [-3, 0],
-          Extrapolation.CLAMP,
-        ),
+        translateY: interpolate(progress.value, [0.28, 0.55], [-3, 0], Extrapolation.CLAMP),
       },
     ],
   }));
 
-  const ringTrackProps = useAnimatedProps(() => {
-    const w = shellW.value - RING_STROKE;
-    const rr = Math.min(
-      RING_INNER_H / 2,
-      interpolate(progress.value, [0, 0.5, 1], [16, 17, SHELL_RADIUS]) - RING_STROKE / 2,
-    );
-    return { x: CX - w / 2, width: w, rx: rr, ry: rr };
-  });
-  const ringCountdownProps = useAnimatedProps(() => {
-    const w = shellW.value - RING_STROKE;
-    const h = RING_INNER_H;
-    const rr = Math.min(
-      h / 2,
-      interpolate(progress.value, [0, 0.5, 1], [16, 17, SHELL_RADIUS]) - RING_STROKE / 2,
-    );
-    // General rounded-rect perimeter (four corner quarter-circles = one circle).
-    const perimeter = 2 * Math.max(0, w - 2 * rr) + 2 * Math.max(0, h - 2 * rr) + 2 * Math.PI * rr;
-    const remaining = Math.max(0, Math.min(1, remainingFraction ?? 0));
-    return {
-      x: CX - w / 2,
-      width: w,
-      rx: rr,
-      ry: rr,
-      strokeDasharray: `${perimeter * remaining} ${perimeter}`,
-    };
-  });
-
-  const showTitle = Boolean(title) && (titlePriority || detailLevel !== 'city');
+  // Always mounted when a title exists; its opacity fades in with the zoom
+  // (titleStyle) so there is no discrete pop at a level boundary.
+  const showTitle = Boolean(title);
 
   return (
     <View collapsable={false} style={styles.root}>
-      <Animated.View style={[styles.shadow, shadowStyle]} pointerEvents="none" />
+      <Animated.View
+        style={[
+          styles.shadow,
+          {
+            left: CX - (widths[2] * 0.68) / 2,
+            width: widths[2] * 0.68,
+          },
+          shadowStyle,
+        ]}
+        pointerEvents="none"
+      />
       {selected ? (
         <Animated.View
           pointerEvents="none"
           style={[
             styles.glow,
+            {
+              borderRadius: GROUP_SQUIRCLE_RADIUS + 5,
+              left: CX - (widths[2] + 10) / 2,
+              width: widths[2] + 10,
+            },
             glowStyle,
             { backgroundColor: colorWithAlpha(modeStyle.color, 0.18) },
           ]}
         />
       ) : null}
 
-      <Animated.View pointerEvents="none" style={[styles.shell, shellStyle]} />
-      <Svg
+      <Animated.View
         pointerEvents="none"
-        style={styles.ring}
-        width={ACTIVITY_MARKER_CAPTURE_SIZE}
-        height={SHELL_TOP + SHELL_H + 2}
-      >
-        <AnimatedRect
-          y={SHELL_TOP + RING_STROKE / 2}
-          height={RING_INNER_H}
-          fill="none"
-          stroke={hasCountdown ? colorWithAlpha(modeStyle.color, 0.25) : modeStyle.color}
-          strokeWidth={selected ? 3 : RING_STROKE}
-          animatedProps={ringTrackProps}
+        style={[
+          styles.shell,
+          shellStyle,
+          hasCountdown
+            ? null
+            : {
+                borderColor: modeStyle.color,
+                borderWidth: selected ? 3 : RING_STROKE,
+              },
+        ]}
+      />
+      {hasCountdown ? (
+        <CountdownRing
+          accent={modeStyle.color}
+          cornerRadius={shellRadius}
+          remainingFraction={remainingFraction}
+          selected={selected}
+          width={shellW}
         />
-        {hasCountdown ? (
-          <AnimatedRect
-            y={SHELL_TOP + RING_STROKE / 2}
-            height={RING_INNER_H}
-            fill="none"
-            stroke={modeStyle.color}
-            strokeWidth={selected ? 3 : RING_STROKE}
-            strokeLinecap="round"
-            animatedProps={ringCountdownProps}
-          />
-        ) : null}
-      </Svg>
+      ) : null}
 
       {faces.map((face, index) => (
         <MorphFace
@@ -241,8 +213,10 @@ export function ActivityMarkerChrome({
           row={row[index] ?? row[row.length - 1]}
           progress={progress}
           sizeCity={solo ? SOLO_FACE_CITY : GROUP_FACE_CITY}
+          sizeNeighborhood={solo ? SOLO_FACE_NEIGHBORHOOD : GROUP_FACE_NEIGHBORHOOD}
           sizeStreet={solo ? SOLO_FACE_STREET : GROUP_FACE_STREET}
-          fontSize={solo ? 16 : 10}
+          fontSize={solo ? 18 : 20}
+          showBorder={!solo}
         />
       ))}
 
@@ -253,19 +227,28 @@ export function ActivityMarkerChrome({
       ) : null}
       {unreadCount > 0 ? (
         <Animated.View pointerEvents="none" style={[styles.unreadBadge, unreadStyle]}>
-          <Text style={styles.unreadText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
+          <Text style={styles.unreadText} {...TEXT_FIXED}>
+            {unreadCount > 99 ? '99+' : unreadCount}
+          </Text>
         </Animated.View>
       ) : null}
 
       {showTitle ? (
         <Animated.View pointerEvents="none" style={[styles.titleWrap, titleStyle]}>
           <View style={styles.titlePill}>
-            <Text numberOfLines={selected ? 2 : 1} ellipsizeMode="tail" style={styles.titleText}>
+            <Text
+              numberOfLines={selected ? 2 : 1}
+              ellipsizeMode="tail"
+              style={styles.titleText}
+              {...TEXT_FIXED}
+            >
               {title}
             </Text>
             {journeyUnderwayCount > 0 ? (
               <View style={styles.journeyPill}>
-                <Text style={styles.journeyCount}>{journeyUnderwayCount}</Text>
+                <Text style={styles.journeyCount} {...TEXT_FIXED}>
+                  {journeyUnderwayCount}
+                </Text>
                 <Ionicons name="car-outline" size={10} color="#ffffff" />
               </View>
             ) : null}
@@ -276,49 +259,142 @@ export function ActivityMarkerChrome({
   );
 }
 
+function CountdownRing({
+  accent,
+  cornerRadius,
+  remainingFraction,
+  selected,
+  width,
+}: {
+  accent: string;
+  cornerRadius: number;
+  remainingFraction: number;
+  selected: boolean;
+  width: SharedValue<number>;
+}) {
+  const ringTrackProps = useAnimatedProps(() => {
+    const w = width.value - RING_STROKE;
+    const rr = Math.min(RING_INNER_H / 2, cornerRadius - RING_STROKE / 2);
+    return { x: CX - w / 2, width: w, rx: rr, ry: rr };
+  });
+  const ringCountdownProps = useAnimatedProps(() => {
+    const w = width.value - RING_STROKE;
+    const h = RING_INNER_H;
+    const rr = Math.min(h / 2, cornerRadius - RING_STROKE / 2);
+    // General rounded-rect perimeter (four corner quarter-circles = one circle).
+    const perimeter = 2 * Math.max(0, w - 2 * rr) + 2 * Math.max(0, h - 2 * rr) + 2 * Math.PI * rr;
+    const remaining = Math.max(0, Math.min(1, remainingFraction));
+    return {
+      x: CX - w / 2,
+      width: w,
+      rx: rr,
+      ry: rr,
+      strokeDasharray: `${perimeter * remaining} ${perimeter}`,
+    };
+  });
+
+  return (
+    <Svg
+      pointerEvents="none"
+      style={styles.ring}
+      width={ACTIVITY_MARKER_CAPTURE_WIDTH}
+      height={SHELL_TOP + SHELL_H + 2}
+    >
+      <AnimatedRect
+        y={SHELL_TOP + RING_STROKE / 2}
+        height={RING_INNER_H}
+        fill="none"
+        stroke={colorWithAlpha(accent, 0.25)}
+        strokeWidth={selected ? 3 : RING_STROKE}
+        animatedProps={ringTrackProps}
+      />
+      <AnimatedRect
+        y={SHELL_TOP + RING_STROKE / 2}
+        height={RING_INNER_H}
+        fill="none"
+        stroke={accent}
+        strokeWidth={selected ? 3 : RING_STROKE}
+        strokeLinecap="round"
+        animatedProps={ringCountdownProps}
+      />
+    </Svg>
+  );
+}
+
 interface MorphFaceProps {
   face: MarkerFace;
   grid: FacePoint;
   row: FacePoint;
   progress: SharedValue<number>;
   sizeCity: number;
+  sizeNeighborhood: number;
   sizeStreet: number;
   fontSize: number;
+  showBorder: boolean;
 }
 
 /** One avatar that slides from its 2×2 grid cell to its row slot as we zoom in. */
-function MorphFace({ face, grid, row, progress, sizeCity, sizeStreet, fontSize }: MorphFaceProps) {
+function MorphFace({
+  face,
+  grid,
+  row,
+  progress,
+  sizeCity,
+  sizeNeighborhood,
+  sizeStreet,
+  fontSize,
+  showBorder,
+}: MorphFaceProps) {
   const style = useAnimatedStyle(() => {
     const rowMix = interpolate(progress.value, [0.5, 1], [0, 1], Extrapolation.CLAMP);
-    const size = interpolate(progress.value, [0, 1], [sizeCity, sizeStreet]);
+    const size = interpolate(progress.value, [0, 0.5, 1], [sizeCity, sizeNeighborhood, sizeStreet]);
     const x = grid.x + (row.x - grid.x) * rowMix;
     const y = grid.y + (row.y - grid.y) * rowMix;
     return {
-      left: x - size / 2,
-      top: y - size / 2,
-      width: size,
-      height: size,
-      borderRadius: size / 2,
+      transform: [
+        { translateX: x - grid.x },
+        { translateY: y - grid.y },
+        { scale: size / sizeStreet },
+      ],
     };
   });
 
   return (
     <Animated.View
-      style={[styles.face, face.overflowLabel ? styles.overflowFace : null, style]}
+      style={[
+        styles.face,
+        {
+          borderRadius: FACE_SQUIRCLE_RADIUS,
+          borderWidth: showBorder ? 1.5 : 0,
+          height: sizeStreet,
+          left: grid.x - sizeStreet / 2,
+          top: grid.y - sizeStreet / 2,
+          width: sizeStreet,
+        },
+        face.overflowLabel ? styles.overflowFace : null,
+        style,
+      ]}
     >
       {face.overflowLabel ? (
-        <Text style={styles.overflowText}>{face.overflowLabel}</Text>
+        <Text style={[styles.overflowText, { fontSize }]} {...TEXT_FIXED}>
+          {face.overflowLabel}
+        </Text>
       ) : face.avatarUrl ? (
         <MarkerImage source={{ uri: face.avatarUrl }} style={styles.faceImage} />
       ) : (
-        <Text style={[styles.faceInitials, { fontSize }]}>{face.initials}</Text>
+        <Text style={[styles.faceInitials, { fontSize }]} {...TEXT_FIXED}>
+          {face.initials}
+        </Text>
       )}
     </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { height: ACTIVITY_MARKER_CAPTURE_SIZE, width: ACTIVITY_MARKER_CAPTURE_SIZE },
+  root: {
+    height: ACTIVITY_MARKER_CAPTURE_HEIGHT,
+    width: ACTIVITY_MARKER_CAPTURE_WIDTH,
+  },
   shadow: {
     backgroundColor: 'rgba(20,33,28,0.22)',
     borderRadius: 6,
@@ -328,7 +404,7 @@ const styles = StyleSheet.create({
     zIndex: 0,
   },
   glow: {
-    borderRadius: SHELL_RADIUS + 5,
+    borderRadius: GROUP_SQUIRCLE_RADIUS + 5,
     height: SHELL_H + 10,
     position: 'absolute',
     top: SHELL_TOP - 5,
@@ -336,7 +412,7 @@ const styles = StyleSheet.create({
   },
   shell: {
     backgroundColor: '#ffffff',
-    borderRadius: SHELL_RADIUS,
+    borderRadius: GROUP_SQUIRCLE_RADIUS,
     height: SHELL_H,
     position: 'absolute',
     top: SHELL_TOP,
@@ -370,6 +446,7 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     height: 24,
     justifyContent: 'center',
+    left: 0,
     position: 'absolute',
     top: SHELL_TOP - 4,
     width: 24,
@@ -383,6 +460,7 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     height: 24,
     justifyContent: 'center',
+    left: 0,
     minWidth: 24,
     paddingHorizontal: 5,
     position: 'absolute',

@@ -1,0 +1,47 @@
+{
+  "title": "Impressum",
+  "stand": "August 2026",
+  "sections": [
+    {
+      "title": "Angaben gemäß § 5 DDG",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "[Vor- und Nachname bzw. Unternehmen]",
+            "[Straße und Hausnummer]",
+            "[PLZ und Ort]",
+            "Deutschland"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Kontakt",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "E-Mail: [Kontakt-E-Mail-Adresse]"
+        }
+      ]
+    },
+    {
+      "title": "Verantwortlich für den Inhalt",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "[Vor- und Nachname], Anschrift wie oben."
+        }
+      ]
+    },
+    {
+      "title": "Verbraucherstreitbeilegung",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Wir sind nicht bereit und nicht verpflichtet, an Streitbeilegungsverfahren vor einer Verbraucherschlichtungsstelle teilzunehmen."
+        }
+      ]
+    }
+  ]
+}

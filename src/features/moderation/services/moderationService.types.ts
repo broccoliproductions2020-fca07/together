@@ -4,7 +4,7 @@ export interface ModerationActor {
   uid: string;
 }
 
-/** Display data for a blocked user (from publicProfiles in firebase mode). */
+/** Display data for a blocked user from publicProfiles. */
 export interface BlockedProfile {
   uid: string;
   displayName: string;

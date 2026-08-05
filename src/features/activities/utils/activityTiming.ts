@@ -1,4 +1,4 @@
-import type { ActivityMode } from '@/features/map/types/map.types';
+import type { ActivityMode } from '@/domain/activity';
 
 const MINUTE_MS = 60 * 1000;
 const HOUR_MINUTES = 60;

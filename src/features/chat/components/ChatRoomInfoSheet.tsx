@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 
 import { useAuth } from '@/features/auth';
+import { AnimatedToggleIcon } from '@/shared/components/AnimatedToggleIcon';
 import type { RoomMemberProfile } from '../services/chatService.types';
 import { useActivityChat } from '../useActivityChat';
 import { useThemeColors } from '@/features/theme';
@@ -199,7 +200,7 @@ export function ChatRoomInfoSheet({
               numberOfLines={1}
             >
               {view.kind === 'profile'
-                ? selectedProfile?.displayName ?? 'Profil'
+                ? (selectedProfile?.displayName ?? 'Profil')
                 : isGroup
                   ? 'Planungs-Info'
                   : 'Chat-Info'}
@@ -217,7 +218,7 @@ export function ChatRoomInfoSheet({
           <ScrollView
             className="mt-4"
             keyboardShouldPersistTaps="handled"
-            contentContainerStyle={{ gap: 14, paddingBottom: 10 }}
+            contentContainerStyle={{ gap: 16, paddingBottom: 12 }}
           >
             {view.kind === 'members' ? (
               <>
@@ -319,10 +320,12 @@ export function ChatRoomInfoSheet({
                       opacity: busy ? 0.6 : 1,
                     }}
                   >
-                    <Ionicons
-                      name={room?.joinable ? 'radio' : 'radio-outline'}
+                    <AnimatedToggleIcon
+                      icon="radio"
+                      active={Boolean(room?.joinable)}
                       size={19}
-                      color={room?.joinable ? ACCENT : colors.mutedForeground}
+                      activeColor={ACCENT}
+                      inactiveColor={colors.mutedForeground}
                     />
                     <View className="flex-1">
                       <Text className="text-sm font-semibold text-foreground">
@@ -417,7 +420,7 @@ export function ChatRoomInfoSheet({
                 ) : null}
 
                 {/* Leave — planning-round members only. If the last admin leaves, the
-                    longest-standing member inherits admin (server + mock). */}
+                    server promotes the longest-standing remaining member. */}
                 {isGroup && room?.memberIds.includes(myUid) ? (
                   <Pressable
                     accessibilityRole="button"
@@ -449,10 +452,7 @@ export function ChatRoomInfoSheet({
                     }}
                   >
                     <Ionicons name="exit-outline" size={19} color={colors.destructive} />
-                    <Text
-                      className="text-base font-semibold"
-                      style={{ color: colors.destructive }}
-                    >
+                    <Text className="text-base font-semibold" style={{ color: colors.destructive }}>
                       Planung verlassen
                     </Text>
                   </Pressable>

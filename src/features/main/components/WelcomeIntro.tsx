@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
+import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Modal, Pressable, Text, View } from 'react-native';
 import Animated, { FadeInDown, useReducedMotion } from 'react-native-reanimated';
@@ -118,18 +119,25 @@ export function WelcomeIntro() {
 
         <View className="mt-9 gap-5">
           <ValueRow
+            icon="people-outline"
+            tint={COLORS.open}
+            title="Freunde"
+            text="Together lebt von deinen Leuten — nur bestätigte Freunde sehen dich."
+            delay={120}
+          />
+          <ValueRow
             icon="map-outline"
             tint={COLORS.now}
             title="Karte"
             text="Sieh, welche Freunde jetzt oder bald etwas vorhaben — und sei mit einem Tap dabei."
-            delay={120}
+            delay={200}
           />
           <ValueRow
             icon="calendar-outline"
             tint={COLORS.soon}
             title="Kalender"
             text="Alle gemeinsamen Pläne in einer Agenda — von heute bis in ein paar Wochen."
-            delay={200}
+            delay={280}
           />
         </View>
 
@@ -139,11 +147,22 @@ export function WelcomeIntro() {
         >
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Los geht's"
+            accessibilityLabel="Zuerst Freunde hinzufügen"
             className="min-h-[54px] items-center justify-center rounded-2xl bg-white active:opacity-90"
+            onPress={() => {
+              dismiss();
+              router.push('/friends');
+            }}
+          >
+            <Text className="text-base font-bold text-[#0E1116]">Freunde hinzufügen</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Erst mal umsehen"
+            className="mt-2 min-h-[44px] items-center justify-center rounded-2xl active:opacity-80"
             onPress={dismiss}
           >
-            <Text className="text-base font-bold text-[#0E1116]">{"Los geht's"}</Text>
+            <Text className="text-sm font-semibold text-white/60">Erst mal umsehen</Text>
           </Pressable>
           <Text className="mt-3 text-center text-xs text-white/35">
             Privat · Nur deine Gruppen · Kein Feed

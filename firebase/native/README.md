@@ -1,18 +1,25 @@
-# Native Firebase configuration
+# Native Firebase configuration files
 
-React Native Firebase needs one platform identity file per native app. Download both from
-Firebase Console → Project settings → Your apps, then place them here **without renaming**:
+`app.config.js` selects the native Firebase identity from `APP_VARIANT`:
 
-- `google-services.json` for Android (`com.ossabossa.together`)
-- `GoogleService-Info.plist` for iOS (`com.ossabossa.together`)
+| Variant | Folder | Android package | iOS bundle id | Firebase target |
+| --- | --- | --- | --- | --- |
+| `development` | `dev/` | `com.broccolistudio.together.dev` | `com.broccolistudio.together.dev` | Local Emulator Suite at runtime |
+| `staging` | `staging/` | `com.broccolistudio.together.staging` | `com.broccolistudio.together.staging` | Firebase development project |
+| `production` | `prod/` | `com.broccolistudio.together` | `com.broccolistudio.together` | Firebase production project |
 
-They are ignored by Git. `app.config.js` enables the native Firebase config plugins only when
-both files exist, so mock-only builds remain offline and do not need Firebase configuration.
+Each folder needs these untracked Firebase Console downloads without renaming:
 
-For a cloud release also set `EXPO_PUBLIC_FIREBASE_APP_CHECK_ENABLED=true` and configure App
-Attest with DeviceCheck fallback on iOS plus Play Integrity on Android in Firebase App Check.
-Enable the **App Attest** capability for the iOS App ID in the Apple Developer portal; the required
-production entitlement is already declared in `app.json`. Internal/dev builds may instead use a
-registered App Check debug token through `EXPO_PUBLIC_FIREBASE_APP_CHECK_DEBUG_TOKEN` — never put
-that token in a production release environment.
-Do not enforce App Check in Firebase Console until a real native build has been verified.
+```text
+google-services.json
+GoogleService-Info.plist
+```
+
+For EAS staging and production builds, provide the same files as the secret file
+variables `GOOGLE_SERVICES_JSON` and `GOOGLE_SERVICE_INFO_PLIST`. Empty values
+are ignored; missing configuration fails the build rather than falling back to
+another project.
+
+Maps SDK keys come from the build environment and must be restricted by Android
+package/signing certificate or iOS bundle id. Never commit keys or Firebase
+service files.

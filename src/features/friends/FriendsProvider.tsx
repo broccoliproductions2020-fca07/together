@@ -10,7 +10,6 @@ import {
 } from 'react';
 
 import { useAuth } from '@/features/auth';
-import { BACKEND } from '@/shared/services/firebase';
 
 import { friendService } from './services/friendService';
 import { loadCachedFriendships, saveCachedFriendships } from './services/friendshipCache';
@@ -31,11 +30,15 @@ interface FriendsContextValue {
   outgoingRequests: FriendRequest[];
   closeFriendUids: string[];
   closeFriends: FriendProfile[];
+  /** Preselected Heimweg audience — see FriendSettings.heimwegGroupUids. */
+  heimwegGroupUids: string[];
+  heimwegGroup: FriendProfile[];
   /** Profile details are intentionally always visible to accepted friends only. */
   profileVisibleToFriendsOnly: true;
   friendRequestPolicy: FriendRequestPolicy;
   /** Whether the 1 h-before "Anreise teilen?" reminder is sent. Absent = on. */
   journeyRemindersEnabled: boolean;
+  notificationsSeenAt: number;
   sendFriendRequest: (username: string) => Promise<SendFriendRequestResult>;
   sendActivityFriendRequest: (
     targetUid: string,
@@ -44,6 +47,7 @@ interface FriendsContextValue {
   respondToFriendRequest: (friendshipId: string, accept: boolean) => Promise<void>;
   removeFriend: (uid: string) => Promise<void>;
   toggleCloseFriend: (uid: string) => Promise<void>;
+  setHeimwegGroup: (uids: string[]) => Promise<void>;
   setFriendRequestPolicy: (policy: FriendRequestPolicy) => Promise<void>;
   setJourneyRemindersEnabled: (enabled: boolean) => Promise<void>;
 }
@@ -72,9 +76,11 @@ export function FriendsProvider({ children }: { children: ReactNode }) {
   );
   const [relationships, setRelationships] = useState<FriendshipDoc[]>([]);
   const [closeFriendUids, setCloseFriendUids] = useState<string[]>([]);
+  const [heimwegGroupUids, setHeimwegGroupUids] = useState<string[]>([]);
   const [friendRequestPolicy, setFriendRequestPolicyState] =
     useState<FriendRequestPolicy>('anyone');
   const [journeyRemindersEnabled, setJourneyRemindersEnabledState] = useState(true);
+  const [notificationsSeenAt, setNotificationsSeenAt] = useState(0);
   const [friendshipsVersion, setFriendshipsVersion] = useState(0);
   const [friendshipsHydrated, setFriendshipsHydrated] = useState(false);
   const cacheVersion = useRef<number | null>(null);
@@ -84,7 +90,7 @@ export function FriendsProvider({ children }: { children: ReactNode }) {
     (next: FriendshipDoc[], version: number) => {
       setRelationships(next);
       cacheVersion.current = version;
-      if (BACKEND === 'firebase') void saveCachedFriendships(actor.uid, version, next);
+      void saveCachedFriendships(actor.uid, version, next);
     },
     [actor.uid],
   );
@@ -111,34 +117,29 @@ export function FriendsProvider({ children }: { children: ReactNode }) {
     setRelationships([]);
     cacheVersion.current = null;
     setFriendshipsHydrated(false);
-    if (BACKEND === 'firebase') {
-      void loadCachedFriendships(actor.uid).then((cached) => {
-        if (requestVersion !== friendshipRequestVersion.current) return;
-        if (cached) {
-          setRelationships(cached.relationships);
-          cacheVersion.current = cached.version;
-        }
-        setFriendshipsHydrated(true);
-      });
-      return;
-    }
-    void friendService.listFriendships(actor).then((next) => {
+    void loadCachedFriendships(actor.uid).then((cached) => {
       if (requestVersion !== friendshipRequestVersion.current) return;
-      setRelationships(next);
-      cacheVersion.current = 0;
+      if (cached) {
+        setRelationships(cached.relationships);
+        cacheVersion.current = cached.version;
+      }
       setFriendshipsHydrated(true);
     });
   }, [actor]);
 
   useEffect(() => {
     setCloseFriendUids([]);
+    setHeimwegGroupUids([]);
     setFriendRequestPolicyState('anyone');
     setJourneyRemindersEnabledState(true);
+    setNotificationsSeenAt(0);
     return friendService.subscribeSettings(actor, (settings) => {
       setCloseFriendUids(settings.closeFriendUids);
+      setHeimwegGroupUids(settings.heimwegGroupUids);
       setFriendRequestPolicyState(settings.friendRequestPolicy);
       setFriendshipsVersion(settings.friendshipsVersion);
       setJourneyRemindersEnabledState(settings.journeyRemindersEnabled);
+      setNotificationsSeenAt(settings.notificationsSeenAt);
     });
   }, [actor]);
 
@@ -175,6 +176,13 @@ export function FriendsProvider({ children }: { children: ReactNode }) {
   const closeFriends = useMemo(
     () => friends.filter((friend) => closeFriendUids.includes(friend.uid)),
     [friends, closeFriendUids],
+  );
+  // Filtering against the confirmed friend list is what makes the direct
+  // client write safe: a removed friend silently drops out of the group, and a
+  // forged uid can never appear as a selectable Heimweg recipient.
+  const heimwegGroup = useMemo(
+    () => friends.filter((friend) => heimwegGroupUids.includes(friend.uid)),
+    [friends, heimwegGroupUids],
   );
 
   const sendFriendRequest = useCallback(
@@ -218,6 +226,19 @@ export function FriendsProvider({ children }: { children: ReactNode }) {
     (uid: string) => friendService.setCloseFriend(actor, uid, !closeFriendUids.includes(uid)),
     [actor, closeFriendUids],
   );
+  const setHeimwegGroup = useCallback(
+    async (uids: string[]) => {
+      const previous = heimwegGroupUids;
+      setHeimwegGroupUids(uids); // optimistic — the listener confirms it
+      try {
+        await friendService.setHeimwegGroup(actor, uids);
+      } catch (error) {
+        setHeimwegGroupUids(previous);
+        throw error;
+      }
+    },
+    [actor, heimwegGroupUids],
+  );
   const setFriendRequestPolicy = useCallback(
     async (policy: FriendRequestPolicy) => {
       const previous = friendRequestPolicy;
@@ -253,14 +274,18 @@ export function FriendsProvider({ children }: { children: ReactNode }) {
       outgoingRequests,
       closeFriendUids,
       closeFriends,
+      heimwegGroupUids,
+      heimwegGroup,
       profileVisibleToFriendsOnly: true,
       friendRequestPolicy,
       journeyRemindersEnabled,
+      notificationsSeenAt,
       sendFriendRequest,
       sendActivityFriendRequest,
       respondToFriendRequest,
       removeFriend,
       toggleCloseFriend,
+      setHeimwegGroup,
       setFriendRequestPolicy,
       setJourneyRemindersEnabled,
     }),
@@ -271,13 +296,17 @@ export function FriendsProvider({ children }: { children: ReactNode }) {
       outgoingRequests,
       closeFriendUids,
       closeFriends,
+      heimwegGroupUids,
+      heimwegGroup,
       friendRequestPolicy,
       journeyRemindersEnabled,
+      notificationsSeenAt,
       sendFriendRequest,
       sendActivityFriendRequest,
       respondToFriendRequest,
       removeFriend,
       toggleCloseFriend,
+      setHeimwegGroup,
       setFriendRequestPolicy,
       setJourneyRemindersEnabled,
     ],

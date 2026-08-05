@@ -16,8 +16,8 @@ import {
   type JourneyParticipant,
 } from '@/features/journey';
 import { colorWithAlpha, markerModeStyles } from '@/features/map/utils/markerStyles';
-import { AnimatedPressable } from '@/features/overlay/components/AnimatedPressable';
 import { useThemeColors } from '@/features/theme';
+import { PressableScale } from '@/shared/components/PressableScale';
 
 import { ActivityHeader } from './ActivityHeader';
 import { MODE_COPY } from './constants';
@@ -40,7 +40,6 @@ function activityToJourneyContext(activity: ActivitySelection): JourneyActivityC
     title: activity.title,
     participants: activity.participants,
     targetCoordinate: activity.targetCoordinate,
-    targetPosition: activity.targetPosition,
     startsAt: activity.startsAt,
     endsAt: activity.endsAt,
   };
@@ -59,10 +58,11 @@ function JourneyFocusShortcut({
   if (!onFocus || underwayCount === 0) return null;
 
   return (
-    <AnimatedPressable
+    <PressableScale
       accessibilityRole="button"
       accessibilityLabel={`${underwayCount} unterwegs, Anreise auf Karte ansehen`}
       className="mt-4 min-h-12 flex-row items-center gap-3 rounded-2xl border px-3 active:opacity-80"
+      haptic={false}
       style={{
         backgroundColor: colorWithAlpha(accent, 0.1),
         borderColor: colorWithAlpha(accent, 0.22),
@@ -80,7 +80,7 @@ function JourneyFocusShortcut({
         Auf Karte
       </Text>
       <Ionicons name="chevron-forward" size={16} color={accent} />
-    </AnimatedPressable>
+    </PressableScale>
   );
 }
 

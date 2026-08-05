@@ -45,7 +45,7 @@ const GUARANTEES: GuaranteeSection[] = [
     icon: 'chatbubbles',
     title: 'Deine Nachrichten',
     lines: [
-      'Aktivitäten und ihre Chats löschen sich 24 Stunden nach dem Ende von selbst.',
+      'Aktivitäten-Chats löschen sich 12 Stunden nach dem Ende von selbst.',
       'Es entsteht kein dauerhaftes Archiv über dich.',
     ],
   },

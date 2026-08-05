@@ -11,6 +11,8 @@ const {
 
 const authPort = Number(process.env.TEST_AUTH_EMULATOR_PORT ?? 9099);
 const storagePort = Number(process.env.TEST_STORAGE_EMULATOR_PORT ?? 9198);
+process.env.FIREBASE_STORAGE_EMULATOR_HOST = `127.0.0.1:${storagePort}`;
+const admin = require('./firebase-admin-tools.cjs');
 const config = {
   apiKey: 'demo',
   authDomain: 'demo-together.local',
@@ -56,41 +58,52 @@ async function main() {
   const aUid = aCredential.user.uid;
   const bUid = bCredential.user.uid;
 
-  const validJpeg = { contentType: 'image/jpeg' };
   const small = bytes(1024);
-  const oversized = bytes(6 * 1024 * 1024);
-
-  await allowed('owner can upload own avatar', () =>
-    uploadBytes(ref(a.storage, `avatars/${aUid}.jpg`), small, validJpeg),
+  const adminApp = admin.initializeApp(
+    { projectId: config.projectId, storageBucket: config.storageBucket },
+    'storage-rules-seed',
   );
-  await allowed('owner can read own avatar', () => getBytes(ref(a.storage, `avatars/${aUid}.jpg`)));
+  const bucket = adminApp.storage().bucket();
+  const legacyPath = `avatars/${aUid}.jpg`;
+  const versionedPath = `avatars/${aUid}/0123456789abcdef0123456789abcdef.jpg`;
+  await Promise.all([
+    bucket.file(legacyPath).save(Buffer.from(small), { metadata: { contentType: 'image/jpeg' } }),
+    bucket
+      .file(versionedPath)
+      .save(Buffer.from(small), { metadata: { contentType: 'image/jpeg' } }),
+  ]);
+
+  await allowed('owner can read own legacy avatar', () => getBytes(ref(a.storage, legacyPath)));
+  await allowed('owner can read own versioned avatar', () =>
+    getBytes(ref(a.storage, versionedPath)),
+  );
   await denied("other user cannot read someone else's avatar", () =>
-    getBytes(ref(b.storage, `avatars/${aUid}.jpg`)),
+    getBytes(ref(b.storage, versionedPath)),
+  );
+  await denied('owner cannot directly upload an avatar', () =>
+    uploadBytes(ref(a.storage, versionedPath), small, { contentType: 'image/jpeg' }),
   );
   await denied("owner cannot upload under another uid's filename", () =>
-    uploadBytes(ref(a.storage, `avatars/${bUid}.jpg`), small, validJpeg),
-  );
-  await denied('oversized avatar (>5 MB) is rejected', () =>
-    uploadBytes(ref(a.storage, `avatars/${aUid}.jpg`), oversized, validJpeg),
-  );
-  await denied('wrong content type is rejected', () =>
-    uploadBytes(ref(a.storage, `avatars/${aUid}.jpg`), small, { contentType: 'image/png' }),
+    uploadBytes(ref(a.storage, `avatars/${bUid}/0123456789abcdef0123456789abcdef.jpg`), small, {
+      contentType: 'image/jpeg',
+    }),
   );
   await denied('path outside avatars/ is fully denied', () =>
-    uploadBytes(ref(a.storage, `profile-pics/${aUid}.jpg`), small, validJpeg),
+    uploadBytes(ref(a.storage, `profile-pics/${aUid}.jpg`), small, { contentType: 'image/jpeg' }),
   );
   await denied('unauthenticated cannot read an avatar', () =>
-    getBytes(ref(anon.storage, `avatars/${aUid}.jpg`)),
+    getBytes(ref(anon.storage, versionedPath)),
   );
   await denied('unauthenticated cannot upload an avatar', () =>
-    uploadBytes(ref(anon.storage, `avatars/${aUid}.jpg`), small, validJpeg),
+    uploadBytes(ref(anon.storage, versionedPath), small, { contentType: 'image/jpeg' }),
   );
-  await allowed('owner can delete own avatar', () => deleteObject(ref(a.storage, `avatars/${aUid}.jpg`)));
-  // Recreate it so the next case has something to deny a delete against.
-  await uploadBytes(ref(a.storage, `avatars/${aUid}.jpg`), small, validJpeg);
+  await denied('owner cannot directly delete an avatar', () =>
+    deleteObject(ref(a.storage, versionedPath)),
+  );
   await denied("other user cannot delete someone else's avatar", () =>
-    deleteObject(ref(b.storage, `avatars/${aUid}.jpg`)),
+    deleteObject(ref(b.storage, versionedPath)),
   );
+  await adminApp.delete();
 }
 
 main()

@@ -1,4 +1,5 @@
-import type { MapCoordinate, MarkerAvatar, MockMapPosition } from '@/features/map/types/map.types';
+import type { GeoCoordinate } from '@/domain/geo';
+import type { ParticipantPreview } from '@/domain/person';
 
 /**
  * `armed` is deliberately private: the user opted in, but no location has
@@ -9,21 +10,19 @@ export type JourneyStatus = 'armed' | 'underway' | 'arrived' | 'stopped';
 export interface JourneyActivityContext {
   id: string;
   title: string;
-  participants: MarkerAvatar[];
+  participants: ParticipantPreview[];
   /** Exact destination for the live journey stream. */
-  targetCoordinate?: MapCoordinate;
-  targetPosition?: MockMapPosition;
+  targetCoordinate?: GeoCoordinate;
   startsAt?: string;
   endsAt?: string;
 }
 
-export interface JourneyParticipant extends MarkerAvatar {
+export interface JourneyParticipant extends ParticipantPreview {
   status: Exclude<JourneyStatus, 'stopped'>;
   distanceKm: number;
   updatedAt: string;
   /** Exact live position. It is present only while this journey is active. */
-  coordinate?: MapCoordinate;
-  position?: MockMapPosition;
+  coordinate?: GeoCoordinate;
   isCurrentUser?: boolean;
 }
 
@@ -40,9 +39,8 @@ export interface UserJourneyRecord {
   detectionStartsAt?: string;
   /** Managed by the native background location task rather than a UI watcher. */
   backgroundManaged?: boolean;
-  targetCoordinate?: MapCoordinate;
-  targetPosition?: MockMapPosition;
-  currentCoordinate?: MapCoordinate;
+  targetCoordinate?: GeoCoordinate;
+  currentCoordinate?: GeoCoordinate;
   endsAt?: string;
 }
 

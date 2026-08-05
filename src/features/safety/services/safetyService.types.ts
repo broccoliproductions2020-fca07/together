@@ -15,8 +15,8 @@ export interface SafetySessionPatch {
 }
 
 /**
- * Seam for the Heimweg safety mode (docs/safety-mode.md). Mock = offline
- * in-memory; RTDB = live sessions under `heimwege/{uid}` with a fan-out index
+ * Service contract for the Heimweg safety mode. RTDB stores live sessions under
+ * `heimwege/{uid}` with a fan-out index
  * `heimwegeIndex/{companionUid}/{ownerUid}` so companions never need one
  * listener per friend. Deliberately NO onDisconnect cleanup: a dying app must
  * look like a data gap, not like a safely ended session.

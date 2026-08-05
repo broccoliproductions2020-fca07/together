@@ -8,6 +8,7 @@ export interface AgendaListProps {
   expandedPlanId: string | null;
   onTogglePlan: (planId: string) => void;
   onOpenChat: (plan: Plan) => void;
+  onEditActivity: (plan: Plan) => void;
   /** Called after layout with each section's y-offset within the scroll content. */
   onSectionLayout?: (key: string, y: number) => void;
 }
@@ -17,6 +18,7 @@ export function AgendaList({
   expandedPlanId,
   onTogglePlan,
   onOpenChat,
+  onEditActivity,
   onSectionLayout,
 }: AgendaListProps) {
   const reducedMotion = useReducedMotion();
@@ -37,6 +39,7 @@ export function AgendaList({
             expandedPlanId={expandedPlanId}
             onTogglePlan={onTogglePlan}
             onOpenChat={onOpenChat}
+            onEditActivity={onEditActivity}
           />
         </Animated.View>
       ))}

@@ -5,7 +5,7 @@ const DATABASE_PORT = process.env.TEST_DATABASE_EMULATOR_PORT ?? '9100';
 const AUTH_BASE = `http://127.0.0.1:${AUTH_PORT}/identitytoolkit.googleapis.com/v1`;
 const DB_BASE = `http://127.0.0.1:${DATABASE_PORT}`;
 process.env.FIREBASE_DATABASE_EMULATOR_HOST = `127.0.0.1:${DATABASE_PORT}`;
-const admin = require('../functions/node_modules/firebase-admin');
+const admin = require('./firebase-admin-tools.cjs');
 
 async function signInAnon() {
   const response = await fetch(`${AUTH_BASE}/accounts:signUp?key=demo-key`, {
@@ -178,6 +178,13 @@ async function main() {
       location: { lat: 52.5201, lng: 13.4001, at: Date.now() },
     }),
   );
+  await expectDenied(
+    'owner cannot add arbitrary Safety location fields',
+    dbRequest('PATCH', `/heimwege/${alice.uid}`, alice.token, {
+      updatedAt: Date.now() + 30_000,
+      location: { lat: 52.5202, lng: 13.4002, at: Date.now(), payload: 'blocked' },
+    }),
+  );
   const approvedJourneyLocation = {
     lat: 52.5208,
     lng: 13.4095,
@@ -187,7 +194,12 @@ async function main() {
   };
   await expectOk(
     'approved member can publish one journey location',
-    dbRequest('PUT', `/journeys/${activityId}/locations/${alice.uid}`, alice.token, approvedJourneyLocation),
+    dbRequest(
+      'PUT',
+      `/journeys/${activityId}/locations/${alice.uid}`,
+      alice.token,
+      approvedJourneyLocation,
+    ),
   );
   await expectDenied(
     'approved member cannot flood journey locations',
@@ -206,6 +218,14 @@ async function main() {
     }),
   );
   await expectDenied(
+    'approved member cannot add arbitrary Journey location fields',
+    dbRequest('PUT', `/journeys/${activityId}/locations/${alice.uid}`, alice.token, {
+      ...approvedJourneyLocation,
+      updatedAt: approvedJourneyLocation.updatedAt + 20_000,
+      payload: 'blocked',
+    }),
+  );
+  await expectDenied(
     'owner cannot bypass server-owned Safety status alerts',
     dbRequest('PATCH', `/heimwege/${alice.uid}`, alice.token, {
       status: 'orange',
@@ -214,6 +234,14 @@ async function main() {
   );
   const checkIn = { requestedAt: Date.now(), dueAt: Date.now() + 90_000 };
   await adminApp.database().ref(`heimwege/${alice.uid}/checkIn`).set(checkIn);
+  await expectDenied(
+    'owner cannot add arbitrary Safety check-in fields',
+    dbRequest('PUT', `/heimwege/${alice.uid}/checkIn`, alice.token, {
+      ...checkIn,
+      answeredAt: Date.now(),
+      payload: 'blocked',
+    }),
+  );
   await expectOk(
     'owner can answer the server-owned Safety check-in',
     dbRequest('PUT', `/heimwege/${alice.uid}/checkIn`, alice.token, {
@@ -250,7 +278,10 @@ async function main() {
     dbRequest('PUT', `/heimwegeIndex/${stranger.uid}/${alice.uid}`, alice.token, true),
   );
 
-  await adminApp.database().ref(`journeys/${activityId}/expiresAt`).set(Date.now() - 1_000);
+  await adminApp
+    .database()
+    .ref(`journeys/${activityId}/expiresAt`)
+    .set(Date.now() - 1_000);
   await expectDenied(
     'member cannot read an expired journey room',
     dbRequest('GET', `/journeys/${activityId}/locations`, bob.token),

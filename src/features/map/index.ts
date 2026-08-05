@@ -8,5 +8,4 @@ export type {
   MapSelection,
   MarkerAvatar,
   MarkerCluster,
-  MockMapPosition,
 } from './types/map.types';

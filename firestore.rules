@@ -26,11 +26,22 @@ service cloud.firestore {
     // Avatar URLs must point at OUR storage (or the local emulator) — a free
     // string would let any accepted friend plant a tracking pixel that leaks
     // the viewers' IP addresses to an arbitrary server.
-    function validAvatarUrl(url) {
-      return url is string
+    function validAvatarUrl(url, uid) {
+      return signedIn()
+        && url is string
         && url.size() <= 500
-        && (url.matches('https://firebasestorage[.]googleapis[.]com/v0/b/.*')
-            || url.matches('http://(127[.]0[.]0[.]1|localhost|10[.]0[.]2[.]2)(:[0-9]+)?/v0/b/.*'));
+        && (url.matches(
+              'https://firebasestorage[.]googleapis[.]com/v0/b/'
+                + request.auth.token.aud
+                + '[.](appspot[.]com|firebasestorage[.]app)/o/avatars%2F'
+                + uid + '(%2F[a-f0-9]{32})?[.]jpg[?].*'
+            )
+            || url.matches(
+              'http://(127[.]0[.]0[.]1|localhost|10[.]0[.]2[.]2)(:[0-9]+)?/v0/b/'
+                + request.auth.token.aud
+                + '[.](appspot[.]com|firebasestorage[.]app)/o/avatars%2F'
+                + uid + '(%2F[a-f0-9]{32})?[.]jpg[?].*'
+            ));
     }
 
     // Default: deny.
@@ -46,8 +57,8 @@ service cloud.firestore {
       function validUser(data) {
         return data.keys().hasOnly([
             'displayName', 'username', 'initials', 'avatarUrl', 'createdAt', 'pushTokens',
-            'closeFriendUids', 'profileVisibility', 'friendRequestPolicy',
-            'journeyRemindersEnabled', 'friendshipsVersion'
+            'closeFriendUids', 'heimwegGroupUids', 'profileVisibility', 'friendRequestPolicy',
+            'journeyRemindersEnabled', 'friendshipsVersion', 'notificationsSeenAt'
           ])
           && data.displayName is string
           && data.displayName.size() <= 50
@@ -62,9 +73,16 @@ service cloud.firestore {
           && (!('journeyRemindersEnabled' in data) || data.journeyRemindersEnabled is bool)
           && (!('friendshipsVersion' in data)
               || (data.friendshipsVersion is int && data.friendshipsVersion >= 0))
-          && (!('avatarUrl' in data) || validAvatarUrl(data.avatarUrl))
+          && (!('notificationsSeenAt' in data) || data.notificationsSeenAt is timestamp)
+          && (!('avatarUrl' in data) || validAvatarUrl(data.avatarUrl, uid))
           && (!('closeFriendUids' in data)
               || (data.closeFriendUids is list && data.closeFriendUids.size() <= 200))
+          // The Heimweg group is the preselected audience for "Sicher nach
+          // Hause". Capped far below closeFriendUids on purpose: a live
+          // location that goes to everyone helps nobody, because a request
+          // addressed to a crowd makes no single person feel responsible.
+          && (!('heimwegGroupUids' in data)
+              || (data.heimwegGroupUids is list && data.heimwegGroupUids.size() <= 20))
           // Old documents are supported until their next trusted profile write.
           && (!('profileVisibility' in data) || data.profileVisibility == 'friends')
           && (!('friendRequestPolicy' in data)
@@ -74,14 +92,22 @@ service cloud.firestore {
       allow read: if signedIn() && request.auth.uid == uid;
       allow create: if signedIn()
         && request.auth.uid == uid
-        && validUser(request.resource.data);
+        && validUser(request.resource.data)
+        && (!('notificationsSeenAt' in request.resource.data)
+            || request.resource.data.notificationsSeenAt == request.time);
       allow update: if signedIn()
         && request.auth.uid == uid
         && validUser(request.resource.data)
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'displayName', 'initials', 'avatarUrl', 'closeFriendUids'
-        ])
-        && request.resource.data.username == resource.data.username;
+        && request.resource.data.username == resource.data.username
+        // Profile, avatar, close-friend and Heimweg changes all go through
+        // trusted callables. That is where upload ownership and profile-change
+        // rate limits are enforced; allowing a direct document update here
+        // would bypass both protections.
+        && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['notificationsSeenAt'])
+        && request.resource.data.notificationsSeenAt == request.time
+        && (!('notificationsSeenAt' in resource.data)
+            || request.resource.data.notificationsSeenAt > resource.data.notificationsSeenAt);
       allow delete: if false;
     }
 
@@ -93,7 +119,7 @@ service cloud.firestore {
           && data.displayName is string && data.displayName.size() <= 50
           && data.username is string && data.username.size() <= 30
           && data.initials is string && data.initials.size() <= 8
-          && (!('avatarUrl' in data) || validAvatarUrl(data.avatarUrl))
+          && (!('avatarUrl' in data) || validAvatarUrl(data.avatarUrl, uid))
           && data.createdAt is timestamp;
       }
 
@@ -106,13 +132,7 @@ service cloud.firestore {
       // Unlike displayName/initials/avatarUrl, username and createdAt must
       // stay fixed after creation — username has its own claim transaction,
       // and createdAt is an identity fact, not an editable profile field.
-      allow update: if signedIn()
-        && request.auth.uid == uid
-        && validPublicProfile(request.resource.data)
-        && request.resource.data.username == resource.data.username
-        && request.resource.data.createdAt == resource.data.createdAt
-        && request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['displayName', 'initials', 'avatarUrl']);
+      allow update: if false;
       allow delete: if false;
     }
 
@@ -140,13 +160,10 @@ service cloud.firestore {
           && data.createdAt is timestamp && data.updatedAt is timestamp;
       }
       allow read: if signedIn() && request.auth.uid == uid;
-      // Creation starts empty. Member changes are callable-only so the server
-      // can prove every uid is an accepted direct friend of the owner.
-      allow create: if signedIn() && request.auth.uid == uid
-        && validPrivateCircle(request.resource.data)
-        && request.resource.data.friendUids.size() == 0;
-      allow update: if false;
-      allow delete: if signedIn() && request.auth.uid == uid;
+      // All mutations run through bounded callables. Rules alone cannot cap a
+      // subcollection's document count, while the callable enforces the
+      // product's 30-Circle account maximum.
+      allow create, update, delete: if false;
     }
 
     // Legacy shared Circle docs are no longer used. Their client access is
@@ -192,7 +209,7 @@ service cloud.firestore {
             'hostId', 'mode', 'title', 'note', 'audienceUids', 'circleIds',
             'startsAt', 'endsAt', 'visibleUntil', 'expireAt', 'place', 'maxParticipants',
             'category', 'participants', 'participantUids', 'status', 'createdAt',
-            'journeyReminderSentAt', 'journeyUnderwayCount'
+            'journeyReminderSentAt', 'journeyUnderwayCount', 'guestInvitesEnabled'
           ])
           && data.hostId is string
           && data.mode in ['open', 'soon', 'now']
@@ -215,6 +232,7 @@ service cloud.firestore {
           && data.visibleUntil is timestamp
           && data.expireAt is timestamp
           && (!('journeyReminderSentAt' in data) || data.journeyReminderSentAt is timestamp)
+          && (!('guestInvitesEnabled' in data) || data.guestInvitesEnabled == true)
           && (!('journeyUnderwayCount' in data)
               || (data.journeyUnderwayCount is int
                   && data.journeyUnderwayCount >= 0 && data.journeyUnderwayCount <= 50))
@@ -234,13 +252,18 @@ service cloud.firestore {
             data.place is map
             && data.place.keys().hasOnly(['label', 'latitude', 'longitude', 'visibility'])
             && data.place.label is string && data.place.label.size() <= 200
-            && data.place.visibility in ['pin', 'none']
-            && (!('latitude' in data.place) ||
-                (data.place.latitude is number && data.place.latitude >= -90
-                 && data.place.latitude <= 90))
-            && (!('longitude' in data.place) ||
-                (data.place.longitude is number && data.place.longitude >= -180
-                 && data.place.longitude <= 180))
+            && (
+              (data.place.visibility == 'pin'
+               && 'latitude' in data.place && 'longitude' in data.place
+               && data.place.latitude is number && data.place.latitude >= -90
+               && data.place.latitude <= 90
+               && data.place.longitude is number && data.place.longitude >= -180
+               && data.place.longitude <= 180)
+              ||
+              (data.place.visibility == 'none'
+               && !('latitude' in data.place)
+               && !('longitude' in data.place))
+            )
           ));
       }
 
@@ -304,10 +327,9 @@ service cloud.firestore {
           );
       }
 
-      // Provable-for-lists (see activities read rule): privacy boundary only,
-      // expiry is handled by query filters + TTL.
       allow read: if signedIn()
-        && request.auth.uid in resource.data.audienceUids;
+        && request.auth.uid in resource.data.audienceUids
+        && resource.data.expireAt > request.time;
       // Presence is published through a callable so the server derives the
       // audience from accepted direct friendships. Clients may only clear their
       // own presence immediately.
@@ -323,43 +345,33 @@ service cloud.firestore {
     match /groupOpenings/{roomId} {
       // Provable-for-lists (see activities read rule).
       allow read: if signedIn()
-        && request.auth.uid in resource.data.audienceUids;
+        && request.auth.uid in resource.data.audienceUids
+        && resource.data.status == 'active'
+        && resource.data.expireAt > request.time;
       allow create, update, delete: if false; // setGroupJoinable callable only
     }
 
-    // ---------- notifications/{notificationId} ----------
-    // Notification documents are server-created. Clients can only read their
-    // own notifications and advance their own read cursor.
-    match /notifications/{notificationId} {
-      function validNotification(data) {
-        // Must list EVERY server-created kind: the client's readAt update
-        // validates the whole document, so a kind missing here makes that
-        // notification permanently unmarkable as read.
-        return data.recipientUid is string
-          && data.kind in [
-            'activity_joined', 'activity_cancelled',
-            'chat_message', 'circle_invite', 'journey_reminder', 'system',
-            'safety_request', 'safety_confirmed', 'safety_unavailable',
-            'safety_unwell', 'safety_emergency', 'safety_alert_seen',
-            'safety_resolved', 'safety_timed_out'
-          ]
-          && data.title is string && data.title.size() <= 100
-          && data.body is string && data.body.size() <= 500
-          && data.createdAt is timestamp
-          && data.expireAt is timestamp
-          && data.expireAt > request.time
-          && (!('readAt' in data) || data.readAt is timestamp);
-      }
+    // ---------- spontaneousRoundInvites / spontaneousRoundMemberships ----------
+    // These are server-only race guards. An invitation reaches its intended
+    // recipient through a private notification; clients never list or probe
+    // pending invitees or another person's active-round state.
+    match /spontaneousRoundInvites/{inviteId} {
+      allow read, write: if false;
+    }
 
+    match /spontaneousRoundMemberships/{uid} {
+      allow read, write: if false;
+    }
+
+    // ---------- notifications/{notificationId} ----------
+    // Notification documents are immutable server projections. The account's
+    // monotonic users/{uid}.notificationsSeenAt cursor records what was seen.
+    match /notifications/{notificationId} {
       // Provable-for-lists (see activities read rule).
       allow read: if signedIn()
-        && resource.data.recipientUid == request.auth.uid;
-      allow create: if false;
-      allow update: if signedIn()
         && resource.data.recipientUid == request.auth.uid
-        && validNotification(request.resource.data)
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readAt']);
-      allow delete: if false;
+        && resource.data.expireAt > request.time;
+      allow create, update, delete: if false;
     }
 
     // ---------- chats/{roomId} ----------
@@ -367,11 +379,13 @@ service cloud.firestore {
     match /chats/{roomId} {
       function validRoom(data) {
         return data.keys().hasOnly([
-            'type', 'title', 'vibe', 'memberIds', 'adminUids', 'joinable',
-            'lastMessage', 'messageCount', 'readCount', 'expireAt', 'createdAt'
+            'type', 'title', 'vibe', 'creatorUid', 'memberIds', 'adminUids', 'joinable',
+            'roundStatus', 'lastMessage', 'lastPushAt', 'messageCount', 'readCount', 'expireAt', 'createdAt'
           ])
           && (!('joinable' in data) || data.joinable is bool)
+          && (!('roundStatus' in data) || data.roundStatus == 'forming')
           && data.type in ['activity', 'group']
+          && (!('creatorUid' in data) || data.creatorUid is string)
           && data.memberIds is list
           && data.memberIds.size() >= 1 && data.memberIds.size() <= 50
           && (!('adminUids' in data)
@@ -381,6 +395,7 @@ service cloud.firestore {
           && data.expireAt > request.time
           && data.messageCount is int && data.messageCount >= 0
           && data.readCount is map && data.readCount.keys().size() <= 50
+          && (!('lastPushAt' in data) || data.lastPushAt is timestamp)
           && (!('title' in data) || (data.title is string && data.title.size() <= 80))
           && (!('vibe' in data) || (data.vibe is string && data.vibe.size() <= 60))
           && (!('lastMessage' in data) || (
@@ -395,7 +410,7 @@ service cloud.firestore {
       }
 
       // Provable-for-lists (see activities read rule).
-      allow read: if isMember(resource.data);
+      allow read: if isMember(resource.data) && resource.data.expireAt > request.time;
       // Rooms are created by callable functions. This also ensures group
       // membership is derived from the caller's Circles on the server.
       allow create: if false;
@@ -483,7 +498,10 @@ service cloud.firestore {
         allow create: if false;
         // Messages are immutable except proposal voting/locking:
         //  - anyone in the room may toggle ONLY their own uid in confirmedBy
-        //  - only the author may set planned
+        //  - any member may set planned: the "Aktivität" escalation button is
+        //    deliberately offered to the whole group (core flow), so the lock
+        //    must not be author-only — that silently failed for everyone else
+        //    and allowed duplicate activities from one proposal.
         allow update: if signedIn()
           && request.auth.uid in room().memberIds
           && resource.data.kind == 'proposal'
@@ -494,10 +512,7 @@ service cloud.firestore {
           && (
             !request.resource.data.proposal.diff(resource.data.proposal)
               .affectedKeys().hasAny(['planned'])
-            || (
-              resource.data.authorId == request.auth.uid
-              && request.resource.data.proposal.planned is bool
-            )
+            || request.resource.data.proposal.planned is bool
           );
         allow delete: if false; // TTL via expireAt
       }

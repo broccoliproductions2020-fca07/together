@@ -13,10 +13,10 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { SEMANTIC_COLOR } from '@/shared/utils/semanticColors';
+
 import type { SafetyStartPhase } from '../types';
 
-const BLUE = '#4C8DFF';
-const GREEN = '#41C08D';
 export interface SafetyOperationStateProps {
   kind: 'starting' | 'ending';
   phase?: SafetyStartPhase | null;
@@ -37,7 +37,7 @@ export function SafetyOperationState({
   const insets = useSafeAreaInsets();
   const reducedMotion = useReducedMotion();
   const pulse = useSharedValue(0);
-  const color = kind === 'starting' ? BLUE : GREEN;
+  const color = kind === 'starting' ? SEMANTIC_COLOR.safetyNormal : SEMANTIC_COLOR.quiet;
   useKeepAwake();
 
   useEffect(() => {

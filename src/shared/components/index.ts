@@ -8,12 +8,18 @@ export { AppStateView } from './app-state-view';
 export type { AppStateViewProps } from './app-state-view';
 export { ScreenHeader } from './screen-header';
 export type { ScreenHeaderProps } from './screen-header';
-export { SuggestionChips } from './SuggestionChips';
-export type { SuggestionChipsProps } from './SuggestionChips';
-export { AnimatedLogo } from './brand/AnimatedLogo';
 export { BrandBackdrop } from './brand/BrandBackdrop';
 export { TogetherLockup, TogetherMark } from './brand/TogetherMark';
 export { TogetherFinalWordmark } from './brand/TogetherFinalWordmark';
 export type { TogetherFinalWordmarkProps } from './brand/TogetherFinalWordmark';
 export { TogetherLoader } from './brand/TogetherLoader';
 export { AppBootScreen } from './brand/AppBootScreen';
+export { PressableScale } from './PressableScale';
+export type { PressableScaleProps } from './PressableScale';
+export { SquircleButton } from './SquircleButton';
+export type {
+  SquircleButtonProps,
+  SquircleButtonSize,
+  SquircleButtonVariant,
+} from './SquircleButton';
+export { ColorSchemeRoot } from './ColorSchemeRoot';

@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated, {
   Easing,
@@ -10,11 +10,7 @@ import Animated, {
 
 import { CalendarScreen } from '@/features/calendar';
 import { MapScreen } from '@/features/map';
-import {
-  SafetyConsoleHost,
-  SafetyConsolePanel,
-  useSafety,
-} from '@/features/safety';
+import { SafetyConsoleHost, SafetyConsolePanel, useSafety } from '@/features/safety';
 
 import { useMainMode } from '../hooks/useMainMode';
 import { FloatingModeSwitch } from './FloatingModeSwitch';
@@ -63,6 +59,11 @@ export function MainSurface() {
   const { heimwegFocusActive } = useSafety();
   const [mapLocationPickerActive, setMapLocationPickerActive] = useState(false);
   const [mapDetailSheetVisible, setMapDetailSheetVisible] = useState(false);
+  const editRequestSequence = useRef(0);
+  const [editActivityRequest, setEditActivityRequest] = useState<{
+    requestId: number;
+    activityId: string;
+  }>();
   const modeSwitchVisible =
     !(mode === 'map' && (mapLocationPickerActive || mapDetailSheetVisible)) && !heimwegFocusActive;
 
@@ -73,11 +74,23 @@ export function MainSurface() {
     if (heimwegFocusActive && mode !== 'map') setMode('map');
   }, [heimwegFocusActive, mode, setMode]);
 
+  function editActivityFromCalendar(activityId: string) {
+    editRequestSequence.current += 1;
+    setEditActivityRequest({ requestId: editRequestSequence.current, activityId });
+    setMode('map');
+  }
+
   return (
     <View style={{ flex: 1 }} className="bg-background">
       <ModeLayer active={mode === 'map'}>
         <MapScreen
           active={mode === 'map'}
+          editActivityRequest={editActivityRequest}
+          onEditActivityRequestHandled={(requestId) =>
+            setEditActivityRequest((current) =>
+              current?.requestId === requestId ? undefined : current,
+            )
+          }
           onLocationPickerActiveChange={setMapLocationPickerActive}
           onDetailSheetVisibleChange={setMapDetailSheetVisible}
           onOpenCalendar={() => setMode('calendar')}
@@ -85,7 +98,10 @@ export function MainSurface() {
       </ModeLayer>
 
       <ModeLayer active={mode === 'calendar'}>
-        <CalendarScreen onGoToMap={() => setMode('map')} />
+        <CalendarScreen
+          onGoToMap={() => setMode('map')}
+          onEditActivity={editActivityFromCalendar}
+        />
       </ModeLayer>
 
       {mode === 'calendar' ? (

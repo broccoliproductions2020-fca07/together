@@ -37,8 +37,11 @@ Prominenz, nicht Präsenz: erlaubt ist ein stilles Chrome-Element, nie eine schr
   konsequent am Schild; so enthält das Sheet keine konkurrierende zweite Aufgabe.
 - Es gibt keine zusätzlichen dauerhaften Heimweg-Zeilen in Activities oder im Offen-Sheet.
 - Das Start-Sheet ist ein bewusster **Zwei-Schritte-Flow** (Nutzerentscheidung Juli 2026;
-  ersetzt den früheren einklappbaren Info-Block): Die Übersichtsseite erscheint bei JEDEM Öffnen —
-  bei einem Vertrauens-Feature ist die Erklärseite Teil des Produkts, nicht Reibung.
+  ersetzt den früheren einklappbaren Info-Block). **Revision August 2026:** Die Übersichtsseite
+  erscheint nur beim ERSTEN Öffnen; danach startet das Sheet direkt auf der Personenauswahl.
+  Begründung: Muskelgedächtnis und minimale Taps im Bedarfsmoment schlagen die wiederholte
+  Erklärseite — die Übersicht bleibt über den Zurück-Pfeil der Auswahl jederzeit erreichbar,
+  und ein Speicherfehler zeigt sie sicherheitshalber erneut.
 
 ## Heimweg-Fokus (Begleit-Kartenmodus)
 
@@ -199,7 +202,7 @@ ansonsten läuft sie nur mit dem verbleibenden Empfängerkreis weiter.
   `expo-task-manager` und `Location.startLocationUpdatesAsync`: Blau zielt auf 30 Sekunden,
   Orange/Rot auf 5 Sekunden. Der Zustand wird lokal wiederherstellbar gespeichert, Android zeigt
   währenddessen seine verpflichtende Foreground-Service-Meldung, iOS seinen Standortindikator.
-  Mock/Web und der Fehlerfall ohne laufenden nativen Task verwenden nur den Vordergrund-Watcher.
+  Wenn kein nativer Hintergrund-Task verfügbar ist, bleibt nur der klar sichtbare Vordergrund-Watcher aktiv.
 - Cloud-Export, verschlüsselter Vorfallsspeicher und Akku-/Empfangsstatus sind vor einem
   Safety-Release noch fertigzustellen.
 - Standortintervalle sind Zielwerte; die UI zeigt daher immer „Letztes Update vor …“.

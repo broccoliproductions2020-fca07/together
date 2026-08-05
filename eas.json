@@ -1,25 +1,44 @@
 {
   "cli": {
-    "version": ">= 13.0.0",
+    "version": "21.4.0",
     "appVersionSource": "remote"
   },
   "build": {
     "development": {
       "developmentClient": true,
       "distribution": "internal",
-      "channel": "development"
+      "channel": "development",
+      "environment": "development",
+      "env": {
+        "APP_VARIANT": "development",
+        "EXPO_PUBLIC_FIREBASE_EMULATORS": "true",
+        "EXPO_PUBLIC_CRASH_REPORTING_ENABLED": "false"
+      }
     },
-    "preview": {
+    "staging": {
       "distribution": "internal",
-      "channel": "preview",
+      "channel": "staging",
+      "environment": "preview",
       "autoIncrement": true,
       "env": {
-        "EXPO_PUBLIC_BACKEND": "mock"
+        "APP_VARIANT": "staging",
+        "EXPO_PUBLIC_FIREBASE_EMULATORS": "false",
+        "EXPO_PUBLIC_FIREBASE_APP_CHECK_ENABLED": "true",
+        "EXPO_PUBLIC_CRASH_REPORTING_ENABLED": "true",
+        "EXPO_PUBLIC_STAGING_DIAGNOSTICS": "true"
       }
     },
     "production": {
       "channel": "production",
-      "autoIncrement": true
+      "autoIncrement": true,
+      "distribution": "store",
+      "environment": "production",
+      "env": {
+        "APP_VARIANT": "production",
+        "EXPO_PUBLIC_FIREBASE_EMULATORS": "false",
+        "EXPO_PUBLIC_FIREBASE_APP_CHECK_ENABLED": "true",
+        "EXPO_PUBLIC_CRASH_REPORTING_ENABLED": "true"
+      }
     }
   },
   "submit": {

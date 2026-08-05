@@ -52,7 +52,10 @@ export async function saveCachedCircles(uid: string, circles: CircleDoc[]): Prom
   try {
     await AsyncStorage.setItem(
       cacheKey(uid),
-      JSON.stringify({ circles: sortCircles(circles), savedAt: Date.now() } satisfies CachedCircles),
+      JSON.stringify({
+        circles: sortCircles(circles),
+        savedAt: Date.now(),
+      } satisfies CachedCircles),
     );
   } catch {
     // A missing cache is never allowed to block the private-group UI.

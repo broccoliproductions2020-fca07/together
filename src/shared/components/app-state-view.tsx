@@ -1,6 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Text, View } from 'react-native';
 
+import { SEMANTIC_COLOR } from '../utils/semanticColors';
+
 import { AppButton } from './app-button';
 
 export interface AppStateViewProps {
@@ -20,7 +22,7 @@ export function AppStateView({
   description,
   actionLabel,
   onAction,
-  accent = '#6E8BF7',
+  accent = SEMANTIC_COLOR.action,
   compact = false,
 }: AppStateViewProps) {
   return (

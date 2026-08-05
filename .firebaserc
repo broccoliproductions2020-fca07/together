@@ -1,0 +1,7 @@
+{
+  "projects": {
+    "default": "together-dev-ce394",
+    "dev": "together-dev-ce394",
+    "prod": "together-fca07"
+  }
+}

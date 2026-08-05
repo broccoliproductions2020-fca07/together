@@ -73,10 +73,7 @@ export const DATA_GAP_MS = 4 * 60 * 1000;
  * silently imply that somebody is still watching hours later. */
 export const COMPANION_CONFIRMATION_MS = 30 * 60 * 1000;
 
-function isNewerThanUnavailable(
-  confirmation: SafetyCompanionConfirmation,
-  at: number,
-): boolean {
+function isNewerThanUnavailable(confirmation: SafetyCompanionConfirmation, at: number): boolean {
   return at > Number(confirmation.unavailableAt ?? 0);
 }
 
@@ -86,8 +83,8 @@ export function isCompanionUnavailable(
 ): boolean {
   return Boolean(
     confirmation &&
-      Number.isFinite(confirmation.unavailableAt) &&
-      Number(confirmation.unavailableAt) > Number(confirmation.confirmedAt ?? 0),
+    Number.isFinite(confirmation.unavailableAt) &&
+    Number(confirmation.unavailableAt) > Number(confirmation.confirmedAt ?? 0),
   );
 }
 

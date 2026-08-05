@@ -1,13 +1,29 @@
-import { createContext, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { AppState } from 'react-native';
 import * as Notifications from 'expo-notifications';
 
 import { useAuth } from '@/features/auth';
+import { claimNotificationResponse } from '@/features/notifications/notificationResponse';
 
 import { chatService } from './services/chatService';
 import type { ChatActor, GroupMember, RoomMemberProfile } from './services/chatService.types';
 import { loadCachedRooms, saveCachedRooms } from './services/roomCache';
-import type { ChatGroup, ChatMessage, ChatRoom, GroupOpening, ProposalData } from './types';
+import type {
+  ChatGroup,
+  ChatMessage,
+  ChatRoom,
+  GroupOpening,
+  ProposalData,
+  SpontaneousRound,
+} from './types';
 
 export type { GroupMember, RoomMemberProfile };
 
@@ -57,6 +73,11 @@ export interface ChatContextValue {
   setOpeningsActive: (active: boolean) => void;
   setGroupOpen: (roomId: string, open: boolean) => Promise<void>;
   joinOpenGroup: (roomId: string) => Promise<void>;
+  spontaneousRound: SpontaneousRound | null;
+  setRoundSurfaceActive: (active: boolean) => void;
+  startSpontaneousRound: (members: GroupMember[]) => Promise<string>;
+  acceptSpontaneousRound: (roundId: string) => Promise<void>;
+  leaveSpontaneousRound: (roundId: string) => Promise<void>;
 }
 
 export const ChatContext = createContext<ChatContextValue | null>(null);
@@ -85,6 +106,11 @@ export type ChatActivityContextValue = Pick<
   | 'setOpeningsActive'
   | 'setGroupOpen'
   | 'joinOpenGroup'
+  | 'spontaneousRound'
+  | 'setRoundSurfaceActive'
+  | 'startSpontaneousRound'
+  | 'acceptSpontaneousRound'
+  | 'leaveSpontaneousRound'
 >;
 
 export const ChatActivityContext = createContext<ChatActivityContextValue | null>(null);
@@ -119,7 +145,7 @@ function readChatPush(data: unknown): { roomId: string; messageCount?: number } 
 }
 
 /**
- * Chat state, backed by the chatService seam (mock offline / Firestore).
+ * Chat state, backed by the chat service and Firestore.
  * Uses a per-device cache + one-off foreground sync for room summaries. The
  * only rooms listener exists while the visible activity list needs live rows;
  * messages still stream exclusively for the open room.
@@ -160,7 +186,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [openRoomStack, setOpenRoomStack] = useState<string[]>([]);
   const openRoomId = openRoomStack.length ? openRoomStack[openRoomStack.length - 1] : null;
   // Optimistically-joined room ids: `joinActivity` writes go through a backend
-  // round-trip (in firebase mode, against the emulators), so without this the
+  // round-trip, so without this the
   // "Dazustoßen" button appears to do nothing until the rooms listener catches
   // up. Marking the id here flips `isJoined` instantly; the listener then keeps
   // it true, so there's no flicker back.
@@ -276,7 +302,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const markPushedUnread = useCallback(
     ({ roomId, messageCount }: { roomId: string; messageCount?: number }) => {
       const previous = pushedUnreadRoomsRef.current[roomId] ?? 0;
-      const nextCount = Math.max(previous, Number.isFinite(messageCount) ? (messageCount ?? 0) : 1, 1);
+      const nextCount = Math.max(
+        previous,
+        Number.isFinite(messageCount) ? (messageCount ?? 0) : 1,
+        1,
+      );
       const nextSignals = { ...pushedUnreadRoomsRef.current, [roomId]: nextCount };
       pushedUnreadRoomsRef.current = nextSignals;
       setPushedUnreadRooms(nextSignals);
@@ -287,9 +317,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const cached = roomsRef.current.find((room) => room.id === roomId);
       if (cached && messageCount && messageCount > cached.messageCount) {
         commitRooms(
-          roomsRef.current.map((room) =>
-            room.id === roomId ? { ...room, messageCount } : room,
-          ),
+          roomsRef.current.map((room) => (room.id === roomId ? { ...room, messageCount } : room)),
         );
       }
     },
@@ -304,14 +332,20 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const payload = readChatPush(notification.request.content.data);
       if (payload) markPushedUnread(payload);
     });
-    const response = Notifications.addNotificationResponseReceivedListener((notificationResponse) => {
-      const payload = readChatPush(notificationResponse.notification.request.content.data);
-      if (payload) markPushedUnread(payload);
-    });
+    const response = Notifications.addNotificationResponseReceivedListener(
+      (notificationResponse) => {
+        const payload = readChatPush(notificationResponse.notification.request.content.data);
+        if (payload && claimNotificationResponse('chat', notificationResponse)) {
+          markPushedUnread(payload);
+        }
+      },
+    );
     void Notifications.getLastNotificationResponseAsync()
       .then((lastResponse) => {
         const payload = readChatPush(lastResponse?.notification.request.content.data);
-        if (payload) markPushedUnread(payload);
+        if (lastResponse && payload && claimNotificationResponse('chat', lastResponse)) {
+          markPushedUnread(payload);
+        }
       })
       .catch(() => {});
     return () => {
@@ -338,7 +372,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         const unmatched = [...messages];
         const remaining = pending.filter((p) => {
           const index = unmatched.findIndex(
-            (m) => m.authorId === p.authorId && m.text === p.text && m.createdAt >= p.createdAt - 15_000,
+            (m) =>
+              m.authorId === p.authorId && m.text === p.text && m.createdAt >= p.createdAt - 15_000,
           );
           if (index === -1) return true;
           unmatched.splice(index, 1);
@@ -362,6 +397,27 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     return chatService.subscribeGroupOpenings(actor, setGroupOpenings);
   }, [actor, openingsActive, appBackgrounded]);
 
+  // One tightly bounded listener powers the fixed map control. It is not an
+  // inbox listener: it exists only while the map itself is visible and returns
+  // at most one forming round because server rules allow only one membership.
+  const [roundSurfaceActive, setRoundSurfaceActive] = useState(false);
+  const [spontaneousRound, setSpontaneousRound] = useState<SpontaneousRound | null>(null);
+  useEffect(() => {
+    if (appBackgrounded || !roundSurfaceActive) {
+      setSpontaneousRound(null);
+      return;
+    }
+    return chatService.subscribeSpontaneousRound(actor, (round) => {
+      setSpontaneousRound(round);
+      // The host has no room until the first person accepts. Reconcile that
+      // one document when the listener observes the transition, without
+      // keeping the complete room list live on the map.
+      if (round && round.memberIds.length >= 2 && !roomsRef.current.some((room) => room.id === round.id)) {
+        refreshSingleRoom(round.id);
+      }
+    });
+  }, [actor, appBackgrounded, refreshSingleRoom, roundSurfaceActive]);
+
   const findRoom = useCallback((roomId: string) => rooms.find((r) => r.id === roomId), [rooms]);
 
   const getUnreadCount = useCallback(
@@ -383,7 +439,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setOpenRoomStack((current) => [...current, roomId]);
       // Do not pay a document read for every open chat. A targeted read is
       // required only for a missing/stale (push-signalled) room summary.
-      if (!roomsRef.current.some((room) => room.id === roomId) || pushedUnreadRoomsRef.current[roomId]) {
+      if (
+        !roomsRef.current.some((room) => room.id === roomId) ||
+        pushedUnreadRoomsRef.current[roomId]
+      ) {
         refreshSingleRoom(roomId);
       }
     },
@@ -432,7 +491,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   // Fire-and-forget writes must never surface as unhandled rejections (red
   // dev toast / silent prod failure) — e.g. writing to a room that only
-  // exists as a mock seed, not in Firestore.
+  // no longer exists in Firestore.
   const fireAndForget = useCallback((action: string, promise: Promise<unknown>) => {
     promise.catch((error) => console.warn(`[chat] ${action} fehlgeschlagen:`, error));
   }, []);
@@ -508,6 +567,36 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       return roomId;
     },
     [actor, refreshSingleRoom],
+  );
+
+  const startSpontaneousRound = useCallback(
+    async (members: GroupMember[]) => chatService.startSpontaneousRound(actor, members),
+    [actor],
+  );
+
+  const acceptSpontaneousRound = useCallback(
+    async (roundId: string) => {
+      await chatService.acceptSpontaneousRound(actor, roundId);
+      setOptimisticJoined((current) => new Set(current).add(roundId));
+      refreshSingleRoom(roundId);
+    },
+    [actor, refreshSingleRoom],
+  );
+
+  const leaveSpontaneousRound = useCallback(
+    async (roundId: string) => {
+      await chatService.leaveSpontaneousRound(actor, roundId);
+      setOptimisticJoined((current) => {
+        if (!current.has(roundId)) return current;
+        const next = new Set(current);
+        next.delete(roundId);
+        return next;
+      });
+      setOpenRoomStack((current) => current.filter((id) => id !== roundId));
+      removeRoomLocally(roundId);
+      setSpontaneousRound((current) => (current?.id === roundId ? null : current));
+    },
+    [actor, removeRoomLocally],
   );
 
   const removePending = useCallback((roomId: string, messageId: string) => {
@@ -594,6 +683,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setOpeningsActive,
       setGroupOpen: (roomId, open) => chatService.setGroupOpen(actor, roomId, open),
       joinOpenGroup: (roomId) => chatService.joinOpenGroup(actor, roomId),
+      spontaneousRound,
+      setRoundSurfaceActive,
+      startSpontaneousRound,
+      acceptSpontaneousRound,
+      leaveSpontaneousRound,
     }),
     [
       actor,
@@ -605,6 +699,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       joinActivity,
       joinedRoomIds,
       leaveRoom,
+      spontaneousRound,
+      startSpontaneousRound,
+      acceptSpontaneousRound,
+      leaveSpontaneousRound,
     ],
   );
 
@@ -649,9 +747,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         deliverPending(roomId, pendingMessage);
       },
       retryMessage: (roomId, messageId) => {
-        const target = (pendingByRoom[roomId] ?? []).find(
-          (m) => m.id === messageId && m.failed,
-        );
+        const target = (pendingByRoom[roomId] ?? []).find((m) => m.id === messageId && m.failed);
         if (!target) return;
         const revived: ChatMessage = {
           ...target,
@@ -719,6 +815,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setOpeningsActive,
       setGroupOpen: (roomId, open) => chatService.setGroupOpen(actor, roomId, open),
       joinOpenGroup: (roomId) => chatService.joinOpenGroup(actor, roomId),
+      spontaneousRound,
+      setRoundSurfaceActive,
+      startSpontaneousRound,
+      acceptSpontaneousRound,
+      leaveSpontaneousRound,
     }),
     [
       joinedRoomIds,
@@ -737,6 +838,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       createGroup,
       openRoom,
       closeRoom,
+      spontaneousRound,
+      startSpontaneousRound,
+      acceptSpontaneousRound,
+      leaveSpontaneousRound,
     ],
   );
 

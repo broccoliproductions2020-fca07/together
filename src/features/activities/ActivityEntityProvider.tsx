@@ -8,27 +8,20 @@ import {
   type ReactNode,
 } from 'react';
 
-import { mockMapMarkers, mockMarkerClusters, mockPlans } from '@/data/mock';
-import { BACKEND } from '@/shared/services/firebase';
 import { useAuth } from '@/features/auth';
 import { useCircles } from '@/features/circles';
 import { useFriends } from '@/features/friends';
+import type { ActivityCategory, ActivityMode } from '@/domain/activity';
+import type { GeoCoordinate } from '@/domain/geo';
+import type { ParticipantPreview } from '@/domain/person';
 import type { Plan, PlanPerson } from '@/features/calendar';
 import { formatTimeRange } from '@/features/calendar/utils/formatPlanTime';
 import type {
-  ActivityCategory,
-  ActivityMode,
   ActivitySelectionPreview,
-  MockMapPosition,
   MapMarker,
   MapSelection,
-  MarkerAvatar,
   MarkerCluster,
 } from '@/features/map/types/map.types';
-import {
-  coordinateToMockPosition,
-  mockPositionToCoordinate,
-} from '@/features/map/utils/mockCoordinates';
 
 import { activityService } from './services/activityService';
 import type {
@@ -55,13 +48,15 @@ export interface ActivityInfo {
   timeLabel?: string;
   placeLabel?: string;
   participantCount: number;
-  participants: MarkerAvatar[];
+  participants: ParticipantPreview[];
   /** Max participants incl. host; undefined = unbegrenzt. */
   maxParticipants?: number;
+  /** Host opt-in: participants may invite their OWN confirmed friends. */
+  guestInvitesEnabled?: boolean;
   description?: string;
   startsAt?: string;
   endsAt?: string;
-  targetPosition?: MockMapPosition;
+  targetCoordinate?: GeoCoordinate;
   /** Uid of the creator — drives the "Bearbeiten" affordance (host-only). */
   hostId?: string;
 }
@@ -71,13 +66,14 @@ export interface ActivityUpdate {
   mode?: ActivityMode;
   startsAt?: string;
   endsAt?: string;
-  timeLabel?: string;
-  place?: { label?: string; latitude?: number; longitude?: number };
-  description?: string;
+  place?: ActivityDoc['place'] | null;
+  description?: string | null;
   /** null removes the limit; undefined leaves it unchanged. */
   maxParticipants?: number | null;
   /** null removes the category; undefined leaves it unchanged. */
   category?: ActivityCategory | null;
+  /** Host toggle for participant guest invites; undefined leaves it unchanged. */
+  guestInvitesEnabled?: boolean;
 }
 
 interface ActivityEntityContextValue {
@@ -89,17 +85,19 @@ interface ActivityEntityContextValue {
   clusterToSelection: (cluster: MarkerCluster) => MapSelection;
   planToSelection: (plan: Plan) => MapSelection;
   createActivityFromDraft: (draft: ActivityDraft, preferredId?: string) => ActivityCreation;
-  updateActivity: (id: string, update: ActivityUpdate) => void;
-  /** Adds the current user to the activity's participants (self-join). Persists
-   * for real activities; a no-op on the doc for demo seeds (display is handled
-   * optimistically by the caller via chat-join state). */
+  updateActivity: (id: string, update: ActivityUpdate) => Promise<void>;
+  /** Adds the current user to an activity's participants. */
   joinActivity: (id: string) => Promise<boolean>;
-  cancelActivity: (id: string) => void;
+  cancelActivity: (id: string) => Promise<void>;
   leaveActivity: (id: string) => Promise<boolean>;
-  /** Builds a prefilled draft for editing; null when `id` isn't a real, active,
-   * self-hosted activity (demo seeds and other people's activities aren't editable). */
+  /** Participant-vouched guest invite (host opt-in, server-checked). */
+  inviteFriendToActivity: (
+    id: string,
+    targetUid: string,
+  ) => Promise<'invited' | 'already_invited'>;
+  /** Builds a prefilled draft for a current user's active activity. */
   getEditableDraft: (id: string) => ActivityDraft | null;
-  updateActivityFromDraft: (id: string, draft: ActivityDraft) => void;
+  updateActivityFromDraft: (id: string, draft: ActivityDraft) => Promise<void>;
 }
 
 const ActivityEntityContext = createContext<ActivityEntityContextValue | null>(null);
@@ -108,7 +106,7 @@ function planActivityId(plan: Plan) {
   return plan.activityId ?? plan.id;
 }
 
-function planPeopleToAvatars(people: PlanPerson[]): MarkerAvatar[] {
+function planPeopleToAvatars(people: PlanPerson[]): ParticipantPreview[] {
   return people.map((person) => ({
     userId: person.id,
     displayName: person.displayName,
@@ -117,7 +115,7 @@ function planPeopleToAvatars(people: PlanPerson[]): MarkerAvatar[] {
   }));
 }
 
-function markerParticipants(marker: MapMarker): MarkerAvatar[] {
+function markerParticipants(marker: MapMarker): ParticipantPreview[] {
   if (marker.avatars?.length) return marker.avatars;
 
   return [
@@ -129,23 +127,6 @@ function markerParticipants(marker: MapMarker): MarkerAvatar[] {
       mode: marker.mode,
     },
   ];
-}
-
-/**
- * Legacy mock data stores the host on the map marker and the remaining people
- * on its calendar projection. Real activities already carry everyone on the
- * activity document. Merge both representations once, rather than letting the
- * map, detail sheet and calendar each infer a different participant list.
- */
-function participantsForMarker(marker: MapMarker, plan?: Plan): MarkerAvatar[] {
-  const seenUserIds = new Set<string>();
-  return [...markerParticipants(marker), ...(plan ? planPeopleToAvatars(plan.people) : [])].filter(
-    (participant) => {
-      if (seenUserIds.has(participant.userId)) return false;
-      seenUserIds.add(participant.userId);
-      return true;
-    },
-  );
 }
 
 function modeFromPlan(plan: Plan, fallback: ActivityMode = 'soon'): ActivityMode {
@@ -170,15 +151,13 @@ function mapSelectionFromInfo(
     participantCount: info.participantCount,
     participants: info.participants,
     maxParticipants: info.maxParticipants,
-    targetCoordinate: info.targetPosition
-      ? mockPositionToCoordinate(info.targetPosition)
-      : undefined,
-    targetPosition: info.targetPosition,
+    targetCoordinate: info.targetCoordinate,
     timeLabel: info.timeLabel,
     placeLabel: info.placeLabel,
     startsAt: info.startsAt,
     endsAt: info.endsAt,
     hostId: info.hostId,
+    guestInvitesEnabled: info.guestInvitesEnabled,
   };
 
   if (type === 'Avatar') {
@@ -198,14 +177,24 @@ function draftPlaceLabel(draft: ActivityDraft) {
   );
 }
 
-function positionForNewMarker(index: number) {
-  return {
-    x: Math.min(88, 46 + (index % 5) * 8),
-    y: Math.min(84, 38 + Math.floor(index / 5) * 9),
-  };
+function samePlace(left: ActivityDoc['place'] | undefined, right: ActivityDoc['place'] | null) {
+  if (!left || !right) return !left && !right;
+  if (left.label !== right.label || left.visibility !== right.visibility) return false;
+  if (left.visibility === 'none' || right.visibility === 'none') return true;
+  return left.latitude === right.latitude && left.longitude === right.longitude;
 }
 
-/** Persisted activity doc → calendar Plan (same rules as the old local create). */
+function activityPlaceFromDraft(draft: ActivityDraft, label: string): NonNullable<ActivityDoc['place']> {
+  const latitude = draft.place?.latitude;
+  const longitude = draft.place?.longitude;
+  return latitude != null && longitude != null
+    ? { label, latitude, longitude, visibility: 'pin' }
+    : { label, visibility: 'none' };
+}
+
+const EMPTY_MARKER_CLUSTERS: MarkerCluster[] = [];
+
+/** Persisted activity document to its calendar projection. */
 function docToPlan(doc: ActivityDoc, now: number): Plan {
   const mode = resolveActivityMode(doc.mode, doc.startsAt, now);
   return {
@@ -227,8 +216,15 @@ function docToPlan(doc: ActivityDoc, now: number): Plan {
 }
 
 /** Persisted activity doc → map marker (only when it has a visible place). */
-function docToMarker(doc: ActivityDoc, index: number, now: number): MapMarker | null {
-  if (!doc.place?.label || doc.place.visibility !== 'pin') return null;
+function docToMarker(doc: ActivityDoc, now: number): MapMarker | null {
+  if (
+    !doc.place?.label ||
+    doc.place.visibility !== 'pin' ||
+    doc.place.latitude == null ||
+    doc.place.longitude == null
+  ) {
+    return null;
+  }
   const host = doc.participants[0];
   return {
     id: doc.id,
@@ -248,14 +244,10 @@ function docToMarker(doc: ActivityDoc, index: number, now: number): MapMarker | 
     participantCount: doc.participants.length,
     maxParticipants: doc.maxParticipants,
     category: doc.category,
-    position:
-      doc.place.latitude != null && doc.place.longitude != null
-        ? coordinateToMockPosition({
-            latitude: doc.place.latitude,
-            longitude: doc.place.longitude,
-          })
-        : positionForNewMarker(index),
-    hasExactLocation: true,
+    coordinate: {
+      latitude: doc.place.latitude,
+      longitude: doc.place.longitude,
+    },
     startsAt: doc.startsAt,
     endsAt: doc.endsAt,
     journeyUnderwayCount: doc.journeyUnderwayCount,
@@ -275,19 +267,9 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
     [user?.id, user?.displayName],
   );
 
-  // Static demo seeds (editable locally, e.g. cluster edits) + persisted docs.
-  // Mock mode ONLY: in firebase mode demo content comes from the emulator
-  // (`npm run emulators:seed`), never from client-side seeds mixed into real data.
-  const [seedMarkers, setSeedMarkers] = useState<MapMarker[]>(() =>
-    BACKEND === 'mock' ? mockMapMarkers : [],
-  );
-  const [seedMarkerClusters, setMarkerClusters] = useState<MarkerCluster[]>(() =>
-    BACKEND === 'mock' ? mockMarkerClusters : [],
-  );
-  const [seedPlans, setSeedPlans] = useState<Plan[]>(() => (BACKEND === 'mock' ? mockPlans : []));
   const [docs, setDocs] = useState<ActivityDoc[]>([]);
 
-  // The one activity-feed listener (service seam: mock emitter or Firestore).
+  // The one bounded activity-feed listener.
   useEffect(() => {
     setDocs([]);
     return activityService.subscribeActivities(actor, setDocs);
@@ -319,49 +301,30 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
   const docMarkers = useMemo(
     () =>
       liveDocs
-        .map((doc, index) => docToMarker(doc, index, now))
+        .map((doc) => docToMarker(doc, now))
         .filter((m): m is MapMarker => m !== null),
     [liveDocs, now],
   );
   const docPlans = useMemo(() => liveDocs.map((doc) => docToPlan(doc, now)), [liveDocs, now]);
 
-  const plans = useMemo(() => {
-    const docIds = new Set(docPlans.map((p) => planActivityId(p)));
-    return [...docPlans, ...seedPlans.filter((p) => !docIds.has(planActivityId(p)))].map((plan) => {
-      const matchingMarker = seedMarkers.find((marker) => marker.id === planActivityId(plan));
-      // A map marker is the canonical activity entity. Keep its calendar
-      // projection aligned for the few legacy seeds that were authored
-      // separately (for example, Lina's bouldering activity).
-      const canonicalPlan = matchingMarker
-        ? {
-            ...plan,
-            title: matchingMarker.title ?? plan.title,
-            startsAt: matchingMarker.startsAt ?? plan.startsAt,
-            endsAt: matchingMarker.endsAt ?? plan.endsAt,
-            locationName: matchingMarker.placeLabel ?? plan.locationName,
-            sourceMode: matchingMarker.mode,
-          }
-        : plan;
-      return {
-        ...canonicalPlan,
-        sourceMode: canonicalPlan.sourceMode
-          ? resolveActivityMode(canonicalPlan.sourceMode, canonicalPlan.startsAt, now)
-          : canonicalPlan.sourceMode,
-      };
-    });
-  }, [docPlans, seedPlans, seedMarkers, now]);
+  const plans = useMemo(
+    () =>
+      docPlans.map((plan) => ({
+        ...plan,
+        sourceMode: plan.sourceMode
+          ? resolveActivityMode(plan.sourceMode, plan.startsAt, now)
+          : plan.sourceMode,
+      })),
+    [docPlans, now],
+  );
 
   // The map only shows `now` and `soon` activities — `open` is presence, not a
   // map pin (see AGENTS.md; rejected: blue open pins). Each marker receives the
   // same complete participant list and count used by the detail sheet.
   const mapMarkers = useMemo(() => {
-    const docIds = new Set(docMarkers.map((m) => m.id));
-    return [...docMarkers, ...seedMarkers.filter((m) => !docIds.has(m.id))]
+    return docMarkers
       .map((marker) => {
-        const plan = plans.find(
-          (item) => planActivityId(item) === marker.id || item.id === marker.id,
-        );
-        const participants = participantsForMarker(marker, plan);
+        const participants = markerParticipants(marker);
         return {
           ...marker,
           avatars: participants,
@@ -370,18 +333,9 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
         };
       })
       .filter((marker) => marker.mode !== 'open');
-  }, [docMarkers, seedMarkers, plans, now]);
+  }, [docMarkers, now]);
 
-  const markerClusters = useMemo(
-    () =>
-      seedMarkerClusters
-        .map((cluster) => ({
-          ...cluster,
-          mode: resolveActivityMode(cluster.mode, cluster.startsAt, now),
-        }))
-        .filter((cluster) => cluster.mode !== 'open'),
-    [seedMarkerClusters, now],
-  );
+  const markerClusters = EMPTY_MARKER_CLUSTERS;
 
   const findActivityById = useCallback(
     (id: string): ActivityInfo | null => {
@@ -390,14 +344,11 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
       const cluster = markerClusters.find((item) => item.id === id);
       const backingDoc = docs.find((doc) => doc.id === id);
       const hostId = backingDoc?.hostId;
+      const guestInvitesEnabled = backingDoc?.guestInvitesEnabled === true || undefined;
       const maxParticipants =
         backingDoc?.maxParticipants ?? marker?.maxParticipants ?? cluster?.maxParticipants;
 
       if (cluster) {
-        // A cluster is already the activity-group representation and carries
-        // the complete participant list in mock mode. Do not replace it with
-        // the smaller calendar seed list; that made the detail sheet show a
-        // lower subset than the marker count promised.
         const participants = backingDoc
           ? backingDoc.participants.map((participant) => ({
               userId: participant.uid,
@@ -417,13 +368,14 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
           description: plan?.description,
           startsAt: plan?.startsAt,
           endsAt: plan?.endsAt,
-          targetPosition: cluster.position,
+          targetCoordinate: cluster.coordinate,
           hostId,
+          guestInvitesEnabled,
         };
       }
 
       if (marker) {
-        const participants = participantsForMarker(marker, plan);
+        const participants = markerParticipants(marker);
         return {
           id,
           title: marker.title ?? plan?.title ?? marker.label ?? marker.displayName,
@@ -437,8 +389,9 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
           description: plan?.description,
           startsAt: marker.startsAt ?? plan?.startsAt,
           endsAt: marker.endsAt ?? plan?.endsAt,
-          targetPosition: marker.position,
+          targetCoordinate: marker.coordinate,
           hostId,
+          guestInvitesEnabled,
         };
       }
 
@@ -457,6 +410,7 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
           startsAt: plan.startsAt,
           endsAt: plan.endsAt,
           hostId,
+          guestInvitesEnabled,
         };
       }
 
@@ -480,7 +434,7 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
             1,
           ),
           participants: markerParticipants(marker),
-          targetPosition: marker.position,
+          targetCoordinate: marker.coordinate,
         },
         'Avatar',
       ),
@@ -497,7 +451,7 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
           participantCount: cluster.count,
           participants: cluster.avatars,
           maxParticipants: cluster.maxParticipants,
-          targetPosition: cluster.position,
+          targetCoordinate: cluster.coordinate,
         },
         'Cluster',
       ),
@@ -525,7 +479,7 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
 
   // A concrete Activity has exactly one visibility context. Groups are private
   // shortcuts, never shared group entities; the callable independently derives
-  // and validates the same audience in Firebase mode.
+  // and validates the same audience in its server-side callable.
   const resolveAudience = useCallback(
     (visibility: ActivityDraft['visibility']): string[] => {
       const audience = new Set<string>([actor.uid]);
@@ -561,16 +515,10 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
           participantUids: [actor.uid],
           startsAt: draft.startsAt ?? new Date().toISOString(),
           endsAt: draft.endsAt,
-          place: placeLabel
-            ? {
-                label: placeLabel,
-                latitude: draft.place?.latitude,
-                longitude: draft.place?.longitude,
-                visibility: 'pin',
-              }
-            : undefined,
+          place: placeLabel ? activityPlaceFromDraft(draft, placeLabel) : undefined,
           maxParticipants: draft.maxPeople,
           category: draft.category,
+          guestInvitesEnabled: draft.guestInvitesEnabled,
           participants: [
             { uid: actor.uid, displayName: actor.displayName, initials: actor.initials },
           ],
@@ -582,119 +530,63 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
   );
 
   const updateActivity = useCallback(
-    (id: string, update: ActivityUpdate) => {
-      // Persisted activities go through the service…
+    async (id: string, update: ActivityUpdate) => {
       const persistedDoc = docs.find((doc) => doc.id === id);
-      if (persistedDoc) {
-        if (!isActivityLive(persistedDoc)) return;
-        activityService.updateActivity(actor, id, {
-          title: update.title,
-          mode: update.mode,
-          startsAt: update.startsAt,
-          endsAt: update.endsAt,
-          note: update.description,
-          maxParticipants: update.maxParticipants,
-          category: update.category,
-          ...(update.place
-            ? {
-                place: {
-                  ...(persistedDoc.place ?? { visibility: 'pin' as const }),
-                  ...update.place,
-                },
-              }
-            : {}),
-        });
-        return;
+      if (!persistedDoc) {
+        throw new Error('Aktivität nicht gefunden.');
       }
-
-      // …demo seeds are patched locally (unchanged legacy behavior).
-      setMarkerClusters((current) =>
-        current.map((cluster) =>
-          cluster.id === id
-            ? {
-                ...cluster,
-                mode: update.mode ?? cluster.mode,
-                label: update.title ?? cluster.label,
-              }
-            : cluster,
-        ),
-      );
-
-      setSeedMarkers((current) =>
-        current.map((marker) =>
-          marker.id === id
-            ? {
-                ...marker,
-                mode: update.mode ?? marker.mode,
-                title: update.title ?? marker.title,
-                label: update.place?.label ?? marker.label,
-                timeLabel: update.timeLabel ?? marker.timeLabel,
-                placeLabel: update.place?.label ?? marker.placeLabel,
-                position:
-                  update.place?.latitude != null && update.place?.longitude != null
-                    ? coordinateToMockPosition({
-                        latitude: update.place.latitude,
-                        longitude: update.place.longitude,
-                      })
-                    : marker.position,
-              }
-            : marker,
-        ),
-      );
-
-      setSeedPlans((current) =>
-        current.map((plan) =>
-          planActivityId(plan) === id || plan.id === id
-            ? {
-                ...plan,
-                title: update.title ?? plan.title,
-                startsAt: update.startsAt ?? plan.startsAt,
-                endsAt: update.endsAt ?? plan.endsAt,
-                locationName: update.place?.label ?? plan.locationName,
-                sourceMode: update.mode ?? plan.sourceMode,
-                description: update.description ?? plan.description,
-              }
-            : plan,
-        ),
-      );
+      if (persistedDoc.hostId !== actor.uid) {
+        throw new Error('Nur der Host kann diese Aktivität bearbeiten.');
+      }
+      if (!isActivityLive(persistedDoc)) {
+        throw new Error('Diese Aktivität ist nicht mehr aktiv.');
+      }
+      await activityService.updateActivity(actor, id, {
+        title: update.title,
+        mode: update.mode,
+        startsAt: update.startsAt,
+        endsAt: update.endsAt,
+        note: update.description,
+        maxParticipants: update.maxParticipants,
+        category: update.category,
+        place: update.place,
+        guestInvitesEnabled: update.guestInvitesEnabled,
+      });
     },
     [actor, docs],
   );
 
-  // Self-join: persist the current user into the activity's participants (real
-  // activities only; demo seeds have no doc — the callable would reject with
-  // not-found — so their "joined" display stays purely optimistic via the
-  // chat-join state in the map screen).
   const joinActivity = useCallback(
-    (id: string) => {
-      const persistedDoc = docs.find((doc) => doc.id === id);
-      if (!persistedDoc) return Promise.resolve(true);
-      if (!isActivityLive(persistedDoc)) return Promise.resolve(false);
-      return activityService.joinActivity(actor, id);
-    },
-    [actor, docs],
+    (id: string) => activityService.joinActivity(actor, id),
+    [actor],
   );
 
   const cancelActivity = useCallback(
-    (id: string) => {
+    async (id: string) => {
       const persistedDoc = docs.find((doc) => doc.id === id);
-      if (!persistedDoc || !isActivityLive(persistedDoc)) return;
-      activityService.cancelActivity(actor, id);
+      if (!persistedDoc) throw new Error('Aktivität nicht gefunden.');
+      if (persistedDoc.hostId !== actor.uid) {
+        throw new Error('Nur der Host kann diese Aktivität absagen.');
+      }
+      if (!isActivityLive(persistedDoc)) {
+        throw new Error('Diese Aktivität ist nicht mehr aktiv.');
+      }
+      await activityService.cancelActivity(actor, id);
     },
     [actor, docs],
   );
 
   const leaveActivity = useCallback(
-    (id: string) => {
-      if (!docs.some((doc) => doc.id === id)) return Promise.resolve(true);
-      return activityService.leaveActivity(actor, id);
-    },
-    [actor, docs],
+    (id: string) => activityService.leaveActivity(actor, id),
+    [actor],
   );
 
-  // Prefills the composer for editing. Only real, active, self-hosted activities
-  // are editable — demo seeds and other people's activities have no backing doc
-  // with a matching hostId, so this returns null for them.
+  const inviteFriendToActivity = useCallback(
+    (id: string, targetUid: string) => activityService.inviteFriend(actor, id, targetUid),
+    [actor],
+  );
+
+  // Prefills the composer for active activities owned by the current user.
   const getEditableDraft = useCallback(
     (id: string): ActivityDraft | null => {
       const doc = docs.find((item) => item.id === id);
@@ -706,23 +598,24 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
         title: doc.title,
         description: doc.note,
         visibility: createDefaultVisibility(),
-        place: doc.place?.label
+        place: doc.place
           ? {
               id: `${doc.id}-place`,
               name: doc.place.label,
-              latitude: doc.place.latitude,
-              longitude: doc.place.longitude,
+              latitude: doc.place.visibility === 'pin' ? doc.place.latitude : undefined,
+              longitude: doc.place.visibility === 'pin' ? doc.place.longitude : undefined,
               source: 'map',
             }
           : undefined,
-        locationChoice: doc.place ? 'map' : 'current',
-        locationPrecision: 'exact',
+        locationChoice: doc.place ? 'map' : 'open',
+        locationPrecision: doc.place?.visibility === 'pin' ? 'exact' : 'none',
         startsAt: doc.startsAt,
         endsAt: doc.endsAt,
         plannedDurationMinutes: durationMinutes(doc.startsAt, doc.endsAt),
         expiresInMinutes: mode === 'now' ? durationMinutes(doc.startsAt, doc.endsAt) : undefined,
         maxPeople: doc.maxParticipants,
         category: doc.category,
+        guestInvitesEnabled: doc.guestInvitesEnabled,
       };
     },
     [actor.uid, docs],
@@ -732,28 +625,43 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
   // has no audienceUids field) — editing a typo must never silently change who
   // can see the activity. The composer hides the visibility picker in edit mode.
   const updateActivityFromDraft = useCallback(
-    (id: string, draft: ActivityDraft) => {
+    async (id: string, draft: ActivityDraft) => {
+      const doc = docs.find((item) => item.id === id);
+      if (!doc) throw new Error('Aktivität nicht gefunden.');
+      if (doc.hostId !== actor.uid) {
+        throw new Error('Nur der Host kann diese Aktivität bearbeiten.');
+      }
+      if (!isActivityLive(doc)) throw new Error('Diese Aktivität ist nicht mehr aktiv.');
+
       const mode = draft.mode === 'open' ? 'soon' : draft.mode;
       const placeLabel = draftPlaceLabel(draft);
+      const title = draft.title?.trim() || 'Activity';
+      const description = draft.description?.trim() || null;
+      const place: ActivityDoc['place'] | null = placeLabel
+        ? activityPlaceFromDraft(draft, placeLabel)
+        : null;
+      const update: ActivityUpdate = {};
 
-      updateActivity(id, {
-        title: draft.title?.trim() || 'Activity',
-        mode,
-        startsAt: draft.startsAt,
-        endsAt: draft.endsAt,
-        description: draft.description?.trim() || undefined,
-        maxParticipants: draft.maxPeople ?? null,
-        category: draft.category ?? null,
-        place: placeLabel
-          ? {
-              label: placeLabel,
-              latitude: draft.place?.latitude,
-              longitude: draft.place?.longitude,
-            }
-          : undefined,
-      });
+      if (title !== doc.title) update.title = title;
+      if (mode !== doc.mode) update.mode = mode;
+      if (draft.startsAt !== doc.startsAt) update.startsAt = draft.startsAt;
+      if (draft.endsAt !== doc.endsAt) update.endsAt = draft.endsAt;
+      if (description !== (doc.note ?? null)) update.description = description;
+      if ((draft.maxPeople ?? null) !== (doc.maxParticipants ?? null)) {
+        update.maxParticipants = draft.maxPeople ?? null;
+      }
+      if ((draft.category ?? null) !== (doc.category ?? null)) {
+        update.category = draft.category ?? null;
+      }
+      if ((draft.guestInvitesEnabled ?? false) !== (doc.guestInvitesEnabled ?? false)) {
+        update.guestInvitesEnabled = draft.guestInvitesEnabled ?? false;
+      }
+      if (!samePlace(doc.place, place)) update.place = place;
+
+      if (!Object.keys(update).length) return;
+      await updateActivity(id, update);
     },
-    [updateActivity],
+    [actor.uid, docs, updateActivity],
   );
 
   const value = useMemo<ActivityEntityContextValue>(
@@ -770,6 +678,7 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
       joinActivity,
       cancelActivity,
       leaveActivity,
+      inviteFriendToActivity,
       getEditableDraft,
       updateActivityFromDraft,
     }),
@@ -786,6 +695,7 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
       joinActivity,
       cancelActivity,
       leaveActivity,
+      inviteFriendToActivity,
       getEditableDraft,
       updateActivityFromDraft,
     ],

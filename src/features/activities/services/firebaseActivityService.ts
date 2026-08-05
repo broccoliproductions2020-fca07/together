@@ -32,27 +32,56 @@ function toMillis(value: unknown): number {
   return Date.now();
 }
 
+/** Firestore can retain documents created by an older app version. Treat every
+ * field received from it as untrusted so one legacy document can never take the
+ * whole authenticated map down. Rules still validate every newly written doc;
+ * this is deliberately a read-side compatibility guard. */
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function activityParticipants(value: unknown): ActivityDoc['participants'] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const participant = item as Record<string, unknown>;
+    if (typeof participant.uid !== 'string' || typeof participant.displayName !== 'string') return [];
+    return [
+      {
+        uid: participant.uid,
+        displayName: participant.displayName,
+        initials:
+          typeof participant.initials === 'string'
+            ? participant.initials
+            : participant.displayName.slice(0, 2).toUpperCase(),
+      },
+    ];
+  });
+}
+
 function stripUndefined<T extends Record<string, unknown>>(obj: T): T {
   return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as T;
 }
 
 function mapDoc(id: string, data: DocumentData): ActivityDoc {
+  const participants = activityParticipants(data.participants);
+  const participantUids = stringArray(data.participantUids);
   return {
     id,
     hostId: data.hostId,
     mode: data.mode,
     title: data.title ?? 'Activity',
     note: data.note,
-    audienceUids: data.audienceUids ?? [],
+    audienceUids: stringArray(data.audienceUids),
     participantUids:
-      data.participantUids ??
-      (data.participants ?? []).map((participant: { uid: string }) => participant.uid),
+      participantUids.length > 0 ? participantUids : participants.map((participant) => participant.uid),
     startsAt: data.startsAt,
     endsAt: data.endsAt,
     place: data.place,
     maxParticipants: typeof data.maxParticipants === 'number' ? data.maxParticipants : undefined,
     category: data.category,
-    participants: data.participants ?? [],
+    participants,
+    ...(data.guestInvitesEnabled === true ? { guestInvitesEnabled: true } : {}),
     status: data.status === 'expired' || data.status === 'cancelled' ? data.status : 'active',
     createdAt: toMillis(data.createdAt),
     visibleUntil: data.visibleUntil ? toMillis(data.visibleUntil) : undefined,
@@ -99,13 +128,14 @@ export const firebaseActivityService: ActivityService = {
         place: data.place ? stripUndefined(data.place) : undefined,
         maxParticipants: data.maxParticipants,
         category: data.category,
+        guestInvitesEnabled: data.guestInvitesEnabled,
       }),
     }).then(() => undefined);
     return { id: ref.id, ready };
   },
 
   updateActivity(_actor, id, update: ActivityDocUpdate) {
-    void httpsCallable(
+    return httpsCallable(
       getFirebaseFunctions(),
       'updateActivity',
     )({
@@ -116,22 +146,20 @@ export const firebaseActivityService: ActivityService = {
         startsAt: update.startsAt,
         endsAt: update.endsAt,
         note: update.note,
-        place: update.place ? stripUndefined(update.place) : undefined,
+        place:
+          update.place === null ? null : update.place ? stripUndefined(update.place) : undefined,
         maxParticipants: update.maxParticipants,
         category: update.category,
+        guestInvitesEnabled: update.guestInvitesEnabled,
       }),
-    }).catch((error) => {
-      console.warn('[activity] update failed', error);
-    });
+    }).then(() => undefined);
   },
 
   cancelActivity(_actor, id) {
-    void httpsCallable(
+    return httpsCallable(
       getFirebaseFunctions(),
       'cancelActivity',
-    )({ activityId: id }).catch((error) => {
-      console.warn('[activity] cancel failed', error);
-    });
+    )({ activityId: id }).then(() => undefined);
   },
 
   async joinActivity(_actor, id) {
@@ -144,5 +172,13 @@ export const firebaseActivityService: ActivityService = {
   async leaveActivity(_actor, id) {
     await httpsCallable(getFirebaseFunctions(), 'leaveActivity')({ activityId: id });
     return true;
+  },
+
+  async inviteFriend(_actor, id, targetUid) {
+    const result = await httpsCallable<
+      { activityId: string; targetUid: string },
+      { ok: true; state: 'invited' | 'already_invited' }
+    >(getFirebaseFunctions(), 'inviteFriendToActivity')({ activityId: id, targetUid });
+    return result.data.state;
   },
 };

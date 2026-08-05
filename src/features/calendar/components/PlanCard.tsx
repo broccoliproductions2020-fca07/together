@@ -9,8 +9,10 @@ import Animated, {
 
 import { useActivityChat } from '@/features/chat';
 import { useActivityEntities } from '@/features/activities';
+import { useAuth } from '@/features/auth';
 import { activityPhaseLabel } from '@/features/activities/utils/activityTiming';
 import { colorWithAlpha, markerModeStyles } from '@/features/map/utils/markerStyles';
+import { SquircleButton } from '@/shared/components/SquircleButton';
 
 import type { Plan } from '../types/calendar.types';
 import { formatTime } from '../utils/formatPlanTime';
@@ -21,16 +23,19 @@ export interface PlanCardProps {
   expanded: boolean;
   onToggle: () => void;
   onOpenChat: (plan: Plan) => void;
+  onEditActivity: (plan: Plan) => void;
 }
 
-export function PlanCard({ plan, expanded, onToggle, onOpenChat }: PlanCardProps) {
+export function PlanCard({ plan, expanded, onToggle, onOpenChat, onEditActivity }: PlanCardProps) {
   const mutedColor = useColorScheme() === 'dark' ? 'rgb(154,163,157)' : 'rgb(107,98,88)';
   const reducedMotion = useReducedMotion();
+  const { user } = useAuth();
   const { isJoined, leaveRoom } = useActivityChat();
-  const { leaveActivity } = useActivityEntities();
+  const { cancelActivity, findActivityById, leaveActivity } = useActivityEntities();
 
   const roomId = plan.activityId ?? plan.id;
   const joined = isJoined(roomId);
+  const canEdit = findActivityById(roomId)?.hostId === (user?.id ?? 'u_you');
   // Scheduled plans show the remaining wait time instead of a redundant “Bald”.
   const isNow = plan.sourceMode === 'now';
   const accent = isNow ? markerModeStyles.now.color : markerModeStyles.soon.color;
@@ -115,34 +120,55 @@ export function PlanCard({ plan, expanded, onToggle, onOpenChat }: PlanCardProps
               </View>
             ) : null}
 
-            {joined ? (
+            {joined || canEdit ? (
               <>
+                <View className="mt-1 flex-row gap-2">
+                  {canEdit ? (
+                    <View className="flex-1">
+                      <SquircleButton
+                        label="Bearbeiten"
+                        color={accent}
+                        variant="tonal"
+                        size="md"
+                        icon="pencil"
+                        accessibilityLabel="Aktivität bearbeiten"
+                        onPress={() => onEditActivity(plan)}
+                      />
+                    </View>
+                  ) : null}
+                  <View className="flex-1">
+                    <SquircleButton
+                      label="Zum Chat"
+                      color={accent}
+                      size="md"
+                      icon="chatbubble-ellipses-outline"
+                      accessibilityLabel="Zum Chat"
+                      onPress={() => onOpenChat(plan)}
+                    />
+                  </View>
+                </View>
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel="Zum Chat"
-                  onPress={() => onOpenChat(plan)}
-                  className="mt-1 flex-row items-center justify-center gap-2 rounded-2xl py-3 active:opacity-90"
-                  style={{ backgroundColor: accent }}
-                >
-                  <Ionicons name="chatbubble-ellipses-outline" size={18} color="#fff" />
-                  <Text className="text-base font-bold text-white">Zum Chat</Text>
-                </Pressable>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Activity verlassen"
+                  accessibilityLabel={canEdit ? 'Aktivität absagen' : 'Aktivität verlassen'}
                   className="items-center py-2 active:opacity-70"
                   onPress={() =>
                     Alert.alert(
-                      'Activity verlassen?',
-                      'Du kannst später erneut beitreten, solange sie aktiv ist.',
+                      canEdit ? 'Activity absagen?' : 'Activity verlassen?',
+                      canEdit
+                        ? 'Die Activity verschwindet sofort aus Karte und Kalender. Der Chat bleibt noch kurz verfügbar.'
+                        : 'Du kannst später erneut beitreten, solange sie aktiv ist.',
                       [
                         { text: 'Abbrechen', style: 'cancel' },
                         {
-                          text: 'Verlassen',
+                          text: canEdit ? 'Absagen' : 'Verlassen',
                           style: 'destructive',
                           onPress: () => {
                             void (async () => {
                               try {
+                                if (canEdit) {
+                                  await cancelActivity(roomId);
+                                  return;
+                                }
                                 const left = await leaveActivity(roomId);
                                 if (!left) {
                                   Alert.alert(
@@ -152,10 +178,12 @@ export function PlanCard({ plan, expanded, onToggle, onOpenChat }: PlanCardProps
                                   return;
                                 }
                                 leaveRoom(roomId);
-                              } catch {
+                              } catch (error) {
                                 Alert.alert(
-                                  'Verlassen fehlgeschlagen',
-                                  'Bitte versuche es gleich noch einmal.',
+                                  canEdit ? 'Absagen fehlgeschlagen' : 'Verlassen fehlgeschlagen',
+                                  error instanceof Error
+                                    ? error.message
+                                    : 'Bitte versuche es gleich noch einmal.',
                                 );
                               }
                             })();
@@ -165,7 +193,11 @@ export function PlanCard({ plan, expanded, onToggle, onOpenChat }: PlanCardProps
                     )
                   }
                 >
-                  <Text className="text-xs font-semibold text-muted-foreground">Verlassen</Text>
+                  <Text
+                    className={`text-xs font-semibold ${canEdit ? 'text-destructive' : 'text-muted-foreground'}`}
+                  >
+                    {canEdit ? 'Activity absagen' : 'Verlassen'}
+                  </Text>
                 </Pressable>
               </>
             ) : null}

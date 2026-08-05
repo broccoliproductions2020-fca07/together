@@ -1,7 +1,7 @@
 /**
  * Seeds a LIVE demo Heimweg (Mia) into the local RTDB emulator so the
  * companion experience — pulsing shield, Heimweg-Fokus map, floating console
- * panel (Fall 2/3) — is testable in firebase mode without a second device.
+ * panel (Fall 2/3) — is testable in the local emulator without a second device.
  *
  * Usage (emulators must be running; run `npm run emulators:seed` once first):
  *   npm run emulators:seed:heimweg              → Mia walks in a circle, blue
@@ -22,16 +22,15 @@
  *  - Admin SDK bypasses the RTDB rules on purpose (test seed, like the rest
  *    of scripts/seed-emulators.mjs). Production writes stay callable-owned.
  */
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
-const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
-const admin = require(path.join(root, 'functions', 'node_modules', 'firebase-admin'));
+const admin = require('./firebase-admin-tools.cjs');
 
 process.env.FIREBASE_AUTH_EMULATOR_HOST ??= '127.0.0.1:9099';
 process.env.FIREBASE_DATABASE_EMULATOR_HOST ??= '127.0.0.1:9000';
+process.env.FIRESTORE_EMULATOR_HOST ??= '127.0.0.1:8080';
 
 const PROJECT_ID = 'demo-together';
 // Must match the client's databaseURL namespace (src/shared/services/firebase.ts).
@@ -45,6 +44,7 @@ const WALKERS = [
   { uid: 'seed-nora', displayName: 'Nora Weiß', initials: 'NW', radius: 0.0025, phase: 4.2 },
 ];
 const HOUR = 60 * 60 * 1000;
+const NOTIFICATION_RETENTION_MS = 30 * 24 * HOUR;
 const BLUE_RETENTION_MS = 3 * 60 * 1000;
 const TICK_MS = 20_000;
 /** Step per tick (~28 m ≈ walking pace). */
@@ -65,10 +65,16 @@ function argValue(name, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
 const CENTER = { lat: argValue('lat', 52.5208), lng: argValue('lng', 13.4095) };
+const safetyNotificationId = (recipientUid, ownerUid) =>
+  `seed-safety-${createHash('sha256')
+    .update(`${recipientUid}:${ownerUid}`)
+    .digest('hex')
+    .slice(0, 16)}`;
 
 async function main() {
   const app = admin.initializeApp({ projectId: PROJECT_ID, databaseURL: DATABASE_URL });
   const auth = app.auth();
+  const db = app.firestore();
   const rtdb = app.database();
 
   const { users } = await auth.listUsers(1000);
@@ -87,7 +93,15 @@ async function main() {
         removals[`heimwegeIndex/${uid}/${walker.uid}`] = null;
       });
     }
-    await rtdb.ref().update(removals);
+    const notificationDeletes = [];
+    for (const walker of WALKERS) {
+      devUids.forEach((uid) => {
+        notificationDeletes.push(
+          db.doc(`notifications/${safetyNotificationId(uid, walker.uid)}`).delete(),
+        );
+      });
+    }
+    await Promise.all([rtdb.ref().update(removals), ...notificationDeletes]);
     console.log(`Alle Demo-Heimwege entfernt (${WALKERS.length} Läufer).`);
     await app.delete();
     return;
@@ -129,6 +143,28 @@ async function main() {
     });
   }
   await rtdb.ref().update(writes);
+  const notificationWrites = [];
+  for (const walker of WALKERS) {
+    for (const recipientUid of devUids) {
+      const ref = db.doc(`notifications/${safetyNotificationId(recipientUid, walker.uid)}`);
+      if (!walkers.some((activeWalker) => activeWalker.uid === walker.uid)) {
+        notificationWrites.push(ref.delete());
+        continue;
+      }
+      notificationWrites.push(
+        ref.set({
+          recipientUid,
+          kind: 'safety_request',
+          title: `${walker.displayName} teilt den Heimweg`,
+          body: 'Bestätige kurz, dass du erreichbar bist.',
+          safetyOwnerUid: walker.uid,
+          createdAt: admin.firestore.Timestamp.fromMillis(now - 2 * 60 * 1000),
+          expireAt: admin.firestore.Timestamp.fromMillis(now + NOTIFICATION_RETENTION_MS),
+        }),
+      );
+    }
+  }
+  await Promise.all(notificationWrites);
   console.log(
     `${walkers.map((walker) => `${walker.displayName} (${walker.status})`).join(', ')} ${walkers.length === 1 ? 'teilt ihren' : 'teilen ihren'} Heimweg mit ${devUids.length} Dev-Account(s) [${devUids.join(', ')}].`,
   );

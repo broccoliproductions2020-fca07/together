@@ -54,7 +54,9 @@ export function classifyActivityTitle(title: string): ActivityCategoryGuess | nu
     ActivityCategory,
     string[],
   ][]) {
-    scores[category] = Math.max(...examples.map((example) => lexicalSimilarity(titleTokens, example)));
+    scores[category] = Math.max(
+      ...examples.map((example) => lexicalSimilarity(titleTokens, example)),
+    );
   }
 
   for (const boost of ACTIVITY_KEYWORD_BOOSTS) {
@@ -77,7 +79,9 @@ export function classifyActivityTitle(title: string): ActivityCategoryGuess | nu
   };
 }
 
-export function shouldAutoApplyCategory(guess: ActivityCategoryGuess | null): guess is ActivityCategoryGuess {
+export function shouldAutoApplyCategory(
+  guess: ActivityCategoryGuess | null,
+): guess is ActivityCategoryGuess {
   return Boolean(guess && !guess.ambiguous && guess.primary !== 'sonstiges');
 }
 
@@ -153,7 +157,10 @@ function tokenize(input: string) {
   return new Set(input.split(/\s+/).filter(Boolean));
 }
 
-function normalizeForUnderstanding(input: string) {
+/** The ONE normalizer for title matching — the learned category memory reuses
+ * it so a remembered title and a classified one can never disagree on casing,
+ * umlauts or punctuation. */
+export function normalizeForUnderstanding(input: string) {
   return input
     .toLowerCase()
     .replace(/ä|Ã¤/g, 'ae')

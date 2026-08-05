@@ -1,58 +1,24 @@
 import type { MarkerAvatar } from '../types/map.types';
 
-/**
- * Level-of-detail for activity markers. The marker keeps a constant height and
- * only reorganises its avatars and label as the map zooms:
- *   city         → compact, up to four faces as a 2×2 quad, no title
- *   neighborhood → same quad, slightly larger, prioritised titles
- *   street       → faces unfold into a single overlapping row, full titles
- *
- * The concrete zoom band is picked in MapCanvas from `MapRegion.latitudeDelta`.
- */
-export type MapMarkerDetailLevel = 'city' | 'neighborhood' | 'street';
-
-/** 0 = fully collapsed (city), 1 = fully expanded (street). Drives every morph. */
-export const DETAIL_PROGRESS: Record<MapMarkerDetailLevel, number> = {
-  city: 0,
-  neighborhood: 0.5,
-  street: 1,
-};
-
 /** Never show more than four faces; the fourth becomes a "+N" chip when needed. */
 export const MARKER_MAX_FACES = 4;
 
-// Hysteresis: separate enter/exit thresholds on latitudeDelta so the level never
-// flickers while the user rests near a boundary. Calibrate the exact numbers on
-// a real device — only the SEPARATION between enter and exit matters structurally.
-const CITY_ENTER = 0.11; // zooming OUT past this collapses to city
-const CITY_LEAVE = 0.09; // zooming IN past this leaves city
-const STREET_ENTER = 0.02; // zooming IN past this expands to street
-const STREET_LEAVE = 0.028; // zooming OUT past this leaves street
+// Continuous morph anchors: 0 = compact 2×2 quad, 0.5 = neighborhood form,
+// 1 = unfolded row. MapCanvas feeds this value directly from onRegionChange,
+// so the shape follows the pinch instead of starting a separate timed animation.
+const PROGRESS_CITY = 0.13;
+const PROGRESS_MID = 0.07;
+const PROGRESS_STREET = 0.038;
 
-/** Pure hysteresis step: given where we are and the current zoom, where to go. */
-export function detailLevelForDelta(
-  current: MapMarkerDetailLevel,
-  latitudeDelta: number,
-): MapMarkerDetailLevel {
-  if (current === 'city') {
-    if (latitudeDelta >= CITY_LEAVE) return 'city';
-    return latitudeDelta < STREET_ENTER ? 'street' : 'neighborhood';
+/** Smooth latitudeDelta → morph progress in [0, 1]. No hysteresis needed: a
+ * continuous value cannot flip-flop at a boundary the way a discrete level does. */
+export function zoomProgressForDelta(latitudeDelta: number): number {
+  if (latitudeDelta >= PROGRESS_CITY) return 0;
+  if (latitudeDelta <= PROGRESS_STREET) return 1;
+  if (latitudeDelta >= PROGRESS_MID) {
+    return (0.5 * (PROGRESS_CITY - latitudeDelta)) / (PROGRESS_CITY - PROGRESS_MID);
   }
-  if (current === 'street') {
-    if (latitudeDelta <= STREET_LEAVE) return 'street';
-    return latitudeDelta > CITY_ENTER ? 'city' : 'neighborhood';
-  }
-  // neighborhood
-  if (latitudeDelta > CITY_ENTER) return 'city';
-  if (latitudeDelta < STREET_ENTER) return 'street';
-  return 'neighborhood';
-}
-
-/** First level for a fresh map, without a previous state to apply hysteresis to. */
-export function initialDetailLevel(latitudeDelta: number): MapMarkerDetailLevel {
-  if (latitudeDelta > CITY_ENTER) return 'city';
-  if (latitudeDelta < STREET_ENTER) return 'street';
-  return 'neighborhood';
+  return 0.5 + (0.5 * (PROGRESS_MID - latitudeDelta)) / (PROGRESS_MID - PROGRESS_STREET);
 }
 
 export interface MarkerFace {
@@ -68,11 +34,8 @@ export interface MarkerFace {
  * slots. If more people exist than fit, the last slot becomes a "+N" chip that
  * counts the people NOT shown (never the total).
  */
-export function buildMarkerFaces(
-  avatars: MarkerAvatar[],
-  count: number,
-  maxFaces = MARKER_MAX_FACES,
-): MarkerFace[] {
+export function buildMarkerFaces(avatars: MarkerAvatar[], count: number): MarkerFace[] {
+  const maxFaces = MARKER_MAX_FACES;
   const total = Math.max(count, avatars.length, 1);
   if (total <= maxFaces) {
     return avatars.slice(0, total).map((avatar) => ({
@@ -101,9 +64,13 @@ export interface FacePoint {
  * maps grid→row, so the morph is a stable slide, never a reshuffle.
  */
 export function quadCenters(faceCount: number, cx: number, cy: number): FacePoint[] {
-  const hx = 10;
-  const vy = 9;
-  switch (faceCount) {
+  const visibleCount = Math.max(1, Math.min(faceCount, MARKER_MAX_FACES));
+  // The compact stage deliberately leaves breathing room to the mode ring.
+  // With 16–18 px avatar squircles, ±8.5 keeps even four faces fully inside
+  // the 48 px marker throughout the entire 2×2 zoom band.
+  const hx = 8.5;
+  const vy = 8.5;
+  switch (visibleCount) {
     case 1:
       return [{ x: cx, y: cy }];
     case 2:
@@ -134,9 +101,10 @@ export function rowCenters(
   faceStreet: number,
   step: number,
 ): FacePoint[] {
-  const total = faceStreet + Math.max(0, faceCount - 1) * step;
+  const visibleCount = Math.max(1, Math.min(faceCount, MARKER_MAX_FACES));
+  const total = faceStreet + Math.max(0, visibleCount - 1) * step;
   const first = cx - total / 2 + faceStreet / 2;
-  return Array.from({ length: faceCount }, (_, index) => ({
+  return Array.from({ length: visibleCount }, (_, index) => ({
     x: first + index * step,
     y: cy,
   }));

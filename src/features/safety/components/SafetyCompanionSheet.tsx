@@ -4,9 +4,10 @@ import { Alert, Modal, Pressable, ScrollView, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/features/auth';
+import { AnimatedToggleIcon } from '@/shared/components/AnimatedToggleIcon';
 
 import { useSafety } from '../SafetyProvider';
-import { signalStatus } from '../safetyTheme';
+import { STATUS_COLOR, signalStatus } from '../safetyTheme';
 import {
   companionAlertConfirmationRemainingMs,
   companionConfirmationRemainingMs,
@@ -22,12 +23,20 @@ const SIGNAL_META: Record<
   CompanionSignal,
   { label: string; color: string; icon: keyof typeof Ionicons.glyphMap }
 > = {
-  ok: { label: 'Unterwegs', color: '#6E8BF7', icon: 'walk-outline' },
-  unwell: { label: 'Fühlt sich unsicher', color: '#E0A23E', icon: 'alert-circle-outline' },
-  help: { label: 'Benötigt Hilfe', color: '#FF5A5A', icon: 'warning-outline' },
-  data_gap: { label: 'Keine aktuellen Daten', color: '#E0A23E', icon: 'cloud-offline-outline' },
-  no_response: { label: 'Keine Rückmeldung', color: '#FF5A5A', icon: 'help-circle-outline' },
-  timed_out: { label: 'Automatisch beendet', color: '#E0A23E', icon: 'timer-outline' },
+  ok: { label: 'Unterwegs', color: STATUS_COLOR.blue, icon: 'walk-outline' },
+  unwell: {
+    label: 'Fühlt sich unsicher',
+    color: STATUS_COLOR.orange,
+    icon: 'alert-circle-outline',
+  },
+  help: { label: 'Benötigt Hilfe', color: STATUS_COLOR.red, icon: 'warning-outline' },
+  data_gap: {
+    label: 'Keine aktuellen Daten',
+    color: STATUS_COLOR.orange,
+    icon: 'cloud-offline-outline',
+  },
+  no_response: { label: 'Keine Rückmeldung', color: STATUS_COLOR.red, icon: 'help-circle-outline' },
+  timed_out: { label: 'Automatisch beendet', color: STATUS_COLOR.orange, icon: 'timer-outline' },
 };
 
 function agoLabel(at: number | undefined, now: number): string {
@@ -153,25 +162,30 @@ function CompanionCard({
         <>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={confirmed ? `${confirmedLabel}: ${session.displayName}` : actionLabel}
+            accessibilityLabel={
+              confirmed ? `${confirmedLabel}: ${session.displayName}` : actionLabel
+            }
             accessibilityState={{ disabled: confirmed || busy }}
             disabled={confirmed || busy}
             className="mt-4 min-h-12 flex-row items-center justify-center gap-2 rounded-2xl border active:opacity-80"
             style={{
-              borderColor: confirmed ? 'rgba(65,192,141,0.45)' : '#6E8BF7',
-              backgroundColor: confirmed ? 'rgba(65,192,141,0.12)' : 'rgba(110,139,247,0.18)',
+              borderColor: confirmed ? `${STATUS_COLOR.blue}73` : STATUS_COLOR.blue,
+              backgroundColor: confirmed ? `${STATUS_COLOR.blue}1F` : `${STATUS_COLOR.blue}2E`,
               opacity: busy ? 0.6 : 1,
             }}
             onPress={onConfirm}
           >
-            <Ionicons
-              name={confirmed ? 'checkmark-circle' : 'hand-left-outline'}
+            <AnimatedToggleIcon
+              icon="checkmark-circle"
+              outlineIcon="hand-left-outline"
+              active={confirmed}
               size={18}
-              color={confirmed ? '#41C08D' : '#8EA5FF'}
+              activeColor={STATUS_COLOR.blue}
+              inactiveColor="#A99AC4"
             />
             <Text
               className="text-sm font-extrabold"
-              style={{ color: confirmed ? '#41C08D' : '#D8E0FF' }}
+              style={{ color: confirmed ? STATUS_COLOR.blue : '#E3DAF0' }}
             >
               {busy
                 ? 'Wird bestätigt …'
@@ -180,15 +194,13 @@ function CompanionCard({
                   : actionLabel}
             </Text>
           </Pressable>
-          <Text className="mt-2 text-center text-xs text-white/45">
-            {companionPresenceLabel}
-          </Text>
+          <Text className="mt-2 text-center text-xs text-white/45">{companionPresenceLabel}</Text>
           {alertActive ? (
             <View className="mt-2.5 flex-row items-start gap-2 rounded-2xl bg-white/[0.06] px-3.5 py-2.5">
               <Ionicons name="call-outline" size={15} color={meta.color} />
               <Text className="flex-1 text-xs leading-4 text-white/60">
-                Am schnellsten hilft direkter Kontakt — versuch {session.displayName} anzurufen
-                oder zu erreichen.
+                Am schnellsten hilft direkter Kontakt — versuch {session.displayName} anzurufen oder
+                zu erreichen.
               </Text>
             </View>
           ) : null}

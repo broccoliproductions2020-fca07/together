@@ -24,7 +24,7 @@ export interface ChatMessage {
   text: string;
   /** Epoch milliseconds. */
   createdAt: number;
-  /** True when the current mock user is the author. */
+  /** True when the current signed-in user is the author. */
   isMe: boolean;
   /** Message kind. Defaults to 'text'; 'proposal' renders as a card. */
   kind?: 'text' | 'proposal';
@@ -62,6 +62,15 @@ export interface GroupOpening {
   memberPreview: { displayName: string; initials: string }[];
 }
 
+/** A short-lived, location-free group formed only after a wink is accepted. */
+export interface SpontaneousRound {
+  id: string;
+  hostUid: string;
+  memberIds: string[];
+  memberPreview: { uid: string; displayName: string; initials: string; avatarUrl?: string }[];
+  expiresAt: number;
+}
+
 /**
  * Denormalized room summary — one document per room. The room list listener
  * reads ONLY these (never the message subcollection), which is the core
@@ -77,6 +86,8 @@ export interface ChatRoom {
   /** Room admins (manage membership). Absent on legacy rooms → the first
    * member (creator) counts as admin. */
   adminUids?: string[];
+  /** A short, invite-only round that has not yet become a real activity. */
+  roundStatus?: 'forming';
   /** Group opted into "Offen für Dazustoßer" (teaser doc exists). */
   joinable?: boolean;
   lastMessage?: { text: string; authorId: string; authorName: string; at: number };

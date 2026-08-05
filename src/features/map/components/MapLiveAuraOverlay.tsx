@@ -38,7 +38,7 @@ interface ProjectedAura extends LiveAuraTarget {
   y: number;
 }
 
-const AURA_SIZE = 96;
+export const LIVE_AURA_SIZE = 96;
 
 /**
  * Real, UI-thread animation above the native map â€” deliberately outside
@@ -66,18 +66,18 @@ export function MapLiveAuraOverlay({
     void Promise.all(
       targets.map(async (target) => {
         const point = await mapRef.current?.pointForCoordinate(target.coordinate);
-        return point
-          ? { ...target, x: point.x, y: point.y + (target.offsetY ?? 0) }
-          : undefined;
+        return point ? { ...target, x: point.x, y: point.y + (target.offsetY ?? 0) } : undefined;
       }),
-    ).then((points) => {
-      if (!active) return;
-      setProjected(points.filter((point): point is ProjectedAura => Boolean(point)));
-    }).catch(() => {
-      // A renderer can briefly reject projection while the native map mounts.
-      // The next settled region retries; never leave an unhandled promise behind.
-      if (active) setProjected([]);
-    });
+    )
+      .then((points) => {
+        if (!active) return;
+        setProjected(points.filter((point): point is ProjectedAura => Boolean(point)));
+      })
+      .catch(() => {
+        // A renderer can briefly reject projection while the native map mounts.
+        // The next settled region retries; never leave an unhandled promise behind.
+        if (active) setProjected([]);
+      });
 
     return () => {
       active = false;
@@ -93,14 +93,17 @@ export function MapLiveAuraOverlay({
           key={target.id}
           color={target.color}
           selected={target.selected}
-          style={{ left: target.x - AURA_SIZE / 2, top: target.y - AURA_SIZE / 2 }}
+          style={{
+            left: target.x - LIVE_AURA_SIZE / 2,
+            top: target.y - LIVE_AURA_SIZE / 2,
+          }}
         />
       ))}
     </View>
   );
 }
 
-/** Reusable for the web/mock map, where coordinates are already screen positions. */
+/** Reusable for the browser preview, where coordinates are already screen positions. */
 export function LiveAura({
   color,
   selected = false,
@@ -127,9 +130,16 @@ export function LiveAura({
     }
 
     const ease = Easing.out(Easing.cubic);
-    breathe.value = withRepeat(withTiming(1, { duration: 1900, easing: Easing.inOut(Easing.quad) }), -1, true);
-    firstWave.value = withRepeat(withTiming(1, { duration: 2600, easing: ease }), -1, false);
-    secondWave.value = withDelay(950, withRepeat(withTiming(1, { duration: 2600, easing: ease }), -1, false));
+    breathe.value = withRepeat(
+      withTiming(1, { duration: 2600, easing: Easing.inOut(Easing.quad) }),
+      -1,
+      true,
+    );
+    firstWave.value = withRepeat(withTiming(1, { duration: 3400, easing: ease }), -1, false);
+    secondWave.value = withDelay(
+      1400,
+      withRepeat(withTiming(1, { duration: 3400, easing: ease }), -1, false),
+    );
 
     return () => {
       cancelAnimation(breathe);
@@ -139,23 +149,28 @@ export function LiveAura({
   }, [breathe, firstWave, reducedMotion, secondWave]);
 
   const ambientStyle = useAnimatedStyle(() => ({
-    opacity: selected ? 0.16 + breathe.value * 0.09 : 0.08 + breathe.value * 0.06,
-    transform: [{ scale: 0.9 + breathe.value * 0.13 }],
+    // Non-selected `now` markers breathe very gently; selection stays clearer.
+    opacity: selected ? 0.15 + breathe.value * 0.08 : 0.05 + breathe.value * 0.035,
+    transform: [{ scale: 0.95 + breathe.value * 0.05 }],
   }));
   const firstWaveStyle = useAnimatedStyle(() => ({
-    opacity: (selected ? 0.48 : 0.32) * (1 - firstWave.value),
-    transform: [{ scale: 0.86 + firstWave.value * 0.54 }],
+    opacity: (selected ? 0.4 : 0.16) * (1 - firstWave.value),
+    transform: [{ scale: 0.9 + firstWave.value * 0.48 }],
   }));
   const secondWaveStyle = useAnimatedStyle(() => ({
-    opacity: (selected ? 0.34 : 0.22) * (1 - secondWave.value),
-    transform: [{ scale: 0.9 + secondWave.value * 0.48 }],
+    opacity: (selected ? 0.26 : 0.1) * (1 - secondWave.value),
+    transform: [{ scale: 0.92 + secondWave.value * 0.42 }],
   }));
 
   return (
     <View pointerEvents="none" style={[styles.aura, style]}>
-      <Animated.View style={[styles.ambient, { backgroundColor: colorWithAlpha(color, 1) }, ambientStyle]} />
+      <Animated.View
+        style={[styles.ambient, { backgroundColor: colorWithAlpha(color, 1) }, ambientStyle]}
+      />
       <Animated.View style={[styles.wave, { borderColor: color }, firstWaveStyle]} />
-      {!reducedMotion ? <Animated.View style={[styles.wave, { borderColor: color }, secondWaveStyle]} /> : null}
+      {!reducedMotion ? (
+        <Animated.View style={[styles.wave, { borderColor: color }, secondWaveStyle]} />
+      ) : null}
     </View>
   );
 }
@@ -170,9 +185,9 @@ const styles = StyleSheet.create({
     width: 76,
   },
   aura: {
-    height: AURA_SIZE,
+    height: LIVE_AURA_SIZE,
     position: 'absolute',
-    width: AURA_SIZE,
+    width: LIVE_AURA_SIZE,
   },
   wave: {
     borderRadius: 999,

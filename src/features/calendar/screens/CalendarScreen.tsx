@@ -47,9 +47,10 @@ function addMonths(base: { year: number; month: number }, delta: number) {
 
 export interface CalendarScreenProps {
   onGoToMap: () => void;
+  onEditActivity: (activityId: string) => void;
 }
 
-export function CalendarScreen({ onGoToMap }: CalendarScreenProps) {
+export function CalendarScreen({ onGoToMap, onEditActivity }: CalendarScreenProps) {
   const { plans, findActivityById } = useActivityEntities();
   const { isJoined } = useActivityChat();
   const reducedMotion = useReducedMotion();
@@ -299,6 +300,7 @@ export function CalendarScreen({ onGoToMap }: CalendarScreenProps) {
                       plan.people.length,
                   })
                 }
+                onEditActivity={(plan) => onEditActivity(plan.activityId ?? plan.id)}
                 onSectionLayout={handleSectionLayout}
               />
             </ScrollView>

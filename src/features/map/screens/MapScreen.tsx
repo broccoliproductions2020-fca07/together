@@ -1,7 +1,9 @@
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
+import { router } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Linking, Modal, Platform, useWindowDimensions, View } from 'react-native';
+import { Alert, Modal, Platform, useWindowDimensions, View } from 'react-native';
+import { useReducedMotion } from 'react-native-reanimated';
 
 import {
   ActivityComposerSheet,
@@ -20,12 +22,18 @@ import {
 import {
   isJourneyAutoShareResponse,
   useJourney,
-  type JourneyActivityContext,
   type JourneyParticipant,
 } from '@/features/journey';
 import { useFriends } from '@/features/friends';
-import { ActivitiesSheet, MapOverlay, MarkerDetailSheet, NearbySheet } from '@/features/overlay';
-import { placeService } from '@/features/places';
+import { PostfachSheet } from '@/features/mailbox';
+import { usePushNudge } from '@/features/notifications';
+import { claimNotificationResponse } from '@/features/notifications/notificationResponse';
+import {
+  MapOverlay,
+  MarkerDetailSheet,
+  NearbySheet,
+  SpontaneousRoundSheet,
+} from '@/features/overlay';
 import { presenceToNearby, useOpenStatus } from '@/features/presence';
 import {
   deriveCompanionSignal,
@@ -36,208 +44,39 @@ import {
   useSafety,
 } from '@/features/safety';
 import { useNearbyRadius } from '@/features/settings';
-import { BACKEND } from '@/shared/services/firebase';
+import { haptics } from '@/shared/utils/haptics';
+import {
+  requestForegroundLocationPermission,
+  showLocationPermissionAlert,
+} from '@/shared/utils/locationPermission';
 
 import { MapCanvas } from '../components/MapCanvas';
 import { MapLocationPickerOverlay } from '../components/MapLocationPickerOverlay';
+import { useMapLocationPicker } from '../hooks/useMapLocationPicker';
 import type {
   ActivityMode,
   ActivitySelectionPreview,
   MapCoordinate,
-  MapMarker,
-  MapPlaceSelection,
   MapSelection,
-  MarkerCluster,
-  MockMapPosition,
 } from '../types/map.types';
-import { berlinRegion, mockPositionToCoordinate } from '../utils/mockCoordinates';
+import {
+  clusterToJourneyContext,
+  coordinateFromSelection,
+  infoToActivityPreview,
+  markerToJourneyContext,
+  openNativeMaps,
+  placeSelectionToComposerPlace,
+  placeToSelection,
+  previewToJourneyContext,
+} from '../utils/mapSelection';
 import { selectFriendsWithoutLocation, selectNearbyFriends } from '../utils/nearbySelectors';
-
-type PlaceSelection = Extract<MapSelection, { type: 'Place' }>;
-
-const UNKNOWN_PLACE_TITLE = 'Ort ohne Namen';
-const CANDIDATE_CLEAR_DISTANCE = 0.00025;
-
-function nativeMapsUrl(place: PlaceSelection, intent: 'details' | 'route') {
-  const { latitude, longitude } = place.coordinate;
-  const encodedTitle = encodeURIComponent(place.title);
-  const encodedCoordinate = `${latitude},${longitude}`;
-
-  if (Platform.OS === 'ios') {
-    return intent === 'route'
-      ? `http://maps.apple.com/?daddr=${encodedCoordinate}&q=${encodedTitle}`
-      : `http://maps.apple.com/?ll=${encodedCoordinate}&q=${encodedTitle}`;
-  }
-
-  if (intent === 'route') {
-    return `https://www.google.com/maps/dir/?api=1&destination=${encodedCoordinate}&travelmode=walking`;
-  }
-
-  return `geo:${encodedCoordinate}?q=${encodedCoordinate}(${encodedTitle})`;
-}
-
-function openNativeMaps(place: PlaceSelection, intent: 'details' | 'route') {
-  void Linking.openURL(nativeMapsUrl(place, intent));
-}
-
-function compactAddressParts(parts: (string | null | undefined)[]) {
-  const uniqueParts = parts
-    .map((part) => part?.trim())
-    .filter((part): part is string => Boolean(part));
-
-  return [...new Set(uniqueParts)].join(', ');
-}
-
-function formatReverseGeocodedAddress(address: Location.LocationGeocodedAddress) {
-  const streetLine = compactAddressParts([address.street, address.streetNumber]);
-  const areaLine = compactAddressParts([address.district, address.city]);
-
-  return (
-    address.name?.trim() ||
-    address.formattedAddress?.trim() ||
-    compactAddressParts([streetLine, areaLine, address.country])
-  );
-}
-
-async function reverseGeocodePlaceTitle(coordinate: MapCoordinate) {
-  try {
-    const [address] = await Location.reverseGeocodeAsync(coordinate);
-    return address ? formatReverseGeocodedAddress(address) : null;
-  } catch {
-    return null;
-  }
-}
-
-async function placeToSelection(place: MapPlaceSelection): Promise<MapSelection> {
-  const coordinate = `${place.coordinate.latitude.toFixed(5)}, ${place.coordinate.longitude.toFixed(5)}`;
-  const rawTitle = place.title.trim();
-  const hasPoiName = place.source === 'poi' && rawTitle !== UNKNOWN_PLACE_TITLE;
-  const reverseGeocodedTitle = hasPoiName ? null : await reverseGeocodePlaceTitle(place.coordinate);
-  const title = hasPoiName ? rawTitle : reverseGeocodedTitle || UNKNOWN_PLACE_TITLE;
-  const sourceHint = hasPoiName
-    ? 'Von der Karte erkannt. Kostenlose Basisdaten, keine Places-API-Abfrage.'
-    : reverseGeocodedTitle
-      ? 'Kostenlos aus der Koordinate als Adresse erkannt. Kein Places-API-Konto nötig.'
-      : 'Die Karte hat keinen Ortsnamen geliefert. Tippe direkt auf einen Ortsnamen/POI oder öffne Karten.';
-
-  return {
-    type: 'Place',
-    title,
-    subtitle: `${sourceHint} Koordinate: ${coordinate}`,
-    coordinate: place.coordinate,
-    placeId: place.placeId,
-    source: place.source,
-  };
-}
-
-function placeSelectionToComposerPlace(place: PlaceSelection): SelectedPlace {
-  return {
-    id: place.placeId ?? `${place.coordinate.latitude}-${place.coordinate.longitude}`,
-    name: place.title === UNKNOWN_PLACE_TITLE ? 'Markierter Ort' : place.title,
-    address: place.subtitle,
-    latitude: place.coordinate.latitude,
-    longitude: place.coordinate.longitude,
-    source: 'map',
-  };
-}
-
-async function coordinateToComposerPlace(coordinate: MapCoordinate): Promise<SelectedPlace> {
-  const title = await reverseGeocodePlaceTitle(coordinate);
-  const coordinateLabel = `${coordinate.latitude.toFixed(5)}, ${coordinate.longitude.toFixed(5)}`;
-
-  return {
-    id: `map-center-${coordinate.latitude.toFixed(5)}-${coordinate.longitude.toFixed(5)}`,
-    name: title || 'Markierter Ort',
-    address: title ? `${title} · ${coordinateLabel}` : `Koordinate: ${coordinateLabel}`,
-    latitude: coordinate.latitude,
-    longitude: coordinate.longitude,
-    source: 'map',
-  };
-}
-
-function distanceBetweenCoordinates(a: MapCoordinate, b: MapCoordinate) {
-  return Math.abs(a.latitude - b.latitude) + Math.abs(a.longitude - b.longitude);
-}
-
-function coordinateFromPosition(position?: MockMapPosition) {
-  return position ? mockPositionToCoordinate(position) : undefined;
-}
-
-function coordinateFromSelection(selection: MapSelection | null) {
-  if (!selection) return undefined;
-  if (selection.type === 'Place') return selection.coordinate;
-  if (selection.type === 'Avatar' || selection.type === 'Cluster') {
-    return selection.targetCoordinate ?? coordinateFromPosition(selection.targetPosition);
-  }
-  return undefined;
-}
-
-function infoToActivityPreview(info: ActivityInfo): ActivitySelectionPreview {
-  return {
-    id: info.id,
-    title: info.title,
-    subtitle: info.description ?? `${info.participantCount} Teilnehmer`,
-    mode: info.mode,
-    participantCount: info.participantCount,
-    participants: info.participants,
-    targetCoordinate: coordinateFromPosition(info.targetPosition),
-    targetPosition: info.targetPosition,
-    timeLabel: info.timeLabel,
-    placeLabel: info.placeLabel,
-    startsAt: info.startsAt,
-    endsAt: info.endsAt,
-  };
-}
-
-function previewToJourneyContext(activity: ActivitySelectionPreview): JourneyActivityContext {
-  return {
-    id: activity.id,
-    title: activity.title,
-    participants: activity.participants,
-    targetCoordinate: activity.targetCoordinate,
-    targetPosition: activity.targetPosition,
-    startsAt: activity.startsAt,
-    endsAt: activity.endsAt,
-  };
-}
-
-function markerToJourneyContext(marker: MapMarker): JourneyActivityContext {
-  return {
-    id: marker.id,
-    title: marker.title ?? marker.label ?? marker.displayName,
-    participants: marker.avatars?.length
-      ? marker.avatars
-      : [
-          {
-            userId: marker.userId,
-            displayName: marker.displayName,
-            initials: marker.initials,
-            avatarUrl: marker.avatarUrl,
-          },
-        ],
-    targetCoordinate: mockPositionToCoordinate(marker.position),
-    targetPosition: marker.position,
-    startsAt: marker.startsAt,
-    endsAt: marker.endsAt,
-  };
-}
-
-function clusterToJourneyContext(cluster: MarkerCluster): JourneyActivityContext {
-  return {
-    id: cluster.id,
-    title: cluster.label,
-    participants: cluster.avatars,
-    targetCoordinate: mockPositionToCoordinate(cluster.position),
-    targetPosition: cluster.position,
-    startsAt: cluster.startsAt,
-    endsAt: cluster.endsAt,
-  };
-}
 
 export interface MapScreenProps {
   /** MainSurface keeps map layers mounted for transitions; this tells the
    * presence seam whether the map is actually visible to the user. */
   active?: boolean;
+  editActivityRequest?: { requestId: number; activityId: string };
+  onEditActivityRequestHandled?: (requestId: number) => void;
   onLocationPickerActiveChange?: (active: boolean) => void;
   /** The activity/place detail is rendered inline over the map so marker taps
    * can switch directly. Let the parent retract its global mode switch while
@@ -247,6 +86,25 @@ export interface MapScreenProps {
   onOpenCalendar?: () => void;
 }
 
+interface AcquireOwnLocationOptions {
+  /** Show the OS permission dialog if it has never been answered. */
+  prompt?: boolean;
+  /** Explicit user actions may ask a second time after an earlier denial —
+   * Android still shows the dialog, iOS does not and reports `canAskAgain:
+   * false`. Background acquisition must never do this: it would re-nag on
+   * every map visit. */
+  repromptAfterDenial?: boolean;
+  isCancelled?: () => boolean;
+}
+
+/** `granted` is reported separately: "no coordinate" means a denied permission
+ * OR a permission that is fine but has not produced a fix yet, and those two
+ * need different answers on an explicit "Zentrieren" tap. */
+interface OwnLocationResult {
+  coordinate: MapCoordinate | null;
+  granted: boolean;
+}
+
 /**
  * Map-first screen. The map fills the entire screen and every control floats
  * absolutely above it via `MapOverlay`; there is no bottom bar, panel or dark
@@ -254,11 +112,14 @@ export interface MapScreenProps {
  */
 export function MapScreen({
   active = true,
+  editActivityRequest,
+  onEditActivityRequestHandled,
   onLocationPickerActiveChange,
   onDetailSheetVisibleChange,
   onOpenCalendar,
 }: MapScreenProps) {
   const { height: viewportHeight } = useWindowDimensions();
+  const reducedMotion = useReducedMotion();
   const { user } = useAuth();
   const currentUid = user?.id ?? 'u_you';
   const { radiusKm } = useNearbyRadius();
@@ -266,10 +127,15 @@ export function MapScreen({
     isJoined,
     joinActivity,
     leaveRoom,
-    createGroup,
     getGroup,
     markProposalPlanned,
     joinOpenGroup,
+    spontaneousRound,
+    setRoundSurfaceActive,
+    startSpontaneousRound,
+    acceptSpontaneousRound,
+    leaveSpontaneousRound,
+    getUnreadCount,
   } = useActivityChatActivity();
   const {
     markerToSelection,
@@ -285,7 +151,8 @@ export function MapScreen({
     markerClusters,
   } = useActivityEntities();
   const { activeJourney, getActivityJourneys, getJourneySummary } = useJourney();
-  const { journeyRemindersEnabled } = useFriends();
+  const { journeyRemindersEnabled, friends: friendProfiles } = useFriends();
+  const { maybeAskForPush } = usePushNudge();
   const {
     friendSessions,
     mapFocusRequest,
@@ -293,8 +160,12 @@ export function MapScreen({
     heimwegFocusActive,
     session: ownSafetySession,
     consoleMinimized,
+    setConsoleMinimized,
     startingHeimweg,
   } = useSafety();
+  const mapLocationPicker = useMapLocationPicker({
+    onActiveChange: onLocationPickerActiveChange,
+  });
   const safetySplitPanelHeight =
     ownSafetySession && friendSessions.length > 0 && !consoleMinimized && !startingHeimweg
       ? getSafetySplitPanelHeight(viewportHeight)
@@ -309,39 +180,51 @@ export function MapScreen({
     participantId?: string;
   } | null>(null);
   const [nearbySheetVisible, setNearbySheetVisible] = useState(false);
-  const [activitiesSheetVisible, setActivitiesSheetVisible] = useState(false);
+  const [postfachVisible, setPostfachVisible] = useState(false);
   const [chatActivity, setChatActivity] = useState<ActivityInfo | null>(null);
+  const [roundSheetVisible, setRoundSheetVisible] = useState(false);
   // Pill count is radius-based and viewport-independent — it does NOT change when
   // the user zooms or pans the map. See nearbySelectors.ts for the rationale.
-  // In firebase mode the list is REAL open friends (presence seam); mock mode
-  // keeps the demo friends so the app still works fully offline.
-  const { openFriends, setFriendPresenceListening } = useOpenStatus();
+  // The list comes from the signed-in user's live presence subscription.
+  const {
+    isOpen,
+    goOpen,
+    shareLocation,
+    openFriends,
+    setFriendPresenceListening,
+    close: closeOpenStatus,
+  } = useOpenStatus();
 
   useEffect(() => {
-    setFriendPresenceListening(active);
+    setFriendPresenceListening(active && nearbySheetVisible);
     return () => setFriendPresenceListening(false);
-  }, [active, setFriendPresenceListening]);
+  }, [active, nearbySheetVisible, setFriendPresenceListening]);
+
+  useEffect(() => {
+    setRoundSurfaceActive(active);
+    return () => setRoundSurfaceActive(false);
+  }, [active, setRoundSurfaceActive]);
   const [myLocation, setMyLocation] = useState<MapCoordinate | null>(null);
-  const realNearby = useMemo(() => {
-    // Fallback to the Berlin demo center when we don't have the device location
-    // yet, so sharing friends still get a distance (and the pill counts) instead
-    // of all collapsing to "Ohne Standort".
-    const origin = myLocation ?? {
-      latitude: berlinRegion.latitude,
-      longitude: berlinRegion.longitude,
-    };
-    return presenceToNearby(openFriends, origin);
-  }, [openFriends, myLocation]);
-  const useRealPresence = BACKEND === 'firebase';
-  const nearbyFriends = useRealPresence
-    ? realNearby
-        .filter((f) => f.locationVisibility === 'pin' && (f.distanceKm ?? Infinity) <= radiusKm)
-        .sort((a, b) => (a.distanceKm ?? 0) - (b.distanceKm ?? 0))
-    : selectNearbyFriends(radiusKm);
-  const friendsWithoutLocation = useRealPresence
-    ? realNearby.filter((f) => f.locationVisibility === 'none')
-    : selectFriendsWithoutLocation();
-  const nearbyCount = nearbyFriends.length;
+  const [locationDenied, setLocationDenied] = useState(false);
+  const realNearby = useMemo(
+    () => presenceToNearby(openFriends, myLocation),
+    [openFriends, myLocation],
+  );
+  // Both go through nearbySelectors — the filtering rule must never be
+  // re-implemented here (see nearbySelectors.ts).
+  const nearbyFriends = selectNearbyFriends(realNearby, radiusKm);
+  const friendsWithoutLocation = selectFriendsWithoutLocation(realNearby);
+  // An empty "In deiner Nähe" section has three different causes with three
+  // different fixes — the sheet must never give radius advice to someone whose
+  // real problem is an empty friend list (or that simply nobody is open).
+  const nearbyEmptyReason: 'no-friends' | 'none-open' | 'out-of-range' | 'quiet' =
+    friendProfiles.length === 0
+      ? 'no-friends'
+      : openFriends.length === 0
+        ? 'none-open'
+        : realNearby.some((friend) => typeof friend.distanceKm === 'number')
+          ? 'out-of-range'
+          : 'quiet';
   const [composerMode, setComposerMode] = useState<ActivityMode>('now');
   const [composerVisible, setComposerVisible] = useState(false);
   const [composerPlace, setComposerPlace] = useState<SelectedPlace | undefined>();
@@ -349,24 +232,10 @@ export function MapScreen({
   const [composerActivityId, setComposerActivityId] = useState<string | undefined>();
   const [editingActivityId, setEditingActivityId] = useState<string | undefined>();
   const [composerInitialDraft, setComposerInitialDraft] = useState<ActivityDraft | undefined>();
-  const [mapPickerActive, setMapPickerActive] = useState(false);
-  const [mapPickerResolving, setMapPickerResolving] = useState(false);
-  const [mapPickerCurrentLocationLoading, setMapPickerCurrentLocationLoading] = useState(false);
-  const [mapPickerMode, setMapPickerMode] = useState<ActivityMode>('open');
-  const [mapPickerSearchQuery, setMapPickerSearchQuery] = useState('');
-  const [mapPickerSearchResults, setMapPickerSearchResults] = useState<SelectedPlace[]>([]);
-  const [mapPickerSearchLoading, setMapPickerSearchLoading] = useState(false);
-  const [mapPickerSelectedPlaceCandidate, setMapPickerSelectedPlaceCandidate] = useState<
-    SelectedPlace | undefined
-  >();
-  const [mapPickerCoordinate, setMapPickerCoordinate] = useState<MapCoordinate>({
-    latitude: berlinRegion.latitude,
-    longitude: berlinRegion.longitude,
-  });
-  const [mapPickerFocusCoordinate, setMapPickerFocusCoordinate] = useState<
-    MapCoordinate | undefined
-  >();
   const [mapFocusCoordinate, setMapFocusCoordinate] = useState<MapCoordinate | undefined>();
+  // Id of a just-published marker playing the "Wurf & Pop" launch. The canvas
+  // hides the real marker and throws in an animated copy until it settles.
+  const [launchMarkerId, setLaunchMarkerId] = useState<string>();
   const [selectionFocus, setSelectionFocus] = useState<{
     id: number;
     coordinate: MapCoordinate;
@@ -380,10 +249,44 @@ export function MapScreen({
     coordinates: MapCoordinate[];
   }>();
   const safetyFitSequenceRef = useRef(0);
+  /** One-shot: the camera follows the first location fix, never a later one. */
+  const didCenterOnOwnLocationRef = useRef(false);
   const selectionFocusSequenceRef = useRef(0);
   const safetyMarkerFocusSequenceRef = useRef(0);
   const wasHeimwegFocusActiveRef = useRef(false);
   const [safetyNow, setSafetyNow] = useState(() => Date.now());
+
+  const openActivityEditor = useCallback(
+    (activityId: string) => {
+      const draft = getEditableDraft(activityId);
+      if (!draft) return false;
+
+      setSelection(null);
+      setPostfachVisible(false);
+      setChatActivity(null);
+      setComposerActivityId(undefined);
+      setEditingActivityId(activityId);
+      setComposerInitialDraft(draft);
+      setComposerMode(draft.mode);
+      setComposerPlace(draft.place);
+      setComposerTitle(draft.title);
+      setComposerVisible(true);
+      return true;
+    },
+    [getEditableDraft],
+  );
+
+  useEffect(() => {
+    if (!active || !editActivityRequest) return;
+    const opened = openActivityEditor(editActivityRequest.activityId);
+    onEditActivityRequestHandled?.(editActivityRequest.requestId);
+    if (!opened) {
+      Alert.alert(
+        'Bearbeiten nicht möglich',
+        'Die Aktivität ist nicht mehr aktiv oder du bist nicht ihr Host.',
+      );
+    }
+  }, [active, editActivityRequest, onEditActivityRequestHandled, openActivityEditor]);
 
   useEffect(() => {
     onDetailSheetVisibleChange?.(Boolean(selection));
@@ -397,12 +300,12 @@ export function MapScreen({
   );
 
   useEffect(() => {
-    if (mapPickerActive || heimwegFocusActive) return;
+    if (mapLocationPicker.active || heimwegFocusActive) return;
     const coordinate = coordinateFromSelection(selection);
     if (!coordinate) return;
     selectionFocusSequenceRef.current += 1;
     setSelectionFocus({ id: selectionFocusSequenceRef.current, coordinate });
-  }, [heimwegFocusActive, mapPickerActive, selection]);
+  }, [heimwegFocusActive, mapLocationPicker.active, selection]);
 
   useEffect(() => {
     // Staleness only matters while the dedicated Heimweg focus is visible.
@@ -494,7 +397,6 @@ export function MapScreen({
     setMapFocusCoordinate({ latitude: mapFocusRequest.lat, longitude: mapFocusRequest.lng });
     clearMapFocusRequest();
   }, [mapFocusRequest, clearMapFocusRequest]);
-  const pendingMapPickRef = useRef<((place: SelectedPlace) => void) | null>(null);
   const selectedPlace = selection?.type === 'Place' ? selection : null;
   const selectedActivity =
     selection?.type === 'Avatar' || selection?.type === 'Cluster' ? selection : null;
@@ -509,9 +411,8 @@ export function MapScreen({
     }
   }, [journeyJoinPromptActivityId, selectedActivity?.id]);
 
-  // Once joined, show the current user in the detail sheet's participant list +
-  // count immediately (optimistic — works for demo seeds and before the backend
-  // round-trip). If the persisted doc already lists them, leave it untouched.
+  // Once joined, show the current user in the detail sheet immediately while
+  // the live document catches up. If it already lists them, leave it unchanged.
   const displayedSelection = useMemo(() => {
     if (
       !selection ||
@@ -534,9 +435,9 @@ export function MapScreen({
       ],
     };
   }, [selection, selectedActivityJoined, currentUid, user?.displayName]);
-  // Firebase maintains a location-free count in the existing Activity feed on
-  // journey start/arrival/stop. The map therefore needs no RTDB listener per
-  // marker; the mock keeps deriving its count from its local journey room.
+  // Firebase maintains a location-free count in the existing activity feed on
+  // journey start, arrival and stop. The map therefore needs no RTDB listener
+  // for every marker.
   const journeyUnderwayCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     mapMarkers.forEach((marker) => {
@@ -587,104 +488,188 @@ export function MapScreen({
         : `Du teilst · ${activeJourney.title}`
       : undefined;
 
-  useEffect(() => {
-    if (Platform.OS === 'web') return;
-
-    const openActivityFromNotification = (response: Notifications.NotificationResponse | null) => {
-      if (response && isJourneyAutoShareResponse(response)) return;
-      const activityId = response?.notification.request.content.data?.activityId;
-      if (typeof activityId !== 'string') return;
+  const openActivityById = useCallback(
+    (activityId: string) => {
       const activity = findActivityById(activityId);
-      if (!activity) return;
+      if (!activity) return false;
       const preview = infoToActivityPreview(activity);
       setSelection({
         type: 'Avatar',
         hostName: preview.participants[0]?.displayName ?? 'Activity',
         ...preview,
       });
-    };
+      return true;
+    },
+    [findActivityById],
+  );
 
-    const subscription = Notifications.addNotificationResponseReceivedListener(
-      openActivityFromNotification,
-    );
-    void Notifications.getLastNotificationResponseAsync().then(openActivityFromNotification);
-    return () => subscription.remove();
-  }, [findActivityById]);
+  const routeNotificationResponse = useCallback(
+    (response: Notifications.NotificationResponse | null) => {
+      if (
+        !response ||
+        isJourneyAutoShareResponse(response) ||
+        !claimNotificationResponse('map', response)
+      ) {
+        return;
+      }
+      const data = response.notification.request.content.data;
+      const kind = typeof data?.kind === 'string' ? data.kind : undefined;
+      const activityId = typeof data?.activityId === 'string' ? data.activityId : undefined;
+      const roomId = typeof data?.roomId === 'string' ? data.roomId : undefined;
+
+      if (kind === 'friend_request') {
+        setPostfachVisible(true);
+        return;
+      }
+
+      if (kind?.startsWith('safety_')) {
+        const ownerUid = typeof data?.safetyOwnerUid === 'string' ? data.safetyOwnerUid : undefined;
+        const friendSession = ownerUid
+          ? friendSessions.find((session) => session.uid === ownerUid)
+          : undefined;
+        if (friendSession) {
+          setSelectedSafetyUid(friendSession.uid);
+          setCompanionSheetVisible(true);
+        } else if (ownSafetySession && (!ownerUid || ownSafetySession.uid === ownerUid)) {
+          setConsoleMinimized(false);
+        } else {
+          setPostfachVisible(true);
+        }
+        return;
+      }
+
+      if (kind === 'chat_message') {
+        const activity = activityId
+          ? findActivityById(activityId)
+          : roomId
+            ? findActivityById(roomId)
+            : null;
+        setPostfachVisible(true);
+        if (activity) setChatActivity(activity);
+        return;
+      }
+
+      if (activityId && openActivityById(activityId)) return;
+      setPostfachVisible(true);
+    },
+    [findActivityById, friendSessions, openActivityById, ownSafetySession, setConsoleMinimized],
+  );
+  const notificationResponseRouterRef = useRef(routeNotificationResponse);
+  notificationResponseRouterRef.current = routeNotificationResponse;
 
   useEffect(() => {
-    const query = mapPickerSearchQuery.trim();
-    if (!mapPickerActive || query.length < 2) {
-      setMapPickerSearchResults([]);
-      setMapPickerSearchLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setMapPickerSearchLoading(true);
-    const timer = setTimeout(() => {
-      void placeService
-        .search({ query, center: mapPickerCoordinate, radiusMeters: 10_000 })
-        .then((results) => {
-          if (!cancelled) {
-            setMapPickerSearchResults(results);
-            setMapPickerSearchLoading(false);
-          }
-        })
-        .catch(() => {
-          if (!cancelled) {
-            setMapPickerSearchResults([]);
-            setMapPickerSearchLoading(false);
-          }
-        });
-    }, 240);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [mapPickerActive, mapPickerCoordinate, mapPickerSearchQuery]);
-
-  const updateMapPickerCenter = useCallback((coordinate: MapCoordinate) => {
-    setMapPickerCoordinate(coordinate);
-    setMapPickerSelectedPlaceCandidate((candidate) => {
-      if (candidate?.latitude == null || candidate.longitude == null) return candidate;
-
-      const candidateCoordinate = {
-        latitude: candidate.latitude,
-        longitude: candidate.longitude,
-      };
-
-      return distanceBetweenCoordinates(coordinate, candidateCoordinate) > CANDIDATE_CLEAR_DISTANCE
-        ? undefined
-        : candidate;
-    });
+    if (Platform.OS === 'web') return;
+    const subscription = Notifications.addNotificationResponseReceivedListener((response) =>
+      notificationResponseRouterRef.current(response),
+    );
+    void Notifications.getLastNotificationResponseAsync()
+      .then((response) => notificationResponseRouterRef.current(response))
+      .catch(() => {});
+    return () => subscription.remove();
   }, []);
 
-  useEffect(() => {
-    onLocationPickerActiveChange?.(mapPickerActive);
-  }, [mapPickerActive, onLocationPickerActiveChange]);
+  // ONE shared acquisition path for the camera AND distance ranking, so
+  // "Zentrieren" can never disagree with what the map shows. The map is the
+  // moment the OS permission prompt appears; a denial is surfaced via the
+  // NearbySheet hint instead of silently rendering "0 offen" with no
+  // explanation.
+  const acquireOwnLocation = useCallback(
+    async ({
+      prompt = false,
+      repromptAfterDenial = false,
+      isCancelled = () => false,
+    }: AcquireOwnLocationOptions = {}): Promise<OwnLocationResult> => {
+      let permission = await Location.getForegroundPermissionsAsync();
+      const mayAsk =
+        permission.status === Location.PermissionStatus.UNDETERMINED ||
+        (repromptAfterDenial && permission.canAskAgain);
+      if (prompt && mayAsk) {
+        // Shared request so every surface treats a denial the same way.
+        await requestForegroundLocationPermission();
+        permission = await Location.getForegroundPermissionsAsync();
+      }
+      if (isCancelled()) return { coordinate: null, granted: false };
+      setLocationDenied(permission.status === Location.PermissionStatus.DENIED);
+      if (permission.status !== Location.PermissionStatus.GRANTED) {
+        return { coordinate: null, granted: false };
+      }
 
-  // Best-effort own location (silent — no prompt here) so real presence friends
-  // can be distance-ranked. Without it, sharing friends fall back to list-only.
-  useEffect(() => {
-    if (!useRealPresence) return;
-    let cancelled = false;
-    (async () => {
+      const result: OwnLocationResult = { coordinate: null, granted: true };
+      const publish = (coords: { latitude: number; longitude: number }) => {
+        const own = { latitude: coords.latitude, longitude: coords.longitude };
+        result.coordinate = own;
+        setMyLocation(own);
+        // Point the camera at the person ONCE, on the first fix. Without this
+        // the map kept the DEFAULT_MAP_REGION (Berlin) forever even with
+        // permission granted — the position was fetched for distance ranking
+        // only and never reached the camera. Guarded by a ref so a later, more
+        // accurate fix can never yank the map out from under someone who has
+        // already started panning.
+        if (!didCenterOnOwnLocationRef.current) {
+          didCenterOnOwnLocationRef.current = true;
+          setMapFocusCoordinate(own);
+        }
+      };
+
+      // Take the OS's CACHED position first. `getCurrentPositionAsync` waits
+      // for a fresh fix at the requested accuracy, which indoors or on a first
+      // launch can take minutes — and until it returns, `myLocation` is null,
+      // so the map AND the recenter button both fall back to Berlin. The
+      // cached fix is normally seconds old and good enough to open the map on
+      // the right city; the live fixes below then refine it silently.
       try {
-        const perm = await Location.getForegroundPermissionsAsync();
-        if (perm.status !== Location.PermissionStatus.GRANTED) return;
+        const last = await Location.getLastKnownPositionAsync();
+        if (isCancelled()) return result;
+        if (last) publish(last.coords);
+      } catch {
+        // No cached fix — fall through to the live ones below.
+      }
+      // Coarse fix NEXT. `Accuracy.Low` (~1 km) resolves from wifi/cell in a
+      // second or two, while `Balanced` waits for a GPS-grade fix that indoors
+      // can take minutes. A kilometre of error is invisible at city zoom, so
+      // this opens the map in the right place immediately and the accurate
+      // pass below then corrects it for distance ranking.
+      try {
+        const coarse = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Low,
+        });
+        if (isCancelled()) return result;
+        publish(coarse.coords);
+      } catch {
+        // Fall through to the accurate request.
+      }
+      try {
         const pos = await Location.getCurrentPositionAsync({
           accuracy: Location.Accuracy.Balanced,
         });
-        if (!cancelled) {
-          setMyLocation({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
-        }
+        if (isCancelled()) return result;
+        publish(pos.coords);
       } catch {
-        // No location → friends who share still appear, just under "Ohne Standort".
+        // No fix → friends who share still appear, just under "Ohne Näheangabe".
       }
-    })();
+      return result;
+    },
+    [],
+  );
+
+  // Runs as soon as the map is on screen — NOT only while the NearbySheet is
+  // open. Gating this on the sheet meant anyone who never opened the sheet kept
+  // `myLocation === null` forever, so the map sat on the Berlin fallback and
+  // "Zentrieren" zoomed into Berlin. It re-runs when the sheet opens to refresh
+  // the distance ranking; the camera stays put thanks to the one-shot ref.
+  useEffect(() => {
+    if (!active) return;
+    let cancelled = false;
+    void acquireOwnLocation({ prompt: true, isCancelled: () => cancelled });
     return () => {
       cancelled = true;
     };
-  }, [useRealPresence]);
+  }, [acquireOwnLocation, active, nearbySheetVisible, shareLocation]);
+
+  const handleOpenPresencePress = useCallback(() => {
+    if (!isOpen) goOpen();
+    setNearbySheetVisible(true);
+  }, [goOpen, isOpen]);
 
   function openComposer(
     mode: ActivityMode,
@@ -699,32 +684,56 @@ export function MapScreen({
     setComposerVisible(true);
   }
 
-  async function handleStartPlanning(members: GroupMember[]) {
-    const id = await createGroup(members);
-    const names = members.map((member) => member.displayName);
-    setNearbySheetVisible(false);
+  async function handleStartSpontaneousRound(members: GroupMember[]) {
+    try {
+      await startSpontaneousRound(members);
+      closeOpenStatus();
+      setNearbySheetVisible(false);
+      setRoundSheetVisible(true);
+      haptics.success();
+    } catch (error) {
+      haptics.warning();
+      Alert.alert(
+        'Winken nicht moeglich',
+        error instanceof Error ? error.message : 'Bitte versuche es gleich noch einmal.',
+      );
+      throw error;
+    }
+  }
+
+  async function handleAcceptSpontaneousRound(roundId: string) {
+    try {
+      await acceptSpontaneousRound(roundId);
+      // The server already deleted the remote presence in the same
+      // transaction. Closing local persistence prevents it being published
+      // again by the OpenStatus write-through effect.
+      closeOpenStatus();
+      setPostfachVisible(false);
+      setRoundSheetVisible(true);
+      haptics.success();
+    } catch (error) {
+      haptics.warning();
+      Alert.alert(
+        'Beitritt nicht moeglich',
+        error instanceof Error ? error.message : 'Bitte versuche es gleich noch einmal.',
+      );
+    }
+  }
+
+  function openSpontaneousRoundChat() {
+    if (!spontaneousRound || spontaneousRound.memberIds.length < 2) return;
+    setRoundSheetVisible(false);
     setChatActivity({
-      id,
-      title: names.length ? `Mit ${names.slice(0, 3).join(', ')}` : 'Gemeinsam planen',
+      id: spontaneousRound.id,
+      title: 'Spontane Runde',
       mode: 'open',
-      participantCount: members.length + 1,
-      participants: [
-        {
-          userId: currentUid,
-          displayName: user?.displayName ?? 'Du',
-          initials: (user?.displayName ?? 'Du').slice(0, 2).toUpperCase(),
-        },
-        ...members.map((member) => ({
-          userId: member.id,
-          displayName: member.displayName,
-          initials: member.displayName
-            .split(' ')
-            .map((part) => part[0])
-            .join('')
-            .slice(0, 2)
-            .toUpperCase(),
-        })),
-      ],
+      participantCount: spontaneousRound.memberIds.length,
+      participants: spontaneousRound.memberPreview.map((member) => ({
+        userId: member.uid,
+        displayName: member.displayName,
+        initials: member.initials,
+        avatarUrl: member.avatarUrl,
+      })),
     });
   }
 
@@ -754,14 +763,15 @@ export function MapScreen({
     });
   }
 
-  // Chat proposal → real activity: prefill the composer with what/where and
-  // mark the proposal as planned. Composer submit stays the (mock) creation.
+  // A chat proposal pre-fills the composer. The submit action creates the
+  // activity and the proposal is marked as planned.
   function createActivityFromProposal(
     roomId: string,
     messageId: string,
     proposal: { what?: string; where?: string },
   ) {
     markProposalPlanned(roomId, messageId);
+    setPostfachVisible(false);
     setChatActivity(null);
     setSelection(null);
     const place: SelectedPlace | undefined = proposal.where
@@ -774,6 +784,7 @@ export function MapScreen({
   // Prefills the composer with the group's vibe (if any); the chat room stays.
   function createActivityFromChat(roomId: string) {
     const vibe = getGroup(roomId)?.vibe;
+    setPostfachVisible(false);
     setChatActivity(null);
     openComposer('soon', undefined, vibe, roomId);
   }
@@ -781,9 +792,10 @@ export function MapScreen({
   // After creating: close the composer and land back on the map with the new
   // pin — do NOT jump into the (empty) chat; it stays reachable via the pin
   // and "Deine Aktivitäten".
-  function submitComposer(draft: ActivityDraft) {
+  async function submitComposer(draft: ActivityDraft) {
     if (editingActivityId) {
-      updateActivityFromDraft(editingActivityId, draft);
+      await updateActivityFromDraft(editingActivityId, draft);
+      haptics.success();
       setComposerVisible(false);
       setEditingActivityId(undefined);
       setComposerInitialDraft(undefined);
@@ -793,6 +805,26 @@ export function MapScreen({
     }
 
     const activity = createActivityFromDraft(draft, composerActivityId);
+
+    // "Wurf & Pop": recentre on the new pin and throw the marker in from where
+    // the composer sat. Only when we actually have a map pin (coordinates) — a
+    // location-less activity has no marker to launch. Skipped under reduced motion.
+    const launchLat = draft.place?.latitude;
+    const launchLng = draft.place?.longitude;
+    if (!reducedMotion && launchLat != null && launchLng != null) {
+      setMapFocusCoordinate({ latitude: launchLat, longitude: launchLng });
+      setLaunchMarkerId(activity.id);
+      // Safety net: if the marker is filtered out (e.g. a full activity) the
+      // overlay never runs and never reports completion — never leave the real
+      // marker hidden. Clear the launch id after the animation's worst case.
+      setTimeout(() => {
+        setLaunchMarkerId((current) => (current === activity.id ? undefined : current));
+      }, 2000);
+    }
+
+    // Optimistic success buzz, matching the optimistic marker throw.
+    haptics.success();
+
     void activity.ready
       .then(() => {
         joinActivity(activity.id, {
@@ -802,14 +834,13 @@ export function MapScreen({
         });
       })
       .catch((error: unknown) => {
-        const detail = error instanceof Error && error.message
-          ? error.message
-          : 'Bitte versuche es gleich noch einmal.';
+        const detail =
+          error instanceof Error && error.message
+            ? error.message
+            : 'Bitte versuche es gleich noch einmal.';
         console.warn('[activity] create failed:', error);
-        Alert.alert(
-          'Activity konnte nicht erstellt werden',
-          detail,
-        );
+        haptics.warning();
+        Alert.alert('Activity konnte nicht erstellt werden', detail);
       });
     setComposerVisible(false);
     setComposerActivityId(undefined);
@@ -821,16 +852,12 @@ export function MapScreen({
   // activity's current data so a typo in name/time/place can be fixed later.
   function editSelectedActivity() {
     if (!selectedActivity) return;
-    const draft = getEditableDraft(selectedActivity.id);
-    if (!draft) return;
-
-    setSelection(null);
-    setEditingActivityId(selectedActivity.id);
-    setComposerInitialDraft(draft);
-    setComposerMode(draft.mode);
-    setComposerPlace(draft.place);
-    setComposerTitle(draft.title);
-    setComposerVisible(true);
+    if (!openActivityEditor(selectedActivity.id)) {
+      Alert.alert(
+        'Bearbeiten nicht möglich',
+        'Die Aktivität ist nicht mehr aktiv oder du bist nicht ihr Host.',
+      );
+    }
   }
 
   function openComposerFromSelection() {
@@ -852,6 +879,7 @@ export function MapScreen({
       // access through a race between the two writes.
       const joined = await joinActivityParticipants(activity.id);
       if (!joined) {
+        haptics.warning();
         Alert.alert('Activity voll', 'Leider ist in dieser Activity kein Platz mehr frei.');
         return;
       }
@@ -860,6 +888,8 @@ export function MapScreen({
         startsAt: activity.startsAt,
         endsAt: activity.endsAt,
       });
+      haptics.success();
+      void maybeAskForPush();
       const startsAt = activity.startsAt ? Date.parse(activity.startsAt) : NaN;
       const activityHasStarted =
         activity.mode === 'now' || (Number.isFinite(startsAt) && startsAt <= Date.now());
@@ -867,6 +897,7 @@ export function MapScreen({
         setJourneyJoinPromptActivityId(activity.id);
       }
     } catch {
+      haptics.warning();
       Alert.alert('Beitritt nicht möglich', 'Bitte versuche es gleich noch einmal.');
     }
   }
@@ -914,8 +945,17 @@ export function MapScreen({
           text: 'Absagen',
           style: 'destructive',
           onPress: () => {
-            cancelActivityEntity(activityId);
-            setSelection(null);
+            void (async () => {
+              try {
+                await cancelActivityEntity(activityId);
+                setSelection(null);
+              } catch (error) {
+                Alert.alert(
+                  'Absagen fehlgeschlagen',
+                  error instanceof Error ? error.message : 'Bitte versuche es gleich noch einmal.',
+                );
+              }
+            })();
           },
         },
       ],
@@ -933,12 +973,7 @@ export function MapScreen({
 
     setJourneyFocus({ activity, participantId });
     setSelection(null);
-    setMapFocusCoordinate(
-      participant?.coordinate ??
-        coordinateFromPosition(participant?.position) ??
-        activity.targetCoordinate ??
-        coordinateFromPosition(activity.targetPosition),
-    );
+    setMapFocusCoordinate(participant?.coordinate ?? activity.targetCoordinate);
   }
 
   function focusActiveJourney() {
@@ -960,8 +995,7 @@ export function MapScreen({
               initials: (user?.displayName ?? 'Du').slice(0, 2).toUpperCase(),
             },
           ],
-          targetCoordinate: coordinateFromPosition(activeJourney.targetPosition),
-          targetPosition: activeJourney.targetPosition,
+          targetCoordinate: activeJourney.targetCoordinate,
           endsAt: activeJourney.endsAt,
         } satisfies ActivitySelectionPreview);
 
@@ -986,10 +1020,34 @@ export function MapScreen({
       }
       return;
     }
-    setMapFocusCoordinate({
-      latitude: berlinRegion.latitude,
-      longitude: berlinRegion.longitude,
-    });
+    // "Zentrieren" means the person, not the country — so it must NEVER fly to
+    // the Berlin fallback. A fresh object every time on purpose: the canvas
+    // animates on `focusCoordinate` identity, so re-using the `myLocation`
+    // reference made a second press (after panning away) a silent no-op.
+    if (myLocation) {
+      setMapFocusCoordinate({ ...myLocation });
+      return;
+    }
+    // No fix yet: ask for one NOW instead of moving the camera somewhere wrong.
+    void (async () => {
+      const { coordinate, granted } = await acquireOwnLocation({
+        prompt: true,
+        repromptAfterDenial: true,
+      });
+      if (coordinate) {
+        setMapFocusCoordinate({ ...coordinate });
+        return;
+      }
+      // An explicit tap must never end in silence — say why nothing happened.
+      if (!granted) {
+        showLocationPermissionAlert();
+        return;
+      }
+      Alert.alert(
+        'Standort noch nicht gefunden',
+        'Dein Gerät konnte gerade keine Position bestimmen. Versuch es gleich noch einmal.',
+      );
+    })();
   }
 
   function openMapPicker(
@@ -997,17 +1055,8 @@ export function MapScreen({
     onPick: (place: SelectedPlace) => void,
     options: { focusCurrentLocation?: boolean } = {},
   ) {
-    pendingMapPickRef.current = onPick;
-    setMapPickerMode(mode);
-    setMapPickerSearchQuery('');
-    setMapPickerSearchResults([]);
-    setMapPickerSearchLoading(false);
-    setMapPickerSelectedPlaceCandidate(undefined);
     setSelection(null);
-    setMapPickerResolving(false);
-    setMapPickerCurrentLocationLoading(false);
-    setMapPickerActive(true);
-    if (options.focusCurrentLocation !== false) void focusCurrentLocation();
+    mapLocationPicker.open(mode, onPick, options);
   }
 
   // The map search bar is a real entry point, not a decorative placeholder:
@@ -1035,82 +1084,6 @@ export function MapScreen({
     );
   }
 
-  function cancelMapPicker() {
-    pendingMapPickRef.current = null;
-    setMapPickerResolving(false);
-    setMapPickerCurrentLocationLoading(false);
-    setMapPickerSearchQuery('');
-    setMapPickerSearchResults([]);
-    setMapPickerSearchLoading(false);
-    setMapPickerSelectedPlaceCandidate(undefined);
-    setMapPickerActive(false);
-  }
-
-  function selectMapPickerSearchResult(place: SelectedPlace) {
-    if (place.latitude == null || place.longitude == null) return;
-
-    const candidate = { ...place, source: 'map' as const };
-    const coordinate = { latitude: place.latitude, longitude: place.longitude };
-
-    setMapPickerSelectedPlaceCandidate(candidate);
-    setMapPickerSearchQuery(place.name);
-    setMapPickerSearchResults([]);
-    setMapPickerSearchLoading(false);
-    setMapPickerCoordinate(coordinate);
-    setMapPickerFocusCoordinate(coordinate);
-  }
-
-  async function focusCurrentLocation() {
-    if (mapPickerCurrentLocationLoading) return;
-
-    setMapPickerCurrentLocationLoading(true);
-    try {
-      const permission = await Location.requestForegroundPermissionsAsync();
-      if (permission.status !== Location.PermissionStatus.GRANTED) return;
-
-      const position = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-      });
-      const coordinate = {
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-      };
-      const address = await reverseGeocodePlaceTitle(coordinate);
-
-      setMapPickerCoordinate(coordinate);
-      setMapPickerFocusCoordinate(coordinate);
-      setMapPickerSelectedPlaceCandidate({
-        id: `current-${coordinate.latitude.toFixed(5)}-${coordinate.longitude.toFixed(5)}`,
-        name: 'Aktueller Standort',
-        address: address ?? 'Aktuelle Position',
-        latitude: coordinate.latitude,
-        longitude: coordinate.longitude,
-        source: 'current',
-      });
-      setMapPickerSearchQuery('');
-      setMapPickerSearchResults([]);
-      setMapPickerSearchLoading(false);
-    } finally {
-      setMapPickerCurrentLocationLoading(false);
-    }
-  }
-
-  async function confirmMapPicker() {
-    if (mapPickerResolving) return;
-
-    setMapPickerResolving(true);
-    const place =
-      mapPickerSelectedPlaceCandidate ?? (await coordinateToComposerPlace(mapPickerCoordinate));
-    pendingMapPickRef.current?.(place);
-    pendingMapPickRef.current = null;
-    setMapPickerResolving(false);
-    setMapPickerSearchQuery('');
-    setMapPickerSearchResults([]);
-    setMapPickerSearchLoading(false);
-    setMapPickerSelectedPlaceCandidate(undefined);
-    setMapPickerActive(false);
-  }
-
   return (
     <View style={{ flex: 1 }} className="bg-background">
       <MapCanvas
@@ -1119,7 +1092,11 @@ export function MapScreen({
           displayName: user?.displayName ?? 'Du',
           initials: (user?.displayName ?? 'Du').slice(0, 2).toUpperCase(),
         }}
-        focusCoordinate={mapPickerActive ? mapPickerFocusCoordinate : mapFocusCoordinate}
+        focusCoordinate={
+          mapLocationPicker.active ? mapLocationPicker.focusCoordinate : mapFocusCoordinate
+        }
+        launchMarkerId={launchMarkerId}
+        onLaunchComplete={() => setLaunchMarkerId(undefined)}
         selectionFocus={heimwegFocusActive ? safetyMarkerFocus : selectionFocus}
         fitRequest={heimwegFocusActive ? safetyFitRequest : undefined}
         bottomOverlayHeight={safetySplitPanelHeight}
@@ -1151,64 +1128,76 @@ export function MapScreen({
         selectedActivityId={
           selection?.type === 'Avatar' || selection?.type === 'Cluster' ? selection.id : undefined
         }
-        pickingLocation={mapPickerActive}
+        pickingLocation={mapLocationPicker.active}
         onJourneyParticipantPress={focusJourneyMarker}
         onCanvasPress={() => {
-          if (mapPickerActive) return;
+          if (mapLocationPicker.active) return;
           setSelection(null);
         }}
         // The normal map never needs its viewport in React state. Wiring this
         // callback unconditionally made every completed pan/zoom rebuild the
         // full MapScreen and all marker descriptors.
         onRegionChange={
-          mapPickerActive
+          mapLocationPicker.active
             ? (region) =>
-                updateMapPickerCenter({ latitude: region.latitude, longitude: region.longitude })
+                mapLocationPicker.updateCenter({
+                  latitude: region.latitude,
+                  longitude: region.longitude,
+                })
             : undefined
         }
         onClusterPress={(cluster) => {
-          if (mapPickerActive || heimwegFocusActive) return;
+          if (mapLocationPicker.active || heimwegFocusActive) return;
           setSelection(clusterToSelection(cluster));
         }}
         onMarkerPress={(marker) => {
-          if (mapPickerActive || heimwegFocusActive) return;
+          if (mapLocationPicker.active || heimwegFocusActive) return;
           setSelection(markerToSelection(marker));
         }}
         onPlacePress={async (place) => {
-          if (mapPickerActive || heimwegFocusActive) return;
+          if (heimwegFocusActive) return;
+          if (mapLocationPicker.active) {
+            mapLocationPicker.selectMapPlace(place);
+            return;
+          }
           setSelection(await placeToSelection(place));
         }}
       />
 
-      {mapPickerActive ? (
+      {mapLocationPicker.active ? (
         <MapLocationPickerOverlay
-          coordinate={mapPickerCoordinate}
-          currentLocationLoading={mapPickerCurrentLocationLoading}
-          loading={mapPickerResolving}
-          searchLoading={mapPickerSearchLoading}
-          mode={mapPickerMode}
-          searchQuery={mapPickerSearchQuery}
-          searchResults={mapPickerSearchResults}
-          selectedPlaceCandidate={mapPickerSelectedPlaceCandidate}
-          onCancel={cancelMapPicker}
-          onConfirm={confirmMapPicker}
-          onSearchQueryChange={setMapPickerSearchQuery}
-          onSelectSearchResult={selectMapPickerSearchResult}
-          onUseCurrentLocation={focusCurrentLocation}
+          coordinate={mapLocationPicker.coordinate}
+          currentLocationLoading={mapLocationPicker.currentLocationLoading}
+          loading={mapLocationPicker.resolving}
+          searchLoading={mapLocationPicker.searchLoading}
+          showSearchAttribution
+          mode={mapLocationPicker.mode}
+          searchQuery={mapLocationPicker.searchQuery}
+          searchResults={mapLocationPicker.searchResults}
+          selectedPlaceCandidate={mapLocationPicker.selectedPlaceCandidate}
+          onCancel={mapLocationPicker.cancel}
+          onConfirm={mapLocationPicker.confirm}
+          onSearchQueryChange={mapLocationPicker.updateSearchQuery}
+          onSearchSubmit={mapLocationPicker.submitSearch}
+          onSelectSearchResult={mapLocationPicker.selectSearchResult}
+          onUseCurrentLocation={mapLocationPicker.focusCurrentLocation}
         />
       ) : (
         <>
           <MapOverlay
-            nearbyCount={nearbyCount}
+            isOpen={isOpen}
             journeyFocusLabel={journeyFocusLabel}
             journeyParticipants={journeyFocusParticipants}
             activeJourneyLabel={activeJourneyLabel}
             onCreatePress={() => openComposer('now')}
             onSearchPress={openPlaceSearch}
             onRecenter={recenterMap}
-            onNearbyPress={() => setNearbySheetVisible(true)}
-            onActivitiesPress={() => setActivitiesSheetVisible(true)}
+            onNearbyPress={handleOpenPresencePress}
+            onPostfachPress={() => setPostfachVisible(true)}
             onCalendarPress={() => onOpenCalendar?.()}
+            spontaneousRound={spontaneousRound}
+            spontaneousRoundUnreadCount={spontaneousRound ? getUnreadCount(spontaneousRound.id) : 0}
+            onSpontaneousRoundPress={() => setRoundSheetVisible(true)}
             onClearJourneyFocus={() => setJourneyFocus(null)}
             onJourneyParticipantPress={(participantId) => {
               if (!journeyFocus) return;
@@ -1227,9 +1216,38 @@ export function MapScreen({
             visible={nearbySheetVisible}
             friends={nearbyFriends}
             friendsWithoutLocation={friendsWithoutLocation}
+            emptyReason={nearbyEmptyReason}
+            locationDenied={locationDenied}
+            onAddFriends={() => {
+              setNearbySheetVisible(false);
+              router.push('/friends');
+            }}
             onClose={() => setNearbySheetVisible(false)}
-            onStartPlanning={handleStartPlanning}
+            onStartSpontaneousRound={handleStartSpontaneousRound}
             onJoinOpening={handleJoinOpening}
+          />
+
+          <SpontaneousRoundSheet
+            visible={roundSheetVisible}
+            round={spontaneousRound}
+            currentUid={currentUid}
+            unreadCount={spontaneousRound ? getUnreadCount(spontaneousRound.id) : 0}
+            onClose={() => setRoundSheetVisible(false)}
+            onOpenChat={openSpontaneousRoundChat}
+            onPlanNow={() => {
+              if (!spontaneousRound) return;
+              setRoundSheetVisible(false);
+              openComposer('now', undefined, 'Spontane Runde', spontaneousRound.id);
+            }}
+            onPlanSoon={() => {
+              if (!spontaneousRound) return;
+              setRoundSheetVisible(false);
+              openComposer('soon', undefined, 'Spontane Runde', spontaneousRound.id);
+            }}
+            onLeave={async () => {
+              if (!spontaneousRound) return;
+              await leaveSpontaneousRound(spontaneousRound.id);
+            }}
           />
 
           {/* Companion actions for a tapped Heimweg marker (Heimweg-Fokus). */}
@@ -1246,13 +1264,37 @@ export function MapScreen({
             onClose={() => setSafetyStartVisible(false)}
           />
 
-          <ActivitiesSheet
-            visible={activitiesSheetVisible}
-            onClose={() => setActivitiesSheetVisible(false)}
+          <PostfachSheet
+            visible={postfachVisible}
+            covered={chatActivity !== null}
+            onClose={() => setPostfachVisible(false)}
+            onEditActivity={(activity) => {
+              if (!openActivityEditor(activity.id)) {
+                Alert.alert(
+                  'Bearbeiten nicht möglich',
+                  'Die Aktivität ist nicht mehr aktiv oder du bist nicht ihr Host.',
+                );
+              }
+            }}
             onOpenChat={(activity) => {
-              setActivitiesSheetVisible(false);
               setChatActivity(activity);
             }}
+            onOpenActivity={(activityId) => {
+              if (openActivityById(activityId)) setPostfachVisible(false);
+            }}
+            onOpenSafety={(ownerUid) => {
+              setPostfachVisible(false);
+              const friendSession = ownerUid
+                ? friendSessions.find((session) => session.uid === ownerUid)
+                : undefined;
+              if (friendSession) {
+                setSelectedSafetyUid(friendSession.uid);
+                setCompanionSheetVisible(true);
+              } else if (ownSafetySession) {
+                setConsoleMinimized(false);
+              }
+            }}
+            onAcceptSpontaneousRound={handleAcceptSpontaneousRound}
           />
 
           <MarkerDetailSheet
@@ -1295,7 +1337,7 @@ export function MapScreen({
         initialTitle={composerTitle}
         initialDraft={composerInitialDraft}
         editing={Boolean(editingActivityId)}
-        suspended={mapPickerActive}
+        suspended={mapLocationPicker.active}
         visible={composerVisible}
         onClose={() => {
           setComposerVisible(false);

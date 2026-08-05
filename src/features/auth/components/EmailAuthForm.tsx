@@ -1,48 +1,57 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import Animated, {
-  Easing,
-  interpolate,
+  FadeIn,
+  FadeInDown,
+  FadeOut,
+  LinearTransition,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
+  withSequence,
   withTiming,
 } from 'react-native-reanimated';
 
 import { TogetherLoader } from '@/shared/components';
+import { FONT, TYPE } from '@/shared/theme';
+import { haptics } from '@/shared/utils/haptics';
 
 import type { SignInWithEmailInput } from '../types';
-import { GlassField } from './GlassField';
+import { suggestEmailCorrection } from '../utils/emailTypo';
+import { evaluatePassword, PASSWORD_MIN_LENGTH } from '../utils/passwordStrength';
+import { AuthModeSwitch } from './AuthModeSwitch';
+import { FloatingLabelField } from './FloatingLabelField';
+import { PasswordStrengthMeter } from './PasswordStrengthMeter';
 
-const EMAIL_RE = /^\S+@\S+\.\S+$/;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
 const COLORS = {
   paper: '#F4F5F7',
-  muted: 'rgba(244,245,247,0.6)',
+  muted: 'rgba(244,245,247,0.55)',
   soft: 'rgba(244,245,247,0.78)',
-  field: 'rgba(23,28,35,0.72)',
-  fieldBorder: 'rgba(244,245,247,0.13)',
-  panel: 'rgba(23,28,35,0.58)',
-  action: '#6E8BF7',
+  fieldBorder: 'rgba(244,245,247,0.12)',
+  panel: 'rgba(20,25,33,0.6)',
+  action: '#8991FF',
   now: '#41C08D',
   ink: '#0E1116',
   error: '#FCA5A5',
 };
 
-const EASE = Easing.bezier(0.22, 1, 0.36, 1);
-
 export type AuthFormMode = 'login' | 'signup';
+
+type FieldName = 'email' | 'username' | 'password';
+type FieldErrors = Partial<Record<FieldName, string>>;
 
 interface EmailAuthFormProps {
   mode: AuthFormMode;
   onSubmit: (input: SignInWithEmailInput) => Promise<void> | void;
   onResetPassword: (email: string) => Promise<void>;
+  /** When provided, the form owns the Einloggen/Registrieren switch. */
+  onModeChange?: (mode: AuthFormMode) => void;
   submitting?: boolean;
   error?: string | null;
-  /** Focus the e-mail field on mount (sheet opens → keyboard comes right up). */
   autoFocusEmail?: boolean;
-  /** Optional brand accent. Legacy auth keeps the original blue by default. */
   accent?: string;
 }
 
@@ -50,127 +59,141 @@ export function EmailAuthForm({
   mode,
   onSubmit,
   onResetPassword,
+  onModeChange,
   submitting = false,
   error,
   autoFocusEmail = false,
   accent = COLORS.action,
 }: EmailAuthFormProps) {
   const reducedMotion = useReducedMotion();
-  const nameProgress = useSharedValue(mode === 'signup' ? 1 : 0);
-  const resetProgress = useSharedValue(0);
+  const shake = useSharedValue(0);
+
+  const usernameRef = useRef<TextInput | null>(null);
+  const passwordRef = useRef<TextInput | null>(null);
 
   const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [passwordVisible, setPasswordVisible] = useState(false);
-  const [focusedField, setFocusedField] = useState<'email' | 'name' | 'password' | null>(null);
-  const [fieldError, setFieldError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+  const [touched, setTouched] = useState<Partial<Record<FieldName, boolean>>>({});
   const [resetOpen, setResetOpen] = useState(false);
   const [resetSent, setResetSent] = useState(false);
   const [resetError, setResetError] = useState<string | null>(null);
   const [resetBusy, setResetBusy] = useState(false);
 
+  const isSignup = mode === 'signup';
+
+  const runShake = useCallback(() => {
+    if (reducedMotion) return;
+    shake.value = withSequence(
+      withTiming(-8, { duration: 58 }),
+      withTiming(8, { duration: 58 }),
+      withTiming(-5, { duration: 52 }),
+      withTiming(0, { duration: 52 }),
+    );
+  }, [reducedMotion, shake]);
+
   useEffect(() => {
-    setFieldError(null);
+    setFieldErrors({});
+    setTouched({});
     setResetError(null);
     setResetSent(false);
-    if (mode === 'signup') {
-      setResetOpen(false);
-    }
-    nameProgress.value = reducedMotion
-      ? mode === 'signup'
-        ? 1
-        : 0
-      : withTiming(mode === 'signup' ? 1 : 0, { duration: 240, easing: EASE });
-  }, [mode, nameProgress, reducedMotion]);
+    if (isSignup) setResetOpen(false);
+  }, [isSignup]);
 
+  // A rejection from the backend deserves the same physical "no" as a local one.
   useEffect(() => {
-    const open = resetOpen && mode === 'login';
-    resetProgress.value = reducedMotion
-      ? open
-        ? 1
-        : 0
-      : withTiming(open ? 1 : 0, { duration: 220, easing: EASE });
-  }, [mode, reducedMotion, resetOpen, resetProgress]);
+    if (!error) return;
+    runShake();
+    haptics.warning();
+  }, [error, runShake]);
 
-  const nameStyle = useAnimatedStyle(() => ({
-    height: interpolate(nameProgress.value, [0, 1], [0, 58]),
-    marginBottom: interpolate(nameProgress.value, [0, 1], [0, 14]),
-    opacity: nameProgress.value,
-    transform: [
-      { translateY: interpolate(nameProgress.value, [0, 1], [-8, 0]) },
-      { scale: interpolate(nameProgress.value, [0, 1], [0.985, 1]) },
-    ],
-  }));
+  const validate = useCallback(
+    (field: FieldName, values: { email: string; username: string; password: string }) => {
+      if (field === 'email') {
+        if (!values.email.trim()) return 'Bitte gib deine E-Mail-Adresse ein.';
+        if (!EMAIL_RE.test(values.email.trim()))
+          return 'Diese E-Mail-Adresse sieht nicht gültig aus.';
+        return undefined;
+      }
+      if (field === 'username') {
+        if (!isSignup) return undefined;
+        const trimmed = values.username.trim();
+        if (trimmed.length < 2) return 'Bitte einen Namen mit mindestens 2 Zeichen.';
+        if (trimmed.length > 50) return 'Der Name darf höchstens 50 Zeichen haben.';
+        return undefined;
+      }
+      if (!values.password) return 'Bitte gib dein Passwort ein.';
+      // Login never re-judges an existing password — an old 6-character one is
+      // still valid; only new passwords have to meet the current rule.
+      if (isSignup && !evaluatePassword(values.password).acceptable) {
+        return `Bitte mindestens ${PASSWORD_MIN_LENGTH} Zeichen, nicht zu leicht zu erraten.`;
+      }
+      return undefined;
+    },
+    [isSignup],
+  );
 
-  const resetStyle = useAnimatedStyle(() => ({
-    height: interpolate(resetProgress.value, [0, 1], [0, 132]),
-    marginTop: interpolate(resetProgress.value, [0, 1], [0, 2]),
-    opacity: resetProgress.value,
-    transform: [
-      { translateY: interpolate(resetProgress.value, [0, 1], [-8, 0]) },
-      { scale: interpolate(resetProgress.value, [0, 1], [0.985, 1]) },
-    ],
-  }));
+  const values = { email, username, password };
+
+  const markTouched = (field: FieldName) => {
+    setTouched((current) => ({ ...current, [field]: true }));
+    setFieldErrors((current) => ({ ...current, [field]: validate(field, values) }));
+  };
+
+  /** Typing clears the complaint immediately — errors are never sticky. */
+  const changeField = (field: FieldName, next: string) => {
+    if (field === 'email') setEmail(next);
+    if (field === 'username') setUsername(next);
+    if (field === 'password') setPassword(next);
+    setFieldErrors((current) => (current[field] ? { ...current, [field]: undefined } : current));
+  };
 
   const handleSubmit = () => {
-    const normalizedEmail = email.trim();
-    const normalizedUsername = username.trim();
+    if (submitting) return;
+    const next: FieldErrors = {
+      email: validate('email', values),
+      username: validate('username', values),
+      password: validate('password', values),
+    };
+    setFieldErrors(next);
+    setTouched({ email: true, username: isSignup, password: true });
 
-    if (mode === 'login') {
-      const fallbackEmail = normalizedEmail || 'demo@together.app';
-      setFieldError(null);
-      void onSubmit({
-        email: fallbackEmail,
-        username: fallbackEmail.split('@')[0] || 'demo',
-        password: password || 'password',
-      });
+    const firstBroken = (['email', 'username', 'password'] as const).find((field) => next[field]);
+    if (firstBroken) {
+      runShake();
+      haptics.warning();
+      if (firstBroken === 'username') usernameRef.current?.focus();
+      if (firstBroken === 'password') passwordRef.current?.focus();
       return;
     }
 
-    if (!EMAIL_RE.test(normalizedEmail)) {
-      setFieldError('Bitte eine gültige E-Mail eingeben.');
-      return;
-    }
-
-    if (mode === 'signup' && normalizedUsername.length < 2) {
-      setFieldError('Bitte einen Namen mit mindestens 2 Zeichen wählen.');
-      return;
-    }
-
-    if (password.length < 6) {
-      setFieldError('Das Passwort braucht mindestens 6 Zeichen.');
-      return;
-    }
-
-    const fallbackUsername = normalizedEmail.split('@')[0] || 'friend';
-
-    setFieldError(null);
     void onSubmit({
-      email: normalizedEmail,
-      username: mode === 'signup' ? normalizedUsername : fallbackUsername,
+      mode,
+      email: email.trim(),
+      username: username.trim(),
       password,
     });
   };
 
   const handleResetPassword = async () => {
     const normalizedEmail = email.trim();
-
     if (!EMAIL_RE.test(normalizedEmail)) {
       setResetSent(false);
       setResetError('Bitte gib oben deine E-Mail ein.');
       return;
     }
-
     setResetError(null);
     setResetBusy(true);
     try {
       await onResetPassword(normalizedEmail);
       setResetSent(true);
-    } catch (error) {
+      haptics.success();
+    } catch (err) {
       setResetError(
-        error instanceof Error
-          ? error.message
+        err instanceof Error
+          ? err.message
           : 'Der Link konnte gerade nicht gesendet werden. Bitte versuche es erneut.',
       );
     } finally {
@@ -178,126 +201,176 @@ export function EmailAuthForm({
     }
   };
 
-  const handleToggleReset = () => {
-    setResetOpen((current) => !current);
-    setResetError(null);
-    setResetSent(false);
-  };
+  const shakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: shake.value }] }));
 
-  const shownError = fieldError ?? error ?? null;
-  const buttonLabel = mode === 'signup' ? 'Account erstellen' : 'Einloggen';
+  const buttonLabel = isSignup ? 'Account erstellen' : 'Einloggen';
   const resetMessage = resetError
     ? resetError
     : resetSent
       ? 'Wenn ein Konto existiert, erhältst du einen Link zum Zurücksetzen.'
       : 'Gib oben deine E-Mail ein. Wir senden dir einen sicheren Link.';
 
+  const emailValid = touched.email && !fieldErrors.email && email.trim().length > 0;
+  // Only offered once the address is otherwise plausible, so it never fires
+  // mid-typing while the domain is still incomplete.
+  const emailSuggestion =
+    EMAIL_RE.test(email.trim()) && !fieldErrors.email ? suggestEmailCorrection(email) : null;
+
   return (
-    <View style={styles.container}>
-      <GlassField accent={accent} focused={focusedField === 'email'}>
-        <Ionicons
-          name="mail-outline"
-          size={20}
-          color={focusedField === 'email' ? accent : COLORS.muted}
-        />
-        <TextInput
-          accessibilityLabel="E-Mail"
-          style={styles.input}
-          placeholder="du@example.com"
-          placeholderTextColor={COLORS.muted}
-          value={email}
-          onChangeText={setEmail}
-          onFocus={() => setFocusedField('email')}
-          onBlur={() => setFocusedField((f) => (f === 'email' ? null : f))}
-          autoFocus={autoFocusEmail}
-          autoCapitalize="none"
-          autoComplete="email"
-          inputMode="email"
-          keyboardType="email-address"
-          returnKeyType="next"
-          editable={!submitting}
-        />
-      </GlassField>
+    <Animated.View
+      layout={reducedMotion ? undefined : LinearTransition.duration(220)}
+      style={[styles.container, shakeStyle]}
+    >
+      {onModeChange ? (
+        <AuthModeSwitch mode={mode} disabled={submitting} onChange={onModeChange} />
+      ) : null}
 
-      <Animated.View style={[styles.animatedFieldSlot, nameStyle]}>
-        <GlassField accent={accent} focused={focusedField === 'name'}>
-          <Ionicons
-            name="person-outline"
-            size={20}
-            color={focusedField === 'name' ? accent : COLORS.muted}
-          />
-          <TextInput
-            accessibilityLabel="Name"
-            style={styles.input}
-            placeholder="Dein Name"
-            placeholderTextColor={COLORS.muted}
+      <FloatingLabelField
+        label="E-Mail-Adresse"
+        icon="mail-outline"
+        accent={accent}
+        value={email}
+        onChangeText={(next) => changeField('email', next)}
+        onBlur={() => markTouched('email')}
+        error={touched.email ? fieldErrors.email : undefined}
+        valid={Boolean(emailValid)}
+        autoFocus={autoFocusEmail}
+        autoCapitalize="none"
+        autoCorrect={false}
+        autoComplete="email"
+        textContentType="emailAddress"
+        importantForAutofill="yes"
+        inputMode="email"
+        keyboardType="email-address"
+        returnKeyType="next"
+        submitBehavior="submit"
+        onSubmitEditing={() => (isSignup ? usernameRef : passwordRef).current?.focus()}
+        editable={!submitting}
+        accessibilityLabel="E-Mail-Adresse"
+      />
+
+      {/* A mistyped domain is silently fatal: the account is created, the
+          verification link goes nowhere, and nothing explains why. One tap
+          fixes it — a suggestion, never a restriction. */}
+      {emailSuggestion ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`E-Mail-Adresse zu ${emailSuggestion} korrigieren`}
+          className="-mt-1 flex-row items-center gap-2 px-1 py-1.5 active:opacity-70"
+          onPress={() => {
+            changeField('email', emailSuggestion);
+            haptics.selection();
+          }}
+        >
+          <Ionicons name="bulb-outline" size={14} color="#E0A23E" />
+          <Text style={styles.suggestionText}>
+            Meintest du <Text style={styles.suggestionStrong}>{emailSuggestion}</Text>?
+          </Text>
+        </Pressable>
+      ) : null}
+
+      {isSignup ? (
+        <Animated.View
+          entering={reducedMotion ? undefined : FadeInDown.duration(220)}
+          exiting={reducedMotion ? undefined : FadeOut.duration(120)}
+        >
+          <FloatingLabelField
+            label="Dein Name"
+            icon="person-outline"
+            accent={accent}
+            inputRef={usernameRef}
             value={username}
-            onChangeText={setUsername}
-            onFocus={() => setFocusedField('name')}
-            onBlur={() => setFocusedField((f) => (f === 'name' ? null : f))}
+            onChangeText={(next) => changeField('username', next)}
+            onBlur={() => markTouched('username')}
+            error={touched.username ? fieldErrors.username : undefined}
+            hint="So sehen dich deine Freunde."
             autoCapitalize="words"
-            autoComplete="username"
+            // Autocorrect off (the email field already does this): with it on,
+            // iOS shows the QuickType bar and repopulates it on every
+            // keystroke, which jitters the whole keyboard. Names are exactly
+            // the content autocorrect should never touch. `textContentType`
+            // stays so autofill still offers the user's own name — autofill
+            // and autocorrect are independent.
+            autoCorrect={false}
+            spellCheck={false}
+            autoComplete="name"
+            textContentType="name"
+            importantForAutofill="yes"
             returnKeyType="next"
-            editable={!submitting && mode === 'signup'}
+            submitBehavior="submit"
+            onSubmitEditing={() => passwordRef.current?.focus()}
+            editable={!submitting}
+            accessibilityLabel="Name"
           />
-        </GlassField>
-      </Animated.View>
+        </Animated.View>
+      ) : null}
 
-      <GlassField accent={accent} focused={focusedField === 'password'}>
-        <Ionicons
-          name="lock-closed-outline"
-          size={20}
-          color={focusedField === 'password' ? accent : COLORS.muted}
-        />
-        <TextInput
-          accessibilityLabel="Passwort"
-          style={styles.input}
-          placeholder="Passwort"
-          placeholderTextColor={COLORS.muted}
+      <View>
+        <FloatingLabelField
+          label="Passwort"
+          icon="lock-closed-outline"
+          accent={accent}
+          inputRef={passwordRef}
           value={password}
-          onChangeText={setPassword}
-          onFocus={() => setFocusedField('password')}
-          onBlur={() => setFocusedField((f) => (f === 'password' ? null : f))}
+          onChangeText={(next) => changeField('password', next)}
+          onBlur={() => markTouched('password')}
+          error={touched.password ? fieldErrors.password : undefined}
           autoCapitalize="none"
-          autoComplete={mode === 'signup' ? 'new-password' : 'password'}
+          autoCorrect={false}
+          autoComplete={isSignup ? 'new-password' : 'current-password'}
+          textContentType={isSignup ? 'newPassword' : 'password'}
+          passwordRules={
+            isSignup ? `minlength: ${PASSWORD_MIN_LENGTH}; allowed: unicode;` : undefined
+          }
+          importantForAutofill="yes"
           secureTextEntry={!passwordVisible}
-          returnKeyType="done"
+          returnKeyType="go"
           onSubmitEditing={handleSubmit}
           editable={!submitting}
+          accessibilityLabel="Passwort"
+          rightSlot={
+            <Pressable
+              accessibilityLabel={passwordVisible ? 'Passwort verbergen' : 'Passwort anzeigen'}
+              accessibilityRole="button"
+              hitSlop={10}
+              onPress={() => setPasswordVisible((current) => !current)}
+              disabled={submitting}
+            >
+              <Ionicons
+                name={passwordVisible ? 'eye-off-outline' : 'eye-outline'}
+                size={21}
+                color={COLORS.muted}
+              />
+            </Pressable>
+          }
         />
-        <Pressable
-          accessibilityLabel={passwordVisible ? 'Passwort verbergen' : 'Passwort anzeigen'}
-          accessibilityRole="button"
-          hitSlop={10}
-          onPress={() => setPasswordVisible((current) => !current)}
-          disabled={submitting}
-        >
-          <Ionicons
-            name={passwordVisible ? 'eye-off-outline' : 'eye-outline'}
-            size={21}
-            color={COLORS.muted}
-          />
-        </Pressable>
-      </GlassField>
+        {isSignup ? <PasswordStrengthMeter password={password} /> : null}
+      </View>
 
-      {mode === 'login' ? (
+      {!isSignup ? (
         <Pressable
           accessibilityLabel="Passwort zurücksetzen"
           accessibilityRole="button"
+          accessibilityState={{ expanded: resetOpen }}
           disabled={submitting}
           hitSlop={8}
-          onPress={handleToggleReset}
-          style={({ pressed }) => [styles.forgotButton, pressed ? styles.forgotPressed : null]}
+          onPress={() => {
+            setResetOpen((current) => !current);
+            setResetError(null);
+            setResetSent(false);
+          }}
+          style={({ pressed }) => [styles.forgotButton, pressed ? styles.pressedSoft : null]}
         >
           <Text style={styles.forgotLabel}>Passwort vergessen?</Text>
         </Pressable>
       ) : null}
 
-      <Animated.View
-        pointerEvents={resetOpen && mode === 'login' ? 'auto' : 'none'}
-        style={[styles.resetSlot, resetStyle]}
-      >
-        <View style={styles.resetPanel}>
+      {resetOpen && !isSignup ? (
+        <Animated.View
+          entering={reducedMotion ? undefined : FadeInDown.duration(220)}
+          exiting={reducedMotion ? undefined : FadeOut.duration(130)}
+          style={styles.resetPanel}
+        >
           <View style={styles.resetHeader}>
             <View style={[styles.resetIcon, resetSent ? styles.resetIconSuccess : null]}>
               <Ionicons
@@ -310,7 +383,10 @@ export function EmailAuthForm({
               <Text style={styles.resetTitle}>
                 {resetSent ? 'Link vorbereitet' : 'Passwort zurücksetzen'}
               </Text>
-              <Text style={[styles.resetText, resetError ? styles.resetError : null]}>
+              <Text
+                accessibilityLiveRegion="polite"
+                style={[styles.resetText, resetError ? styles.resetErrorText : null]}
+              >
                 {resetMessage}
               </Text>
             </View>
@@ -318,14 +394,11 @@ export function EmailAuthForm({
 
           <View style={styles.resetActions}>
             <Pressable
-              accessibilityLabel="Passwort zurücksetzen schließen"
+              accessibilityLabel="Zurücksetzen schließen"
               accessibilityRole="button"
               disabled={submitting}
               onPress={() => setResetOpen(false)}
-              style={({ pressed }) => [
-                styles.resetSecondary,
-                pressed ? styles.forgotPressed : null,
-              ]}
+              style={({ pressed }) => [styles.resetSecondary, pressed ? styles.pressedSoft : null]}
             >
               <Text style={styles.resetSecondaryLabel}>
                 {resetSent ? 'Schließen' : 'Abbrechen'}
@@ -336,7 +409,8 @@ export function EmailAuthForm({
               <Pressable
                 accessibilityLabel="Link zum Zurücksetzen senden"
                 accessibilityRole="button"
-                disabled={submitting}
+                accessibilityState={{ busy: resetBusy }}
+                disabled={submitting || resetBusy}
                 onPress={handleResetPassword}
                 style={({ pressed }) => [styles.resetPrimary, pressed ? styles.pressed : null]}
               >
@@ -346,14 +420,20 @@ export function EmailAuthForm({
               </Pressable>
             ) : null}
           </View>
-        </View>
-      </Animated.View>
+        </Animated.View>
+      ) : null}
 
-      {shownError ? (
-        <View style={styles.errorChip}>
+      {error ? (
+        <Animated.View
+          entering={reducedMotion ? undefined : FadeIn.duration(180)}
+          exiting={reducedMotion ? undefined : FadeOut.duration(120)}
+          style={styles.errorChip}
+        >
           <Ionicons name="alert-circle" size={15} color={COLORS.error} />
-          <Text style={styles.error}>{shownError}</Text>
-        </View>
+          <Text accessibilityLiveRegion="assertive" accessibilityRole="alert" style={styles.error}>
+            {error}
+          </Text>
+        </Animated.View>
       ) : null}
 
       <Pressable
@@ -368,88 +448,97 @@ export function EmailAuthForm({
           pressed && !submitting ? styles.pressed : null,
         ]}
       >
+        {/* Fine top light edge — the premium cue. */}
+        <View pointerEvents="none" style={styles.submitSheen} />
         {submitting ? <TogetherLoader size={24} /> : null}
         <Text style={styles.submitLabel}>{buttonLabel}</Text>
-        {!submitting ? <Ionicons name="arrow-forward" size={17} color={COLORS.ink} /> : null}
+        {!submitting ? <Ionicons name="arrow-forward" size={18} color={COLORS.ink} /> : null}
       </Pressable>
-    </View>
+
+      {isSignup ? (
+        <Text style={styles.verifyHint}>
+          Wir schicken dir eine kurze Bestätigungs-Mail an diese Adresse.
+        </Text>
+      ) : null}
+    </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
-  animatedFieldSlot: {
-    overflow: 'hidden',
-  },
   container: {
-    gap: 14,
+    gap: 12,
   },
   disabled: {
     opacity: 0.72,
   },
+  suggestionStrong: {
+    color: '#E0A23E',
+    fontFamily: FONT.bold,
+  },
+  suggestionText: {
+    color: 'rgba(244,245,247,0.6)',
+    flex: 1,
+    fontFamily: FONT.medium,
+    ...TYPE.caption,
+  },
   error: {
     color: COLORS.error,
     flex: 1,
-    fontSize: 13,
-    lineHeight: 18,
+    fontFamily: FONT.medium,
+    ...TYPE.caption,
   },
   errorChip: {
     alignItems: 'center',
     backgroundColor: 'rgba(252,165,165,0.1)',
     borderColor: 'rgba(252,165,165,0.26)',
-    borderRadius: 14,
+    borderRadius: 16,
     borderWidth: 1,
     flexDirection: 'row',
     gap: 8,
     paddingHorizontal: 12,
-    paddingVertical: 9,
+    paddingVertical: 8,
   },
   forgotButton: {
     alignSelf: 'flex-end',
-    minHeight: 32,
     justifyContent: 'center',
     marginTop: -6,
+    minHeight: 30,
     paddingHorizontal: 4,
   },
   forgotLabel: {
     color: COLORS.soft,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  forgotPressed: {
-    opacity: 0.72,
-  },
-  input: {
-    color: COLORS.paper,
-    flex: 1,
-    fontSize: 16,
-    paddingVertical: 14,
+    fontFamily: FONT.semibold,
+    ...TYPE.label,
   },
   pressed: {
     transform: [{ scale: 0.985 }],
   },
+  pressedSoft: {
+    opacity: 0.7,
+  },
   resetActions: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: 10,
+    gap: 12,
     justifyContent: 'flex-end',
   },
   resetCopy: {
     flex: 1,
-    gap: 3,
+    gap: 4,
   },
-  resetError: {
+  resetErrorText: {
     color: COLORS.error,
   },
   resetHeader: {
     alignItems: 'flex-start',
     flexDirection: 'row',
-    gap: 11,
+    gap: 12,
   },
   resetIcon: {
     alignItems: 'center',
     backgroundColor: 'rgba(244,245,247,0.12)',
     borderColor: COLORS.fieldBorder,
-    borderRadius: 14,
+    borderRadius: 12,
     borderWidth: 1,
     height: 34,
     justifyContent: 'center',
@@ -464,8 +553,8 @@ const styles = StyleSheet.create({
     borderColor: COLORS.fieldBorder,
     borderRadius: 20,
     borderWidth: 1,
-    gap: 14,
-    padding: 14,
+    gap: 16,
+    padding: 16,
   },
   resetPrimary: {
     alignItems: 'center',
@@ -473,51 +562,71 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     justifyContent: 'center',
     minHeight: 38,
-    paddingHorizontal: 15,
+    paddingHorizontal: 16,
   },
   resetPrimaryLabel: {
     color: COLORS.ink,
-    fontSize: 14,
-    fontWeight: '700',
+    fontFamily: FONT.bold,
+    ...TYPE.label,
   },
   resetSecondary: {
     alignItems: 'center',
     borderRadius: 16,
     justifyContent: 'center',
     minHeight: 38,
-    paddingHorizontal: 10,
+    paddingHorizontal: 12,
   },
   resetSecondaryLabel: {
     color: COLORS.soft,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  resetSlot: {
-    overflow: 'hidden',
+    fontFamily: FONT.semibold,
+    ...TYPE.label,
   },
   resetText: {
     color: COLORS.muted,
-    fontSize: 13,
-    lineHeight: 18,
+    fontFamily: FONT.medium,
+    ...TYPE.caption,
   },
   resetTitle: {
     color: COLORS.paper,
-    fontSize: 14,
-    fontWeight: '700',
+    fontFamily: FONT.bold,
+    ...TYPE.label,
   },
   submit: {
     alignItems: 'center',
     backgroundColor: COLORS.paper,
-    borderRadius: 22,
+    borderRadius: 20,
+    elevation: 6,
     flexDirection: 'row',
-    gap: 9,
+    gap: 8,
     justifyContent: 'center',
+    marginTop: 4,
     minHeight: 56,
+    overflow: 'hidden',
     paddingHorizontal: 20,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.28,
+    shadowRadius: 16,
   },
   submitLabel: {
     color: COLORS.ink,
-    fontSize: 16,
-    fontWeight: '700',
+    fontFamily: FONT.bold,
+    ...TYPE.body,
+  },
+  submitSheen: {
+    backgroundColor: 'rgba(255,255,255,0.6)',
+    borderRadius: 1,
+    height: 1.5,
+    left: 18,
+    position: 'absolute',
+    right: 18,
+    top: 1,
+  },
+  verifyHint: {
+    color: 'rgba(244,245,247,0.42)',
+    fontFamily: FONT.medium,
+    ...TYPE.micro,
+    paddingHorizontal: 4,
+    textAlign: 'center',
   },
 });

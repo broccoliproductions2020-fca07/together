@@ -11,6 +11,7 @@ export interface AgendaSectionProps {
   expandedPlanId: string | null;
   onTogglePlan: (planId: string) => void;
   onOpenChat: (plan: Plan) => void;
+  onEditActivity: (plan: Plan) => void;
 }
 
 export function AgendaSection({
@@ -19,6 +20,7 @@ export function AgendaSection({
   expandedPlanId,
   onTogglePlan,
   onOpenChat,
+  onEditActivity,
 }: AgendaSectionProps) {
   const reducedMotion = useReducedMotion();
   const isToday = section.key === dateKey(new Date());
@@ -47,6 +49,7 @@ export function AgendaSection({
             expanded={expandedPlanId === plan.id}
             onToggle={() => onTogglePlan(plan.id)}
             onOpenChat={onOpenChat}
+            onEditActivity={onEditActivity}
           />
         ))}
       </View>

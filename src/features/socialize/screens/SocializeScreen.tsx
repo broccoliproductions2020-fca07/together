@@ -193,7 +193,7 @@ export function SocializeScreen({ active = true }: { active?: boolean }) {
             paddingTop: insets.top + 14,
             paddingHorizontal: 20,
             paddingBottom: insets.bottom + 96,
-            gap: 14,
+            gap: 16,
           }}
           keyboardShouldPersistTaps="handled"
         >

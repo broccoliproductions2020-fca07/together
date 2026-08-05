@@ -1,6 +1,9 @@
 export type NotificationKind =
   | 'activity_joined'
   | 'activity_cancelled'
+  | 'activity_updated'
+  | 'activity_invite'
+  | 'spontaneous_round_invite'
   | 'chat_message'
   | 'circle_invite'
   | 'journey_reminder'
@@ -11,6 +14,7 @@ export type NotificationKind =
   | 'safety_emergency'
   | 'safety_alert_seen'
   | 'safety_resolved'
+  | 'safety_timed_out'
   | 'system';
 
 export interface NotificationActor {
@@ -28,6 +32,8 @@ export interface NotificationDoc {
   safetyOwnerUid?: string;
   safetyAlertAt?: number;
   createdAt: number;
+  expireAt: number;
+  /** Legacy per-item cursor; new clients use users/{uid}.notificationsSeenAt. */
   readAt?: number;
 }
 
@@ -37,9 +43,9 @@ export interface NotificationService {
   subscribeNotifications(
     actor: NotificationActor,
     cb: (notifications: NotificationDoc[]) => void,
+    onError?: (error: Error) => void,
   ): Unsubscribe;
-  markRead(actor: NotificationActor, notificationId: string): Promise<void>;
-  markAllRead(actor: NotificationActor, notificationIds: string[]): Promise<void>;
+  markSeen(actor: NotificationActor): Promise<void>;
   registerDevice(actor: NotificationActor): Promise<boolean>;
   unregisterDevice(actor: NotificationActor): Promise<void>;
   showJourneyStatus(input: {

@@ -17,15 +17,19 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
 
 import { useAuth } from '@/features/auth';
-import { useActivityChatActivity } from '@/features/chat';
+import type { SpontaneousRound } from '@/features/chat';
 import type { JourneyParticipant } from '@/features/journey';
+import { usePostfachBadge } from '@/features/mailbox';
 import { useMapStyle } from '@/features/map/mapStyle/useMapStyle';
 import { SafetyStartSheet, STATUS_COLOR, useSafety } from '@/features/safety';
+import { PressableScale } from '@/shared/components/PressableScale';
+import { SEMANTIC_COLOR } from '@/shared/utils/semanticColors';
 
 import { ActionFab } from './ActionFab';
-import { AnimatedPressable } from './AnimatedPressable';
 import { FloatingSurface } from './FloatingSurface';
 import { MapStyleMenu } from './MapStyleMenu';
+import { RoundControl } from './RoundControl';
+import { SpontaneousRoundControl } from './SpontaneousRoundControl';
 import { useOverlayColors } from './overlayTheme';
 
 function RoundButton({
@@ -38,19 +42,65 @@ function RoundButton({
   onPress?: () => void;
 }) {
   return (
-    <AnimatedPressable
-      accessibilityRole="button"
-      accessibilityLabel={accessibilityLabel}
-      className="h-12 w-12 rounded-full"
-      onPress={onPress}
-    >
-      <FloatingSurface
-        className="h-12 w-12 rounded-full"
-        contentClassName="h-full w-full items-center justify-center"
+    <RoundControl accessibilityLabel={accessibilityLabel} onPress={onPress}>
+      {children}
+    </RoundControl>
+  );
+}
+
+function OpenPresencePill({ isOpen, onPress }: { isOpen: boolean; onPress: () => void }) {
+  const reducedMotion = useReducedMotion();
+  const breath = useSharedValue(0);
+
+  useEffect(() => {
+    if (!isOpen || reducedMotion) {
+      breath.value = 0;
+      return;
+    }
+    breath.value = withRepeat(
+      withSequence(
+        withTiming(1, { duration: 1700, easing: Easing.inOut(Easing.cubic) }),
+        withTiming(0, { duration: 1700, easing: Easing.inOut(Easing.cubic) }),
+      ),
+      -1,
+    );
+  }, [breath, isOpen, reducedMotion]);
+
+  const activeGlowStyle = useAnimatedStyle(() => ({
+    opacity: isOpen ? 0.1 + breath.value * 0.18 : 0,
+    transform: [{ scale: 1 + breath.value * 0.035 }],
+  }));
+
+  return (
+    <View>
+      {isOpen ? (
+        <Animated.View pointerEvents="none" style={[styles.openPillGlow, activeGlowStyle]} />
+      ) : null}
+      <RoundControl
+        accessibilityLabel={isOpen ? 'Du bist offen' : 'Offen stellen'}
+        contentClassName="flex-row items-center gap-2 px-4 py-2.5"
+        shape="pill"
+        surfaceStyle={{
+          backgroundColor: isOpen ? 'rgba(110, 139, 247, 0.14)' : 'rgba(110, 139, 247, 0.07)',
+          borderColor: isOpen ? '#6E8BF7' : 'rgba(110, 139, 247, 0.72)',
+        }}
+        onPress={onPress}
       >
-        {children}
-      </FloatingSurface>
-    </AnimatedPressable>
+        {isOpen ? (
+          <View className="h-2 w-2 rounded-full bg-[#6E8BF7]" />
+        ) : (
+          <Ionicons
+            name="add"
+            size={19}
+            color="#6E8BF7"
+            style={{ transform: [{ translateY: 1 }] }}
+          />
+        )}
+        <Text className="text-sm font-semibold text-foreground">
+          {isOpen ? 'Du bist offen' : 'Offen stellen'}
+        </Text>
+      </RoundControl>
+    </View>
   );
 }
 
@@ -58,17 +108,20 @@ export interface MapOverlayProps {
   /** Tapping the create FAB opens the activity composer directly (no speed dial). */
   onCreatePress: () => void;
   onRecenter: () => void;
-  nearbyCount: number;
+  isOpen: boolean;
   journeyFocusLabel?: string;
   journeyParticipants?: JourneyParticipant[];
   activeJourneyLabel?: string;
   onNearbyPress: () => void;
   onSearchPress?: () => void;
-  onActivitiesPress: () => void;
+  onPostfachPress: () => void;
   onCalendarPress: () => void;
   onClearJourneyFocus?: () => void;
   onJourneyParticipantPress?: (participantId: string) => void;
   onActiveJourneyPress?: () => void;
+  spontaneousRound?: SpontaneousRound | null;
+  spontaneousRoundUnreadCount?: number;
+  onSpontaneousRoundPress?: () => void;
 }
 
 /**
@@ -79,26 +132,26 @@ export interface MapOverlayProps {
 export function MapOverlay({
   onCreatePress,
   onRecenter,
-  nearbyCount,
+  isOpen,
   journeyFocusLabel,
   journeyParticipants = [],
   activeJourneyLabel,
   onNearbyPress,
   onSearchPress,
-  onActivitiesPress,
+  onPostfachPress,
   onCalendarPress,
   onClearJourneyFocus,
   onJourneyParticipantPress,
   onActiveJourneyPress,
+  spontaneousRound,
+  spontaneousRoundUnreadCount = 0,
+  onSpontaneousRoundPress,
 }: MapOverlayProps) {
   const insets = useSafeAreaInsets();
   const colors = useOverlayColors();
   const { user } = useAuth();
-  // Aggregate unread across all joined rooms — group chats have no map marker,
-  // so this badge is the ONLY passive signal that something new arrived.
-  // Costs nothing extra: pure client math over the always-on rooms listener.
-  const { joinedIds, getUnreadCount } = useActivityChatActivity();
-  const unreadTotal = joinedIds.reduce((sum, id) => sum + getUnreadCount(id), 0);
+  const postfachBadge = usePostfachBadge();
+  const postfachBadgeCount = postfachBadge.count;
   const reducedMotion = useReducedMotion();
   const { preference: mapStyle, setPreference: setMapStyle } = useMapStyle();
   const [styleMenuOpen, setStyleMenuOpen] = useState(false);
@@ -119,6 +172,25 @@ export function MapOverlay({
     : startingHeimweg
       ? STATUS_COLOR.blue
       : null;
+  const postfachBadgeColor =
+    postfachBadge.severity === 'critical'
+      ? STATUS_COLOR.red
+      : postfachBadge.severity === 'attention'
+        ? STATUS_COLOR.orange
+        : STATUS_COLOR.blue;
+  const postfachBadgeAccessibilityLabel =
+    postfachBadgeCount === 0
+      ? 'Postfach'
+      : [
+          `Postfach, ${postfachBadgeCount} neue oder offene Einträge`,
+          postfachBadge.severity === 'critical'
+            ? 'Dringender Heimweg-Hinweis'
+            : postfachBadge.severity === 'attention'
+              ? 'Heimweg braucht deine Aufmerksamkeit'
+              : null,
+        ]
+          .filter(Boolean)
+          .join('. ');
   const remindOwnSession = Boolean(safetySession) || startingHeimweg;
   const shieldRing = useSharedValue(0);
   const shieldBreath = useSharedValue(0);
@@ -263,9 +335,21 @@ export function MapOverlay({
         <Rect width="100%" height="100%" fill="url(#mapTopScrim)" />
       </Svg>
 
+      {/* No fixed height. The row used to be h-12 — exactly as tall as its own
+          48px buttons — so the drop shadow (offset 8 / radius 18) and the
+          shield's pulse ring (-4px on every side) had nothing to render into
+          and the circles came out flattened top and bottom. The padding gives
+          that headroom back; `top` is shifted by the same amount so the
+          buttons stay optically where they were. */}
       <Animated.View
-        style={{ position: 'absolute', top: insets.top + 10, left: 16, right: 16 }}
-        className="h-12 flex-row items-center gap-3"
+        style={{
+          position: 'absolute',
+          top: insets.top - 2,
+          left: 16,
+          right: 16,
+          overflow: 'visible',
+        }}
+        className="flex-row items-center gap-3 py-3"
         entering={reducedMotion ? undefined : FadeIn.duration(180)}
         pointerEvents="box-none"
       >
@@ -343,10 +427,11 @@ export function MapOverlay({
             className="flex-row items-center gap-3"
             style={[StyleSheet.absoluteFill, normalTopTransitionStyle]}
           >
-            <AnimatedPressable
+            <PressableScale
               accessibilityRole="button"
               accessibilityLabel="Orte suchen"
               className="h-12 flex-1 rounded-full"
+              haptic={false}
               onPress={onSearchPress}
             >
               <FloatingSurface
@@ -358,26 +443,23 @@ export function MapOverlay({
                   Orte suchen
                 </Text>
               </FloatingSurface>
-            </AnimatedPressable>
+            </PressableScale>
 
             <View>
               <RoundButton
-                accessibilityLabel={
-                  unreadTotal > 0
-                    ? `Deine Aktivitäten, ${unreadTotal} ungelesene Nachrichten`
-                    : 'Deine Aktivitäten'
-                }
-                onPress={onActivitiesPress}
+                accessibilityLabel={postfachBadgeAccessibilityLabel}
+                onPress={onPostfachPress}
               >
                 <Ionicons name="chatbubbles-outline" size={20} color={colors.icon} />
               </RoundButton>
-              {unreadTotal > 0 ? (
+              {postfachBadgeCount > 0 ? (
                 <View
                   pointerEvents="none"
-                  className="absolute -right-1 -top-1 h-[18px] min-w-[18px] items-center justify-center rounded-full border-2 border-card bg-[#FF3B30] px-0.5"
+                  className="absolute -right-1 -top-1 h-[18px] min-w-[18px] items-center justify-center rounded-full border-2 border-card px-0.5"
+                  style={{ backgroundColor: postfachBadgeColor }}
                 >
                   <Text className="text-[10px] font-bold text-white">
-                    {unreadTotal > 99 ? '99+' : unreadTotal}
+                    {postfachBadgeCount > 99 ? '99+' : postfachBadgeCount}
                   </Text>
                 </View>
               ) : null}
@@ -436,39 +518,46 @@ export function MapOverlay({
       ) : null}
 
       <Animated.View
-          accessibilityElementsHidden={heimwegFocusActive}
-          importantForAccessibility={heimwegFocusActive ? 'no-hide-descendants' : 'auto'}
-          style={[
-            {
+        accessibilityElementsHidden={heimwegFocusActive}
+        importantForAccessibility={heimwegFocusActive ? 'no-hide-descendants' : 'auto'}
+        style={[
+          {
             position: 'absolute',
             right: 16,
             bottom: insets.bottom + 16,
             alignItems: 'flex-end',
-            gap: 10,
-            },
-            normalBottomRightTransitionStyle,
-          ]}
-          pointerEvents={heimwegFocusActive ? 'none' : 'box-none'}
+            gap: 12,
+          },
+          normalBottomRightTransitionStyle,
+        ]}
+        pointerEvents={heimwegFocusActive ? 'none' : 'box-none'}
+      >
+        {spontaneousRound && onSpontaneousRoundPress ? (
+          <SpontaneousRoundControl
+            round={spontaneousRound}
+            unreadCount={spontaneousRoundUnreadCount}
+            onPress={onSpontaneousRoundPress}
+          />
+        ) : null}
+        {styleMenuOpen ? (
+          <MapStyleMenu
+            preference={mapStyle}
+            onSelect={(value) => {
+              setMapStyle(value);
+              setStyleMenuOpen(false);
+            }}
+          />
+        ) : null}
+        <RoundButton
+          accessibilityLabel="Kartenstil wählen"
+          onPress={() => setStyleMenuOpen((open) => !open)}
         >
-          {styleMenuOpen ? (
-            <MapStyleMenu
-              preference={mapStyle}
-              onSelect={(value) => {
-                setMapStyle(value);
-                setStyleMenuOpen(false);
-              }}
-            />
-          ) : null}
-          <RoundButton
-            accessibilityLabel="Kartenstil wählen"
-            onPress={() => setStyleMenuOpen((open) => !open)}
-          >
-            <Ionicons name="layers-outline" size={20} color={colors.icon} />
-          </RoundButton>
-          <RoundButton accessibilityLabel="Karte zentrieren" onPress={onRecenter}>
-            <Ionicons name="locate-outline" size={22} color={colors.icon} />
-          </RoundButton>
-        </Animated.View>
+          <Ionicons name="layers-outline" size={20} color={colors.icon} />
+        </RoundButton>
+        <RoundButton accessibilityLabel="Karte zentrieren" onPress={onRecenter}>
+          <Ionicons name="locate-outline" size={22} color={colors.icon} />
+        </RoundButton>
+      </Animated.View>
 
       {journeyFocusLabel ? (
         <Animated.View
@@ -527,7 +616,7 @@ export function MapOverlay({
                       <Ionicons
                         name={participant.status === 'arrived' ? 'checkmark-circle' : 'navigate'}
                         size={16}
-                        color={participant.status === 'arrived' ? '#41C08D' : '#6E8BF7'}
+                        color={SEMANTIC_COLOR.journey}
                       />
                     </Pressable>
                   );
@@ -569,22 +658,23 @@ export function MapOverlay({
           ]}
           pointerEvents={heimwegFocusActive ? 'none' : 'box-none'}
         >
-          <AnimatedPressable
+          <PressableScale
             accessibilityRole="button"
             accessibilityLabel="Aktive Anreise anzeigen"
             className="rounded-full"
+            haptic={false}
             onPress={onActiveJourneyPress}
           >
             <FloatingSurface
               className="rounded-full"
               contentClassName="min-h-11 flex-row items-center gap-2 px-4 py-2"
             >
-              <Ionicons name="navigate" size={15} color="#6E8BF7" />
+              <Ionicons name="navigate" size={15} color={SEMANTIC_COLOR.journey} />
               <Text className="max-w-[250px] text-sm font-bold text-foreground" numberOfLines={1}>
                 {activeJourneyLabel}
               </Text>
             </FloatingSurface>
-          </AnimatedPressable>
+          </PressableScale>
         </Animated.View>
       ) : null}
 
@@ -609,32 +699,37 @@ export function MapOverlay({
             position: 'absolute',
             left: 0,
             right: 0,
-            bottom: insets.bottom + 78,
+            // Same band as the FAB and the recenter button. The mode switch
+            // only renders on the calendar surface (MainSurface), so the
+            // bottom-centre of the map is free. Matching the FAB's 56px height
+            // with justifyContent centre aligns the pill's centre line with
+            // both round buttons without hard-coding the pill's own height.
+            bottom: insets.bottom + 16,
+            height: 56,
+            justifyContent: 'center',
             alignItems: 'center',
           },
           normalBottomCenterTransitionStyle,
         ]}
         pointerEvents={heimwegFocusActive ? 'none' : 'box-none'}
       >
-          <AnimatedPressable
-            accessibilityRole="button"
-            accessibilityLabel={`${nearbyCount} Freunde offen in deiner Nähe`}
-            className="rounded-full"
-            onPress={onNearbyPress}
-          >
-            <FloatingSurface
-              className="rounded-full"
-              contentClassName="flex-row items-center gap-2 px-4 py-2.5"
-            >
-              <View className="h-2 w-2 rounded-full bg-[#6E8BF7]" />
-              <Text className="text-sm font-semibold text-foreground">
-                {nearbyCount} offen in deiner Nähe
-              </Text>
-            </FloatingSurface>
-          </AnimatedPressable>
+        <OpenPresencePill isOpen={isOpen} onPress={onNearbyPress} />
       </Animated.View>
 
       <SafetyStartSheet visible={safetyStartVisible} onClose={() => setSafetyStartVisible(false)} />
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  openPillGlow: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    bottom: -2,
+    left: -2,
+    borderWidth: 1.5,
+    borderColor: '#6E8BF7',
+    borderRadius: 999,
+  },
+});

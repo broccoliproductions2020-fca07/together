@@ -1,12 +1,9 @@
-import { BACKEND } from '@/shared/services/firebase';
-
 import { firebaseCircleService } from './firebaseCircleService';
-import { mockCircleService } from './mockCircleService';
 import type { CircleService } from './circleService.types';
 
 /**
  * The single circle integration point (service-seam pattern, see AGENTS.md).
- * Selection via EXPO_PUBLIC_BACKEND: mock (offline default) | firebase.
+ * There is one backend: Firebase. Dev talks to the local Emulator Suite,
+ * production to the cloud project — same code, different endpoint.
  */
-export const circleService: CircleService =
-  BACKEND === 'firebase' ? firebaseCircleService : mockCircleService;
+export const circleService: CircleService = firebaseCircleService;
