@@ -3,10 +3,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { ChatMessage } from '../types';
 
 /**
- * Device-local message store for the incremental chat sync: cached messages
- * paint instantly on open and are NEVER re-read from Firestore — the listener
- * only streams messages newer than the newest cached one, so each message is
- * billed exactly once per device.
+ * Device-local message store for chat's instant first paint. The live listener
+ * still reconciles the newest bounded server window on every room open: a
+ * cache must never become an ordering anchor that can hide missed messages.
  *
  * Retention mirrors the product rule (rooms die via TTL after ≤ 30 days):
  * entries untouched for 31 days are pruned lazily on first access.

@@ -21,6 +21,7 @@ import type { SpontaneousRound } from '@/features/chat';
 import type { JourneyParticipant } from '@/features/journey';
 import { usePostfachBadge } from '@/features/mailbox';
 import { useMapStyle } from '@/features/map/mapStyle/useMapStyle';
+import { useOpenStatus } from '@/features/presence';
 import { SafetyStartSheet, STATUS_COLOR, useSafety } from '@/features/safety';
 import { PressableScale } from '@/shared/components/PressableScale';
 import { SEMANTIC_COLOR } from '@/shared/utils/semanticColors';
@@ -48,9 +49,105 @@ function RoundButton({
   );
 }
 
-function OpenPresencePill({ isOpen, onPress }: { isOpen: boolean; onPress: () => void }) {
+/**
+ * Countdown ring around the pill — the same language the `now` activity markers
+ * speak (ActivityMarkerChrome → CountdownRing): a stroke that shortens as the
+ * window runs out. Your own open status expires just like an activity does, so
+ * it gets the same clock rather than a second invented one.
+ */
+function OpenPillCountdown({
+  remaining,
+  size,
+}: {
+  remaining: number;
+  size: { width: number; height: number };
+}) {
+  if (size.width <= 0 || size.height <= 0) return null;
+
+  const stroke = 2;
+  const width = size.width - stroke;
+  const height = size.height - stroke;
+  const radius = height / 2;
+  // Rounded-rect perimeter: the straight runs plus one full circle of corners.
+  const perimeter =
+    2 * Math.max(0, width - 2 * radius) +
+    2 * Math.max(0, height - 2 * radius) +
+    2 * Math.PI * radius;
+  const left = Math.max(0, Math.min(1, remaining));
+
+  return (
+    // Wrapped in a real View on purpose: `pointerEvents` is not a view prop the
+    // native <Svg> host honours, and this ring covers the pill exactly. Without
+    // the wrapper it ate every tap on the pill while open — the one state in
+    // which it renders — so the sheet could not be reopened to end the status.
+    <View
+      pointerEvents="none"
+      style={[styles.openPillCountdown, { width: size.width, height: size.height }]}
+    >
+      <Svg width={size.width} height={size.height}>
+        <Rect
+          x={stroke / 2}
+          y={stroke / 2}
+          width={width}
+          height={height}
+          rx={radius}
+          ry={radius}
+          fill="none"
+          stroke="rgba(110,139,247,0.22)"
+          strokeWidth={stroke}
+        />
+        <Rect
+          x={stroke / 2}
+          y={stroke / 2}
+          width={width}
+          height={height}
+          rx={radius}
+          ry={radius}
+          fill="none"
+          stroke="#6E8BF7"
+          strokeWidth={stroke}
+          strokeLinecap="round"
+          strokeDasharray={`${perimeter * left} ${perimeter}`}
+        />
+      </Svg>
+    </View>
+  );
+}
+
+function OpenPresencePill({
+  isOpen,
+  expiresAt,
+  openedAt,
+  onPress,
+}: {
+  isOpen: boolean;
+  expiresAt: number | null;
+  openedAt: number | null;
+  onPress: () => void;
+}) {
   const reducedMotion = useReducedMotion();
   const breath = useSharedValue(0);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  // One tick a minute is plenty for a 3–12 h window and costs nothing; the ring
+  // only has to be honest, not smooth.
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, [isOpen]);
+
+  const remaining =
+    isOpen && expiresAt && openedAt && expiresAt > openedAt
+      ? Math.max(0, Math.min(1, (expiresAt - now) / (expiresAt - openedAt)))
+      : null;
+  const untilLabel = expiresAt
+    ? `${new Date(expiresAt).getHours().toString().padStart(2, '0')}:${new Date(expiresAt)
+        .getMinutes()
+        .toString()
+        .padStart(2, '0')}`
+    : null;
 
   useEffect(() => {
     if (!isOpen || reducedMotion) {
@@ -72,17 +169,34 @@ function OpenPresencePill({ isOpen, onPress }: { isOpen: boolean; onPress: () =>
   }));
 
   return (
-    <View>
+    <View
+      onLayout={(event) => {
+        const { width, height } = event.nativeEvent.layout;
+        setSize((current) =>
+          current.width === width && current.height === height ? current : { width, height },
+        );
+      }}
+    >
       {isOpen ? (
         <Animated.View pointerEvents="none" style={[styles.openPillGlow, activeGlowStyle]} />
       ) : null}
       <RoundControl
-        accessibilityLabel={isOpen ? 'Du bist offen' : 'Offen stellen'}
+        accessibilityLabel={
+          isOpen
+            ? untilLabel
+              ? `Du bist offen bis ${untilLabel}`
+              : 'Du bist offen'
+            : 'Offen stellen'
+        }
         contentClassName="flex-row items-center gap-2 px-4 py-2.5"
         shape="pill"
+        // The ONLY blue border in the overlay: this pill is the "offen" control,
+        // and blue is that state's colour. Solid in both states — a faded edge
+        // made the closed pill look half-disabled — with only the fill telling
+        // open from closed.
         surfaceStyle={{
           backgroundColor: isOpen ? 'rgba(110, 139, 247, 0.14)' : 'rgba(110, 139, 247, 0.07)',
-          borderColor: isOpen ? '#6E8BF7' : 'rgba(110, 139, 247, 0.72)',
+          borderColor: '#6E8BF7',
         }}
         onPress={onPress}
       >
@@ -97,9 +211,10 @@ function OpenPresencePill({ isOpen, onPress }: { isOpen: boolean; onPress: () =>
           />
         )}
         <Text className="text-sm font-semibold text-foreground">
-          {isOpen ? 'Du bist offen' : 'Offen stellen'}
+          {isOpen ? (untilLabel ? `Offen bis ${untilLabel}` : 'Du bist offen') : 'Offen stellen'}
         </Text>
       </RoundControl>
+      {remaining == null ? null : <OpenPillCountdown remaining={remaining} size={size} />}
     </View>
   );
 }
@@ -153,6 +268,9 @@ export function MapOverlay({
   const postfachBadge = usePostfachBadge();
   const postfachBadgeCount = postfachBadge.count;
   const reducedMotion = useReducedMotion();
+  // The pill's countdown reads the window straight from the status, so it can
+  // never disagree with the card that set it.
+  const { expiresAt: openExpiresAt, openedAt: openOpenedAt } = useOpenStatus();
   const { preference: mapStyle, setPreference: setMapStyle } = useMapStyle();
   const [styleMenuOpen, setStyleMenuOpen] = useState(false);
   // One element, one meaning (docs/safety-mode.md): the shield is ALWAYS and
@@ -438,7 +556,10 @@ export function MapOverlay({
                 className="h-12 rounded-full"
                 contentClassName="h-full flex-row items-center gap-2 px-4"
               >
-                <Ionicons name="search" size={18} color={colors.iconMuted} />
+                {/* Full icon colour, like the calendar/postfach glyphs next to
+                    it — only the placeholder LABEL is muted. The muted glyph
+                    read as a disabled control in dark mode. */}
+                <Ionicons name="search" size={18} color={colors.icon} />
                 <Text className="flex-1 text-sm font-semibold text-muted-foreground">
                   Orte suchen
                 </Text>
@@ -713,7 +834,12 @@ export function MapOverlay({
         ]}
         pointerEvents={heimwegFocusActive ? 'none' : 'box-none'}
       >
-        <OpenPresencePill isOpen={isOpen} onPress={onNearbyPress} />
+        <OpenPresencePill
+          isOpen={isOpen}
+          expiresAt={openExpiresAt}
+          openedAt={openOpenedAt}
+          onPress={onNearbyPress}
+        />
       </Animated.View>
 
       <SafetyStartSheet visible={safetyStartVisible} onClose={() => setSafetyStartVisible(false)} />
@@ -722,6 +848,11 @@ export function MapOverlay({
 }
 
 const styles = StyleSheet.create({
+  openPillCountdown: {
+    left: 0,
+    position: 'absolute',
+    top: 0,
+  },
   openPillGlow: {
     position: 'absolute',
     top: -2,

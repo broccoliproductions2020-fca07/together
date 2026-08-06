@@ -14,7 +14,6 @@ import {
 } from '@expo-google-fonts/schibsted-grotesk';
 import { Ionicons } from '@expo/vector-icons';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import Constants from 'expo-constants';
 import { Stack, type ErrorBoundaryProps } from 'expo-router';
 import { useEffect, useState } from 'react';
 import * as SplashScreen from 'expo-splash-screen';
@@ -30,6 +29,7 @@ import { NearbyRadiusProvider } from '@/features/settings';
 import { AppBootScreen, AppButton, ColorSchemeRoot, TogetherLockup } from '@/shared/components';
 import { ThemePreferenceProvider, useThemePreference } from '@/features/theme';
 import { configureCrashReporting, reportAppError } from '@/shared/services/crashReporting';
+import { DIAGNOSTICS_VISIBLE } from '@/shared/utils/buildInfo';
 import { prepareNativeFirebase } from '@/shared/services/firebase';
 import { AuthenticatedProviders } from '@/providers/AuthenticatedProviders';
 
@@ -37,13 +37,6 @@ import { AuthenticatedProviders } from '@/providers/AuthenticatedProviders';
 // wordmark must never flash in a system-font fallback.
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
-// Staging is our controlled test environment. Showing the thrown message there
-// makes a device-only regression diagnosable without exposing it to consumers.
-const SHOW_STAGING_DIAGNOSTICS =
-  process.env.EXPO_PUBLIC_STAGING_DIAGNOSTICS === 'true' ||
-  Constants.expoConfig?.ios?.bundleIdentifier === 'com.broccolistudio.together.staging' ||
-  Constants.expoConfig?.android?.package === 'com.broccolistudio.together.staging' ||
-  Constants.expoConfig?.name === 'Together Staging';
 
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
@@ -197,7 +190,7 @@ export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
           <Text className="mt-2 max-w-[310px] text-center text-sm leading-5 text-white/50">
             Together konnte diese Ansicht gerade nicht laden. Deine Daten bleiben sicher.
           </Text>
-          {__DEV__ || SHOW_STAGING_DIAGNOSTICS ? (
+          {DIAGNOSTICS_VISIBLE ? (
             <Text
               className="mt-4 max-w-[330px] text-center text-xs text-white/30"
               numberOfLines={3}

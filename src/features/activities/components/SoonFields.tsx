@@ -8,7 +8,6 @@ export function SoonFields({ draft, onChange }: ActivityFieldsProps) {
   return (
     <ScheduleFields
       mode={draft.mode}
-      title="Wann?"
       startsAt={startsAt}
       endsAt={endsAt}
       onChange={({ startsAt: nextStart, endsAt: nextEnd, durationMinutes: mins }) =>

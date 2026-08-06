@@ -4,36 +4,51 @@ import { Pressable, Text, View } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useThemeColors } from '@/features/theme';
+import { FONT, TEXT_CAPPED, TEXT_FLEXIBLE, TYPE } from '@/shared/theme';
+
 import { useActivityChat } from '../useActivityChat';
 import type { ProposalData } from '../types';
 import { useKeyboardPadding } from '../utils/useKeyboardHeight';
-import { useThemeColors } from '@/features/theme';
 import { ChatInputBar } from './ChatInputBar';
 import { ChatRoomInfoSheet } from './ChatRoomInfoSheet';
 import { ChatThread } from './ChatThread';
 import { ProposalComposer } from './ProposalComposer';
 
-const ACCENT = '#6E8BF7';
-
-function LockedState({ onBack }: { onBack: () => void }) {
+function LockedState({ accent, onBack }: { accent: string; onBack: () => void }) {
+  const colors = useThemeColors();
   return (
     <View className="flex-1 items-center justify-center gap-3 bg-background px-8">
       <View
         className="h-14 w-14 items-center justify-center rounded-full"
-        style={{ backgroundColor: `${ACCENT}22` }}
+        style={{ backgroundColor: `${accent}22` }}
       >
-        <Ionicons name="lock-closed" size={26} color={ACCENT} />
+        <Ionicons name="lock-closed" size={26} color={accent} />
       </View>
-      <Text className="text-center text-lg font-bold text-foreground">Nur für Teilnehmer</Text>
-      <Text className="text-center text-sm text-muted-foreground">
+      <Text
+        {...TEXT_FLEXIBLE}
+        className="text-center"
+        style={{ ...TYPE.body, fontFamily: FONT.bold, color: colors.foreground }}
+      >
+        Nur für Teilnehmer
+      </Text>
+      <Text
+        {...TEXT_FLEXIBLE}
+        className="text-center"
+        style={{ ...TYPE.label, fontFamily: FONT.medium, color: colors.mutedForeground }}
+      >
         Tritt der Aktivität bei, um den Chat zu sehen.
       </Text>
       <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Zurück"
         onPress={onBack}
-        className="mt-2 rounded-full px-5 py-2.5"
-        style={{ backgroundColor: ACCENT }}
+        className="mt-2 min-h-11 justify-center rounded-full px-5 py-2.5"
+        style={{ backgroundColor: accent }}
       >
-        <Text className="font-semibold text-white">Zurück</Text>
+        <Text {...TEXT_CAPPED} style={{ ...TYPE.label, fontFamily: FONT.semibold, color: '#fff' }}>
+          Zurück
+        </Text>
       </Pressable>
     </View>
   );
@@ -41,6 +56,12 @@ function LockedState({ onBack }: { onBack: () => void }) {
 
 export interface ActivityChatViewProps {
   activityId: string;
+  /**
+   * The room's colour, resolved by the host: the activity's mode colour for an
+   * activity chat, SEMANTIC_COLOR.action for a planning round. Required, so
+   * the same room can never render blue here and green in the detail sheet.
+   */
+  accent: string;
   title?: string;
   count?: number;
   onBack: () => void;
@@ -56,6 +77,7 @@ export interface ActivityChatViewProps {
  */
 export function ActivityChatView({
   activityId,
+  accent,
   title,
   count,
   onBack,
@@ -76,7 +98,7 @@ export function ActivityChatView({
   // already exists, so the entry stays hidden there.
   const isGroup = room?.type === 'group';
 
-  if (!joined) return <LockedState onBack={onBack} />;
+  if (!joined) return <LockedState accent={accent} onBack={onBack} />;
 
   return (
     <View className="flex-1 bg-background">
@@ -87,6 +109,7 @@ export function ActivityChatView({
       >
         <Pressable
           onPress={onBack}
+          accessibilityRole="button"
           accessibilityLabel="Zurück"
           className="h-10 w-10 items-center justify-center rounded-full active:opacity-70"
         >
@@ -102,15 +125,23 @@ export function ActivityChatView({
         >
           <View
             className="h-10 w-10 items-center justify-center rounded-full"
-            style={{ backgroundColor: `${ACCENT}1E` }}
+            style={{ backgroundColor: `${accent}1E` }}
           >
-            <Ionicons name={room?.type === 'group' ? 'people' : 'flash'} size={19} color={ACCENT} />
+            <Ionicons name={isGroup ? 'people' : 'flash'} size={19} color={accent} />
           </View>
           <View className="flex-1">
-            <Text className="text-[16px] font-bold text-foreground" numberOfLines={1}>
+            <Text
+              {...TEXT_FLEXIBLE}
+              numberOfLines={1}
+              style={{ ...TYPE.body, fontFamily: FONT.bold, color: colors.foreground }}
+            >
               {title ?? room?.title ?? 'Activity-Chat'}
             </Text>
-            <Text className="mt-0.5 text-xs text-muted-foreground">
+            <Text
+              {...TEXT_FLEXIBLE}
+              className="mt-0.5"
+              style={{ ...TYPE.caption, fontFamily: FONT.medium, color: colors.mutedForeground }}
+            >
               {memberCount ? `${memberCount} dabei` : 'Teilnehmer-Chat'} · Info
             </Text>
           </View>
@@ -121,11 +152,11 @@ export function ActivityChatView({
             accessibilityRole="button"
             accessibilityLabel="Aktivität erstellen"
             onPress={onCreateActivityDirect}
-            className="flex-row items-center gap-1.5 rounded-full px-3 py-2 active:opacity-80"
-            style={{ backgroundColor: `${ACCENT}22` }}
+            className="min-h-11 flex-row items-center gap-1.5 rounded-full px-3 py-2 active:opacity-80"
+            style={{ backgroundColor: `${accent}22` }}
           >
-            <Ionicons name="add-circle-outline" size={16} color={ACCENT} />
-            <Text className="text-sm font-bold" style={{ color: ACCENT }}>
+            <Ionicons name="add-circle-outline" size={16} color={accent} />
+            <Text {...TEXT_CAPPED} style={{ ...TYPE.label, fontFamily: FONT.bold, color: accent }}>
               Aktivität
             </Text>
           </Pressable>
@@ -137,9 +168,14 @@ export function ActivityChatView({
           The padding is driven by the live keyboard frame (UI thread), so the
           composer travels with the keyboard rather than snapping. */}
       <View className="flex-1">
-        <ChatThread activityId={activityId} onCreateActivity={onCreateActivity} />
+        <ChatThread
+          activityId={activityId}
+          accent={accent}
+          onCreateActivity={onCreateActivity}
+        />
         <Animated.View style={keyboardPadding}>
           <ChatInputBar
+            accent={accent}
             onSend={(text) => sendMessage(activityId, text)}
             onProposal={isGroup ? () => setProposalOpen(true) : undefined}
           />
@@ -148,6 +184,7 @@ export function ActivityChatView({
 
       <ProposalComposer
         visible={proposalOpen}
+        accent={accent}
         onClose={() => setProposalOpen(false)}
         onSubmit={(data) => {
           sendProposal(activityId, data);
@@ -158,6 +195,7 @@ export function ActivityChatView({
       <ChatRoomInfoSheet
         visible={infoOpen}
         roomId={activityId}
+        accent={accent}
         fallbackTitle={title}
         onClose={() => setInfoOpen(false)}
         onLeave={onBack}

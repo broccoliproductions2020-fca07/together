@@ -41,6 +41,10 @@ import type { ActivityDraft } from './types';
 // This is local state only — it never causes a Firestore read or write.
 const MODE_TICK_MS = 60_000;
 
+// How long an optimistic activity may live after its write succeeded without the
+// feed listener echoing it back. Generous — the echo is normally sub-second.
+const TWIN_MAX_LIFETIME_MS = 10_000;
+
 export interface ActivityInfo {
   id: string;
   title: string;
@@ -91,10 +95,7 @@ interface ActivityEntityContextValue {
   cancelActivity: (id: string) => Promise<void>;
   leaveActivity: (id: string) => Promise<boolean>;
   /** Participant-vouched guest invite (host opt-in, server-checked). */
-  inviteFriendToActivity: (
-    id: string,
-    targetUid: string,
-  ) => Promise<'invited' | 'already_invited'>;
+  inviteFriendToActivity: (id: string, targetUid: string) => Promise<'invited' | 'already_invited'>;
   /** Builds a prefilled draft for a current user's active activity. */
   getEditableDraft: (id: string) => ActivityDraft | null;
   updateActivityFromDraft: (id: string, draft: ActivityDraft) => Promise<void>;
@@ -184,7 +185,10 @@ function samePlace(left: ActivityDoc['place'] | undefined, right: ActivityDoc['p
   return left.latitude === right.latitude && left.longitude === right.longitude;
 }
 
-function activityPlaceFromDraft(draft: ActivityDraft, label: string): NonNullable<ActivityDoc['place']> {
+function activityPlaceFromDraft(
+  draft: ActivityDraft,
+  label: string,
+): NonNullable<ActivityDoc['place']> {
   const latitude = draft.place?.latitude;
   const longitude = draft.place?.longitude;
   return latitude != null && longitude != null
@@ -268,12 +272,54 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
   );
 
   const [docs, setDocs] = useState<ActivityDoc[]>([]);
+  // Creation is a CALLABLE, so the feed listener only echoes a new activity a
+  // full server round-trip later (cold start included). Until then the app has
+  // no entity to show — no pin to throw, no plan, nothing. These local twins
+  // bridge exactly that gap and are dropped the moment the real doc lands or
+  // the write fails. They are never persisted and never read from.
+  const [pendingDocs, setPendingDocs] = useState<ActivityDoc[]>([]);
+  // Cancellation is optimistic for the same reason: the tap is the decision, the
+  // callable is only its bookkeeping. Ids here are hidden everywhere at once and
+  // put back if the write fails.
+  const [cancellingIds, setCancellingIds] = useState<string[]>([]);
 
   // The one bounded activity-feed listener.
   useEffect(() => {
     setDocs([]);
+    setPendingDocs([]);
+    setCancellingIds([]);
     return activityService.subscribeActivities(actor, setDocs);
   }, [actor]);
+
+  // Hold the hide until the feed agrees the activity is no longer active —
+  // dropping it earlier would flash the cancelled pin back onto the map.
+  useEffect(() => {
+    if (cancellingIds.length === 0) return;
+    const settled = cancellingIds.filter((id) => {
+      const doc = docs.find((item) => item.id === id);
+      return !doc || doc.status !== 'active';
+    });
+    if (settled.length === 0) return;
+    setCancellingIds((current) => current.filter((id) => !settled.includes(id)));
+  }, [cancellingIds, docs]);
+
+  // The server feed is always authoritative: once it knows the id, the twin goes.
+  useEffect(() => {
+    if (pendingDocs.length === 0) return;
+    const known = new Set(docs.map((doc) => doc.id));
+    if (!pendingDocs.some((doc) => known.has(doc.id))) return;
+    setPendingDocs((current) => current.filter((doc) => !known.has(doc.id)));
+  }, [docs, pendingDocs]);
+
+  const activityDocs = useMemo(() => {
+    const known = new Set(docs.map((doc) => doc.id));
+    const merged =
+      pendingDocs.length === 0
+        ? docs
+        : [...docs, ...pendingDocs.filter((doc) => !known.has(doc.id))];
+    if (cancellingIds.length === 0) return merged;
+    return merged.filter((doc) => !cancellingIds.includes(doc.id));
+  }, [cancellingIds, docs, pendingDocs]);
 
   // Ticks periodically so "soon" activities flip to "now" live, on screen,
   // once their start time passes — without requiring a reload or re-navigation.
@@ -286,7 +332,10 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
   // The document remains available for its short-lived activity chat after it
   // ends, but it must no longer occupy the map or calendar. This is local
   // derivation only; it adds neither reads nor writes.
-  const liveDocs = useMemo(() => docs.filter((doc) => isActivityLive(doc, now)), [docs, now]);
+  const liveDocs = useMemo(
+    () => activityDocs.filter((doc) => isActivityLive(doc, now)),
+    [activityDocs, now],
+  );
 
   // Local suggestion data is derived only from actual, still-live
   // co-participants. It stays on this device and never creates a backend read
@@ -299,10 +348,7 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
   }, [liveDocs, actor.uid]);
 
   const docMarkers = useMemo(
-    () =>
-      liveDocs
-        .map((doc) => docToMarker(doc, now))
-        .filter((m): m is MapMarker => m !== null),
+    () => liveDocs.map((doc) => docToMarker(doc, now)).filter((m): m is MapMarker => m !== null),
     [liveDocs, now],
   );
   const docPlans = useMemo(() => liveDocs.map((doc) => docToPlan(doc, now)), [liveDocs, now]);
@@ -342,7 +388,7 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
       const plan = plans.find((item) => planActivityId(item) === id || item.id === id);
       const marker = mapMarkers.find((item) => item.id === id);
       const cluster = markerClusters.find((item) => item.id === id);
-      const backingDoc = docs.find((doc) => doc.id === id);
+      const backingDoc = activityDocs.find((doc) => doc.id === id);
       const hostId = backingDoc?.hostId;
       const guestInvitesEnabled = backingDoc?.guestInvitesEnabled === true || undefined;
       const maxParticipants =
@@ -416,7 +462,7 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
 
       return null;
     },
-    [mapMarkers, markerClusters, plans, docs],
+    [mapMarkers, markerClusters, plans, activityDocs],
   );
 
   const markerToSelection = useCallback(
@@ -503,28 +549,46 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
       const title = draft.title?.trim() || 'Activity';
       const mode = draft.mode === 'open' ? 'soon' : draft.mode;
       const placeLabel = draftPlaceLabel(draft);
+      const input = {
+        mode,
+        title,
+        note: draft.description?.trim() || undefined,
+        audienceUids: resolveAudience(draft.visibility),
+        audienceContext: draft.visibility,
+        participantUids: [actor.uid],
+        startsAt: draft.startsAt ?? new Date().toISOString(),
+        endsAt: draft.endsAt,
+        place: placeLabel ? activityPlaceFromDraft(draft, placeLabel) : undefined,
+        maxParticipants: draft.maxPeople,
+        category: draft.category,
+        guestInvitesEnabled: draft.guestInvitesEnabled,
+        participants: [
+          { uid: actor.uid, displayName: actor.displayName, initials: actor.initials },
+        ],
+      };
 
-      return activityService.createActivity(
-        actor,
-        {
-          mode,
-          title,
-          note: draft.description?.trim() || undefined,
-          audienceUids: resolveAudience(draft.visibility),
-          audienceContext: draft.visibility,
-          participantUids: [actor.uid],
-          startsAt: draft.startsAt ?? new Date().toISOString(),
-          endsAt: draft.endsAt,
-          place: placeLabel ? activityPlaceFromDraft(draft, placeLabel) : undefined,
-          maxParticipants: draft.maxPeople,
-          category: draft.category,
-          guestInvitesEnabled: draft.guestInvitesEnabled,
-          participants: [
-            { uid: actor.uid, displayName: actor.displayName, initials: actor.initials },
-          ],
-        },
-        preferredId,
-      );
+      const creation = activityService.createActivity(actor, input, preferredId);
+
+      // Show the activity NOW, under the id the server will use. The callable
+      // mirrors these fields back unchanged, so the twin and the real doc agree
+      // on everything the map and calendar derive (mode, place, times).
+      const optimistic: ActivityDoc = {
+        ...input,
+        id: creation.id,
+        hostId: actor.uid,
+        status: 'active',
+        createdAt: Date.now(),
+      };
+      setPendingDocs((current) => [...current.filter((doc) => doc.id !== creation.id), optimistic]);
+      const dropTwin = () =>
+        setPendingDocs((current) => current.filter((doc) => doc.id !== creation.id));
+      // A rejected write takes its twin with it — the alert is the caller's.
+      // A resolved one gets a hard expiry too: the feed effect normally removes
+      // the twin within a second, and a pin only this device can see must never
+      // outlive that.
+      creation.ready.then(() => setTimeout(dropTwin, TWIN_MAX_LIFETIME_MS), dropTwin);
+
+      return creation;
     },
     [actor, resolveAudience],
   );
@@ -571,7 +635,16 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
       if (!isActivityLive(persistedDoc)) {
         throw new Error('Diese Aktivität ist nicht mehr aktiv.');
       }
-      await activityService.cancelActivity(actor, id);
+
+      // Gone from map and calendar NOW; the write runs behind the animation.
+      setCancellingIds((current) => (current.includes(id) ? current : [...current, id]));
+      try {
+        await activityService.cancelActivity(actor, id);
+      } catch (error) {
+        // Put it back exactly as it was and let the caller explain why.
+        setCancellingIds((current) => current.filter((item) => item !== id));
+        throw error;
+      }
     },
     [actor, docs],
   );

@@ -8,6 +8,12 @@ export interface NotificationGroup {
   unreadCount: number;
   createdAt: number;
   unread: boolean;
+  /**
+   * Every notification id in this group. The Mitteilungen view snapshots the
+   * ids that were unread when it opened, so entries stay marked "neu" while
+   * being read — the seen cursor only moves on the way out.
+   */
+  ids: string[];
 }
 
 export function isCurrentSafetyNotification(notification: NotificationDoc) {
@@ -50,9 +56,13 @@ export function groupMailboxNotifications(
     ) {
       return;
     }
+    // Comings and goings on the same Activity collapse into one row; a host
+    // handover does not — it is one event that changes who holds the controls.
     const key =
       notification.activityId &&
-      (notification.kind === 'activity_joined' || notification.kind === 'activity_updated')
+      (notification.kind === 'activity_joined' ||
+        notification.kind === 'activity_left' ||
+        notification.kind === 'activity_updated')
         ? `${notification.kind}:${notification.activityId}`
         : notification.id;
     groups.set(key, [...(groups.get(key) ?? []), notification]);
@@ -70,6 +80,7 @@ export function groupMailboxNotifications(
         unreadCount,
         createdAt: sorted[0].createdAt,
         unread: unreadCount > 0,
+        ids: sorted.map((notification) => notification.id),
       };
     })
     .sort((a, b) => b.createdAt - a.createdAt);

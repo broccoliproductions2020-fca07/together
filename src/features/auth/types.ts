@@ -1,5 +1,8 @@
 /** Auth domain types shared by the UI and Firebase service. */
 
+/** How this account signs in. Read from the Firebase provider data, not stored. */
+export type SignInProvider = 'password' | 'google' | 'apple' | 'unknown';
+
 export interface AuthUser {
   id: string;
   email: string;
@@ -9,6 +12,8 @@ export interface AuthUser {
   emailVerified?: boolean;
   /** ISO 8601 */
   createdAt: string;
+  /** Shown on the profile card. Also decides which account actions apply. */
+  signInProvider: SignInProvider;
 }
 
 export interface AuthSession {

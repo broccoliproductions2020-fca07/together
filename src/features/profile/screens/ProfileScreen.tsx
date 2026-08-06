@@ -2,22 +2,32 @@ import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import * as Location from 'expo-location';
 import { useEffect, useState, type ReactNode } from 'react';
-import { Alert, Image, Pressable, Switch, Text, View } from 'react-native';
+import { Alert, Image, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 
-import { ProfileEditSheet, useAuth } from '@/features/auth';
+import { ProfileEditSheet, useAuth, type SignInProvider } from '@/features/auth';
 import { FriendCodeSheet, useFriends, type FriendRequestPolicy } from '@/features/friends';
 import { useMapStyle, type MapStylePreference } from '@/features/map';
 import { BlockedUsersSheet, useModeration } from '@/features/moderation';
 import { useNotifications } from '@/features/notifications';
 import { PrivacyInfoSheet } from '@/features/settings';
 import { useThemeColors, useThemePreference, type ColorSchemePreference } from '@/features/theme';
-import { AppScreen, AppText, ScreenHeader } from '@/shared/components';
-import { getBuildInfo } from '@/shared/utils/buildInfo';
+import { AppScreen, ScreenHeader } from '@/shared/components';
+import { FONT, TEXT_CAPPED, TEXT_FLEXIBLE, TYPE } from '@/shared/theme';
+import { DIAGNOSTICS_VISIBLE, getBuildInfo } from '@/shared/utils/buildInfo';
+import { SEMANTIC_COLOR } from '@/shared/utils/semanticColors';
 
 // Module scope: build identity cannot change while the app is running.
 const buildInfo = getBuildInfo();
 
-const ACCENT = '#6E8BF7';
+/**
+ * The profile's own accent. Deliberately `SEMANTIC_COLOR.action` and never the
+ * `open` blue (#6E8BF7) that used to sit here — that colour belongs to the Open
+ * activity mode and must not explain an unrelated state (semanticColors.ts).
+ */
+const ACCENT = SEMANTIC_COLOR.action;
+const SUCCESS = SEMANTIC_COLOR.social;
+const WARNING = SEMANTIC_COLOR.safetyAttention;
+const DANGER = SEMANTIC_COLOR.danger;
 
 const THEME_OPTIONS: {
   value: ColorSchemePreference;
@@ -34,9 +44,9 @@ const MAP_STYLE_OPTIONS: {
   label: string;
   icon: keyof typeof Ionicons.glyphMap;
 }[] = [
-  { value: 'dynamic', label: 'Dynamisch', icon: 'partly-sunny-outline' },
-  { value: 'light', label: 'Hell', icon: 'sunny-outline' },
-  { value: 'dark', label: 'Dunkel', icon: 'moon-outline' },
+  { value: 'dynamic', label: 'Auto', icon: 'partly-sunny-outline' },
+  { value: 'light', label: 'Tag', icon: 'sunny-outline' },
+  { value: 'dark', label: 'Nacht', icon: 'moon-outline' },
 ];
 
 const FRIEND_REQUEST_OPTIONS: {
@@ -53,74 +63,54 @@ const FRIEND_REQUEST_OPTIONS: {
   { value: 'nobody', label: 'Niemand', description: 'Neue Anfragen blockieren' },
 ];
 
-function ThemeSwitcher() {
-  const { preference, setPreference } = useThemePreference();
-  const colors = useThemeColors();
+const PROVIDER_LABEL: Record<SignInProvider, string> = {
+  password: 'E-Mail',
+  google: 'Google',
+  apple: 'Apple',
+  unknown: '—',
+};
 
+/** "März 2026" — a month is precise enough for a membership date. */
+function formatMemberSince(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleDateString('de-DE', { month: 'long', year: 'numeric' });
+}
+
+/** Section heading with a rule running to the right edge. */
+function GroupLabel({ children }: { children: ReactNode }) {
+  const colors = useThemeColors();
   return (
-    <View className="flex-row rounded-[18px] bg-secondary p-1">
-      {THEME_OPTIONS.map((option) => {
-        const active = preference === option.value;
-        return (
-          <Pressable
-            key={option.value}
-            accessibilityRole="button"
-            accessibilityState={{ selected: active }}
-            className={`min-h-11 flex-1 flex-row items-center justify-center gap-1.5 rounded-[14px] ${
-              active ? 'bg-card shadow-sm' : ''
-            } active:opacity-75`}
-            onPress={() => setPreference(option.value)}
-          >
-            <Ionicons
-              name={option.icon}
-              size={15}
-              color={active ? ACCENT : colors.mutedForeground}
-            />
-            <Text
-              className={`text-xs font-bold ${active ? 'text-foreground' : 'text-muted-foreground'}`}
-            >
-              {option.label}
-            </Text>
-          </Pressable>
-        );
-      })}
+    <View className="mb-2 mt-6 flex-row items-center gap-2">
+      <Text
+        {...TEXT_FLEXIBLE}
+        style={{
+          ...TYPE.micro,
+          fontFamily: FONT.bold,
+          color: colors.mutedForeground,
+          letterSpacing: 1.2,
+          textTransform: 'uppercase',
+        }}
+      >
+        {children}
+      </Text>
+      <View className="h-px flex-1" style={{ backgroundColor: colors.border }} />
     </View>
   );
 }
 
-function MapStyleSwitcher() {
-  const { preference, setPreference } = useMapStyle();
+function GroupCard({ children, tone = 'normal' }: { children: ReactNode; tone?: 'normal' | 'danger' }) {
   const colors = useThemeColors();
-
   return (
-    <View className="flex-row rounded-[18px] bg-secondary p-1">
-      {MAP_STYLE_OPTIONS.map((option) => {
-        const active = preference === option.value;
-        return (
-          <Pressable
-            key={option.value}
-            accessibilityRole="button"
-            accessibilityState={{ selected: active }}
-            accessibilityLabel={`Kartenstil ${option.label}`}
-            className={`min-h-11 flex-1 flex-row items-center justify-center gap-1.5 rounded-[14px] ${
-              active ? 'bg-card shadow-sm' : ''
-            } active:opacity-75`}
-            onPress={() => setPreference(option.value)}
-          >
-            <Ionicons
-              name={option.icon}
-              size={15}
-              color={active ? ACCENT : colors.mutedForeground}
-            />
-            <Text
-              className={`text-xs font-bold ${active ? 'text-foreground' : 'text-muted-foreground'}`}
-              numberOfLines={1}
-            >
-              {option.label}
-            </Text>
-          </Pressable>
-        );
-      })}
+    <View
+      className="overflow-hidden rounded-[20px] border"
+      style={
+        tone === 'danger'
+          ? { borderColor: `${DANGER}52`, backgroundColor: `${DANGER}0D` }
+          : { borderColor: colors.border, backgroundColor: colors.card }
+      }
+    >
+      {children}
     </View>
   );
 }
@@ -129,55 +119,152 @@ function SettingRow({
   icon,
   iconColor = ACCENT,
   title,
+  titleColor,
   subtitle,
+  value,
   onPress,
   trailing,
+  first = false,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
   iconColor?: string;
   title: string;
+  titleColor?: string;
   subtitle?: string;
+  /** Current setting, shown right-aligned so the page reads without tapping. */
+  value?: string;
   onPress?: () => void;
   trailing?: ReactNode;
+  first?: boolean;
 }) {
   const colors = useThemeColors();
   return (
     <Pressable
       accessibilityRole={onPress ? 'button' : undefined}
+      accessibilityLabel={value ? `${title}, ${value}` : title}
       disabled={!onPress}
-      className="min-h-[68px] flex-row items-center gap-3 px-4 py-3 active:bg-secondary/70"
+      className="min-h-[56px] flex-row items-center gap-3 px-3.5 py-2.5 active:opacity-70"
+      style={first ? undefined : { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }}
       onPress={onPress}
     >
       <View
-        className="h-10 w-10 items-center justify-center rounded-[15px]"
-        style={{ backgroundColor: `${iconColor}18` }}
+        className="h-[34px] w-[34px] items-center justify-center rounded-[12px]"
+        style={{ backgroundColor: `${iconColor}1F` }}
       >
-        <Ionicons name={icon} size={19} color={iconColor} />
+        <Ionicons name={icon} size={17} color={iconColor} />
       </View>
       <View className="flex-1">
-        <Text className="text-[15px] font-bold tracking-[-0.15px] text-foreground">{title}</Text>
+        <Text
+          {...TEXT_FLEXIBLE}
+          style={{ ...TYPE.label, fontFamily: FONT.semibold, color: titleColor ?? colors.foreground }}
+        >
+          {title}
+        </Text>
         {subtitle ? (
-          <Text className="mt-0.5 text-xs leading-4 text-muted-foreground">{subtitle}</Text>
+          <Text
+            {...TEXT_FLEXIBLE}
+            className="mt-0.5"
+            style={{ ...TYPE.caption, fontFamily: FONT.medium, color: colors.mutedForeground }}
+          >
+            {subtitle}
+          </Text>
         ) : null}
       </View>
+      {value ? (
+        <Text
+          {...TEXT_CAPPED}
+          style={{ ...TYPE.caption, fontFamily: FONT.semibold, color: colors.mutedForeground }}
+        >
+          {value}
+        </Text>
+      ) : null}
       {trailing ??
         (onPress ? (
-          <Ionicons name="chevron-forward" size={18} color={colors.mutedForeground} />
+          <Ionicons name="chevron-forward" size={16} color={colors.mutedForeground} />
         ) : null)}
     </Pressable>
   );
 }
 
-function SectionCard({ children }: { children: ReactNode }) {
+/** Shared segmented control for the two appearance preferences. */
+function Segmented<T extends string>({
+  title,
+  subtitle,
+  options,
+  value,
+  onChange,
+}: {
+  title: string;
+  subtitle: string;
+  options: { value: T; label: string; icon: keyof typeof Ionicons.glyphMap }[];
+  value: T;
+  onChange: (next: T) => void;
+}) {
+  const colors = useThemeColors();
   return (
-    <View className="overflow-hidden rounded-[26px] border border-border bg-card shadow-sm">
-      {children}
+    <View>
+      <Text
+        {...TEXT_FLEXIBLE}
+        style={{ ...TYPE.label, fontFamily: FONT.semibold, color: colors.foreground }}
+      >
+        {title}
+      </Text>
+      <Text
+        {...TEXT_FLEXIBLE}
+        className="mb-2.5 mt-0.5"
+        style={{ ...TYPE.caption, fontFamily: FONT.medium, color: colors.mutedForeground }}
+      >
+        {subtitle}
+      </Text>
+      <View
+        className="flex-row gap-1 rounded-[16px] p-1"
+        style={{ backgroundColor: colors.secondary }}
+      >
+        {options.map((option) => {
+          const active = value === option.value;
+          return (
+            <Pressable
+              key={option.value}
+              accessibilityRole="button"
+              accessibilityState={{ selected: active }}
+              accessibilityLabel={`${title} ${option.label}`}
+              className="min-h-11 flex-1 flex-row items-center justify-center gap-1.5 rounded-[12px] active:opacity-75"
+              style={
+                active
+                  ? {
+                      backgroundColor: colors.card,
+                      shadowColor: '#000',
+                      shadowOffset: { width: 0, height: 1 },
+                      shadowOpacity: 0.14,
+                      shadowRadius: 3,
+                      elevation: 2,
+                    }
+                  : undefined
+              }
+              onPress={() => onChange(option.value)}
+            >
+              <Ionicons
+                name={option.icon}
+                size={14}
+                color={active ? ACCENT : colors.mutedForeground}
+              />
+              <Text
+                {...TEXT_CAPPED}
+                numberOfLines={1}
+                style={{
+                  ...TYPE.caption,
+                  fontFamily: FONT.semibold,
+                  color: active ? ACCENT : colors.mutedForeground,
+                }}
+              >
+                {option.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
     </View>
   );
-}
-
-function Divider() {
-  return <View className="ml-[68px] h-px bg-border" />;
 }
 
 export function ProfileScreen() {
@@ -187,6 +274,7 @@ export function ProfileScreen() {
   // permissions do not carry across.
   const [locationState, setLocationState] = useState('…');
   useEffect(() => {
+    if (!DIAGNOSTICS_VISIBLE) return;
     let active = true;
     Location.getForegroundPermissionsAsync()
       .then((result) => {
@@ -211,8 +299,11 @@ export function ProfileScreen() {
   const [codeVisible, setCodeVisible] = useState(false);
   const [journeyBusy, setJourneyBusy] = useState(false);
   const colors = useThemeColors();
+  const { preference: themePreference, setPreference: setThemePreference } = useThemePreference();
+  const { preference: mapStyle, setPreference: setMapStyle } = useMapStyle();
   const { pushEnabled, enablePush, disablePush } = useNotifications();
   const {
+    friends,
     friendRequestPolicy,
     setFriendRequestPolicy,
     journeyRemindersEnabled,
@@ -321,10 +412,21 @@ export function ProfileScreen() {
     .join('')
     .slice(0, 2)
     .toUpperCase();
+  const requestPolicyLabel =
+    FRIEND_REQUEST_OPTIONS.find((option) => option.value === friendRequestPolicy)?.label ?? 'Alle';
+  const themeLabel = THEME_OPTIONS.find((option) => option.value === themePreference)?.label;
+  const mapStyleLabel = MAP_STYLE_OPTIONS.find((option) => option.value === mapStyle)?.label;
+
+  // The membership card. Paper stock in light, ink-dark in dark — both designed,
+  // not one inverted. Deliberately carries NO ornament: the type and the two
+  // brand colours do the work.
+  const cardSurface = colors.primaryForeground === '#FAF7F2' ? '#F6F1E6' : '#171D1A';
+  const cardInk = colors.primary;
+  const cardRule = `${colors.primary}4D`;
 
   return (
     <AppScreen scroll contentClassName="px-5 pb-8 pt-3">
-      <View className="flex-1 gap-7">
+      <View className="flex-1">
         <ScreenHeader
           title="Profil"
           subtitle="Dein Konto und deine Einstellungen"
@@ -332,316 +434,439 @@ export function ProfileScreen() {
         />
 
         {user ? (
-          <View className="overflow-hidden rounded-[30px] bg-[#101923] p-5 shadow-lg">
+          <>
             <View
-              pointerEvents="none"
-              className="absolute -right-8 -top-10 h-40 w-40 rounded-full"
-              style={{ backgroundColor: `${ACCENT}25` }}
-            />
-            <View
-              pointerEvents="none"
-              className="absolute -bottom-16 left-12 h-32 w-32 rounded-full"
-              style={{ backgroundColor: '#41C08D18' }}
-            />
-
-            <View className="flex-row items-center gap-4">
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Profilbild ändern"
-                accessibilityHint="Kamera oder Fotos öffnen"
-                className="h-[72px] w-[72px] items-center justify-center overflow-visible rounded-[26px] border border-white/15 bg-white/10 active:opacity-80"
-                onPress={() => {
-                  setAvatarPickerOnShow(true);
-                  setEditVisible(true);
-                }}
-              >
-                <View className="h-full w-full items-center justify-center overflow-hidden rounded-[25px]">
-                  {user.avatarUrl ? (
-                    <Image source={{ uri: user.avatarUrl }} className="h-full w-full" />
-                  ) : (
-                    <Text className="text-xl font-extrabold text-white">{initials || 'DU'}</Text>
-                  )}
-                </View>
-                <View className="absolute -bottom-1 -right-1 h-7 w-7 items-center justify-center rounded-full border-2 border-[#101923] bg-white">
-                  <Ionicons name="camera" size={13} color="#101923" />
-                </View>
-              </Pressable>
-              <View className="flex-1">
-                <Text className="text-xl font-extrabold tracking-[-0.4px] text-white">
-                  {displayName}
+              className="mt-5 overflow-hidden rounded-[24px] p-4"
+              style={{
+                backgroundColor: cardSurface,
+                borderWidth: StyleSheet.hairlineWidth,
+                borderColor: `${colors.primary}33`,
+              }}
+            >
+              <View className="flex-row items-start justify-between">
+                <Text
+                  {...TEXT_FLEXIBLE}
+                  style={{
+                    ...TYPE.micro,
+                    fontFamily: FONT.bold,
+                    color: cardInk,
+                    letterSpacing: 1.6,
+                    textTransform: 'uppercase',
+                  }}
+                >
+                  Together · Mitglied
                 </Text>
-                {user.username ? (
-                  <Text className="mt-0.5 text-sm font-semibold text-white/70">
-                    @{user.username}
-                  </Text>
-                ) : null}
-                <Text className="mt-1 text-sm text-white/50">{user.email}</Text>
-                <View className="mt-2 flex-row items-center gap-1.5">
-                  <Ionicons
-                    name={user.emailVerified ? 'checkmark-circle' : 'alert-circle-outline'}
-                    size={14}
-                    color={user.emailVerified ? '#41C08D' : '#E0A23E'}
-                  />
-                  <Text
-                    className="text-xs font-bold"
-                    style={{ color: user.emailVerified ? '#41C08D' : '#E0A23E' }}
+                {/* "Zeig mal deinen Code" — the most common real-life add-friends
+                    moment. Hidden when the request policy blocks incoming requests. */}
+                {user.username && friendRequestPolicy === 'anyone' ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Meinen QR-Code zeigen"
+                    className="h-[38px] w-[38px] items-center justify-center rounded-[12px] active:opacity-80"
+                    style={{ backgroundColor: cardInk }}
+                    onPress={() => setCodeVisible(true)}
                   >
-                    {user.emailVerified ? 'Verifiziert' : 'E-Mail offen'}
+                    <Ionicons name="qr-code-outline" size={21} color={cardSurface} />
+                  </Pressable>
+                ) : null}
+              </View>
+
+              <View className="mt-6 flex-row items-end gap-3">
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Profilbild ändern"
+                  accessibilityHint="Kamera oder Fotos öffnen"
+                  className="h-14 w-14 items-center justify-center overflow-hidden rounded-[19px] active:opacity-80"
+                  style={{ backgroundColor: cardInk }}
+                  onPress={() => {
+                    setAvatarPickerOnShow(true);
+                    setEditVisible(true);
+                  }}
+                >
+                  {user.avatarUrl ? (
+                    <Image
+                      accessibilityIgnoresInvertColors
+                      source={{ uri: user.avatarUrl }}
+                      className="h-full w-full"
+                    />
+                  ) : (
+                    <Text
+                      {...TEXT_CAPPED}
+                      style={{ ...TYPE.body, fontFamily: FONT.bold, color: cardSurface }}
+                    >
+                      {initials || 'DU'}
+                    </Text>
+                  )}
+                </Pressable>
+                <View className="flex-1">
+                  <Text
+                    {...TEXT_FLEXIBLE}
+                    numberOfLines={1}
+                    style={{
+                      ...TYPE.body,
+                      fontFamily: FONT.bold,
+                      letterSpacing: -0.35,
+                      color: colors.foreground,
+                    }}
+                  >
+                    {displayName}
                   </Text>
+                  {user.username ? (
+                    <Text
+                      {...TEXT_FLEXIBLE}
+                      numberOfLines={1}
+                      className="mt-0.5"
+                      style={{
+                        ...TYPE.caption,
+                        fontFamily: FONT.medium,
+                        color: colors.mutedForeground,
+                      }}
+                    >
+                      @{user.username}
+                    </Text>
+                  ) : null}
                 </View>
               </View>
-            </View>
 
-            {!user.emailVerified ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityState={{ busy: verificationBusy }}
-                disabled={verificationBusy}
-                className="mt-4 flex-row items-center gap-2 rounded-2xl bg-white/8 px-3 py-3 active:opacity-70"
-                onPress={() => void handleVerification()}
+              {/* Three facts the app already stores and never showed. */}
+              <View
+                className="mt-4 flex-row gap-3 pt-3"
+                style={{ borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: cardRule }}
               >
-                <Ionicons name="mail-unread-outline" size={17} color="#E0A23E" />
-                <Text className="flex-1 text-sm font-semibold text-white/75">
-                  {verificationBusy ? 'Link wird gesendet …' : 'Bestätigungslink erneut senden'}
-                </Text>
-              </Pressable>
-            ) : null}
+                {[
+                  { key: 'Mitglied seit', value: formatMemberSince(user.createdAt) },
+                  { key: 'Freunde', value: String(friends.length) },
+                  { key: 'Anmeldung', value: PROVIDER_LABEL[user.signInProvider] },
+                ].map((fact) => (
+                  <View key={fact.key} className="flex-1">
+                    <Text
+                      {...TEXT_FLEXIBLE}
+                      style={{
+                        ...TYPE.micro,
+                        fontFamily: FONT.bold,
+                        color: colors.mutedForeground,
+                        letterSpacing: 1,
+                        textTransform: 'uppercase',
+                      }}
+                    >
+                      {fact.key}
+                    </Text>
+                    <Text
+                      {...TEXT_FLEXIBLE}
+                      numberOfLines={1}
+                      className="mt-0.5"
+                      style={{ ...TYPE.caption, fontFamily: FONT.bold, color: cardInk }}
+                    >
+                      {fact.value}
+                    </Text>
+                  </View>
+                ))}
+              </View>
 
-            <View className="mt-4 flex-row gap-2">
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Profil bearbeiten"
-                className="min-h-12 flex-1 flex-row items-center justify-center gap-2 rounded-[18px] bg-white active:opacity-90"
+                className="mt-3.5 min-h-11 flex-row items-center justify-center gap-2 rounded-[14px] active:opacity-90"
+                style={{ backgroundColor: cardInk }}
                 onPress={() => setEditVisible(true)}
               >
-                <Ionicons name="create-outline" size={17} color="#101923" />
-                <Text className="text-sm font-extrabold text-[#101923]">Profil bearbeiten</Text>
-              </Pressable>
-              {/* "Zeig mal deinen Code" — the most common real-life add-friends
-                  moment gets one-tap access right from the profile header.
-                  Hidden when the request policy blocks incoming requests. */}
-              {user.username && friendRequestPolicy === 'anyone' ? (
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Meinen QR-Code zeigen"
-                  className="h-12 w-12 items-center justify-center rounded-[18px] border border-white/15 bg-white/10 active:opacity-80"
-                  onPress={() => setCodeVisible(true)}
+                <Ionicons name="create-outline" size={16} color={cardSurface} />
+                <Text
+                  {...TEXT_CAPPED}
+                  style={{ ...TYPE.label, fontFamily: FONT.bold, color: cardSurface }}
                 >
-                  <Ionicons name="qr-code-outline" size={20} color="#F4F5F7" />
-                </Pressable>
-              ) : null}
+                  Profil bearbeiten
+                </Text>
+              </Pressable>
             </View>
-          </View>
+
+            {/* An open task, not a permanent badge. Once the address is
+                confirmed this disappears entirely — a green tick for doing
+                something mandatory is noise, not status. */}
+            {!user.emailVerified ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="E-Mail bestätigen, Link erneut senden"
+                accessibilityState={{ busy: verificationBusy }}
+                disabled={verificationBusy}
+                className="mt-2.5 min-h-[52px] flex-row items-center gap-2.5 rounded-[16px] px-3.5 py-2.5 active:opacity-70"
+                style={{ backgroundColor: `${WARNING}1F`, borderWidth: 1, borderColor: `${WARNING}66` }}
+                onPress={() => void handleVerification()}
+              >
+                <Ionicons name="mail-unread-outline" size={17} color={WARNING} />
+                <View className="flex-1">
+                  <Text
+                    {...TEXT_FLEXIBLE}
+                    style={{ ...TYPE.label, fontFamily: FONT.bold, color: WARNING }}
+                  >
+                    E-Mail bestätigen
+                  </Text>
+                  <Text
+                    {...TEXT_FLEXIBLE}
+                    className="mt-0.5"
+                    style={{
+                      ...TYPE.caption,
+                      fontFamily: FONT.medium,
+                      color: colors.mutedForeground,
+                    }}
+                  >
+                    {verificationBusy ? 'Link wird gesendet …' : 'Link erneut senden'}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={16} color={WARNING} />
+              </Pressable>
+            ) : null}
+          </>
         ) : null}
 
-        <View className="gap-2.5">
-          <AppText variant="label">Netzwerk</AppText>
-          <SectionCard>
-            <SettingRow
-              icon="people-outline"
-              title="Freunde & Gruppen"
-              subtitle="Freundschaften und deine privaten Listen"
-              onPress={() => router.push('/friends')}
-            />
-          </SectionCard>
-        </View>
+        <GroupLabel>Netzwerk</GroupLabel>
+        <GroupCard>
+          <SettingRow
+            first
+            icon="people-outline"
+            title="Freunde & Gruppen"
+            subtitle="Freundschaften und deine privaten Listen"
+            value={friends.length > 0 ? String(friends.length) : undefined}
+            onPress={() => router.push('/friends')}
+          />
+        </GroupCard>
 
-        <View className="gap-2.5">
-          <AppText variant="label">Privatsphäre</AppText>
-          <SectionCard>
-            <SettingRow
-              icon="hand-left-outline"
-              iconColor="#E56A6A"
-              title="Blockierte Personen"
-              subtitle={
-                blockedUids.length === 0
-                  ? 'Niemand blockiert'
-                  : `${blockedUids.length} ${blockedUids.length === 1 ? 'Person' : 'Personen'} blockiert`
-              }
-              onPress={() => setBlockedVisible(true)}
-            />
-            <Divider />
-            {/* Collapsed: shows the current choice like a normal settings row;
-                the three radio options only unfold on demand. */}
-            <SettingRow
-              icon="person-add-outline"
-              title="Wer kann dir Freundschaftsanfragen senden?"
-              subtitle={
-                FRIEND_REQUEST_OPTIONS.find((option) => option.value === friendRequestPolicy)
-                  ?.label ?? 'Alle'
-              }
-              onPress={() => setRequestPolicyOpen((open) => !open)}
-              trailing={
-                <Ionicons
-                  name={requestPolicyOpen ? 'chevron-up' : 'chevron-down'}
-                  size={18}
-                  color={colors.mutedForeground}
-                />
-              }
-            />
-            {requestPolicyOpen ? (
-              <View className="gap-2 px-4 pb-4">
-                <Text className="text-xs leading-4 text-muted-foreground">
-                  Jede Anfrage muss von dir bestätigt werden.
-                </Text>
-                {FRIEND_REQUEST_OPTIONS.map((option) => {
-                  const selected = friendRequestPolicy === option.value;
-                  return (
-                    <Pressable
-                      key={option.value}
-                      accessibilityRole="radio"
-                      accessibilityState={{ selected, disabled: privacyBusy }}
-                      disabled={privacyBusy}
-                      className={`min-h-[58px] flex-row items-center gap-3 rounded-2xl border px-3 py-2.5 active:opacity-75 ${
-                        selected
-                          ? 'border-primary/40 bg-primary/5'
-                          : 'border-border bg-secondary/45'
-                      }`}
-                      onPress={() => void handleFriendRequestPolicy(option.value)}
+        <GroupLabel>Privatsphäre</GroupLabel>
+        <GroupCard>
+          <SettingRow
+            first
+            icon="hand-left-outline"
+            iconColor={DANGER}
+            title="Blockierte Personen"
+            value={
+              blockedUids.length === 0
+                ? 'Niemand'
+                : `${blockedUids.length} ${blockedUids.length === 1 ? 'Person' : 'Personen'}`
+            }
+            onPress={() => setBlockedVisible(true)}
+          />
+          {/* Collapsed: shows the current choice like a normal settings row;
+              the three radio options only unfold on demand. */}
+          <SettingRow
+            icon="person-add-outline"
+            title="Freundschaftsanfragen"
+            subtitle="Wer dir Anfragen senden darf"
+            value={requestPolicyLabel}
+            onPress={() => setRequestPolicyOpen((open) => !open)}
+            trailing={
+              <Ionicons
+                name={requestPolicyOpen ? 'chevron-up' : 'chevron-down'}
+                size={16}
+                color={colors.mutedForeground}
+              />
+            }
+          />
+          {requestPolicyOpen ? (
+            <View className="gap-1.5 px-3.5 pb-3.5">
+              <Text
+                {...TEXT_FLEXIBLE}
+                className="mb-0.5"
+                style={{
+                  ...TYPE.caption,
+                  fontFamily: FONT.medium,
+                  color: colors.mutedForeground,
+                }}
+              >
+                Jede Anfrage musst du trotzdem bestätigen.
+              </Text>
+              {FRIEND_REQUEST_OPTIONS.map((option) => {
+                const selected = friendRequestPolicy === option.value;
+                return (
+                  <Pressable
+                    key={option.value}
+                    accessibilityRole="radio"
+                    accessibilityState={{ selected, disabled: privacyBusy }}
+                    disabled={privacyBusy}
+                    className="min-h-[54px] flex-row items-center gap-3 rounded-[14px] border px-3 py-2.5 active:opacity-75"
+                    style={{
+                      borderColor: selected ? ACCENT : colors.border,
+                      backgroundColor: selected ? `${ACCENT}12` : colors.secondary,
+                      opacity: privacyBusy ? 0.6 : 1,
+                    }}
+                    onPress={() => void handleFriendRequestPolicy(option.value)}
+                  >
+                    <View
+                      className="h-[18px] w-[18px] items-center justify-center rounded-full border-[1.5px]"
+                      style={{ borderColor: selected ? ACCENT : colors.mutedForeground }}
                     >
-                      <View
-                        className="h-5 w-5 items-center justify-center rounded-full border"
-                        style={{ borderColor: selected ? ACCENT : colors.mutedForeground }}
+                      {selected ? (
+                        <View
+                          className="h-2 w-2 rounded-full"
+                          style={{ backgroundColor: ACCENT }}
+                        />
+                      ) : null}
+                    </View>
+                    <View className="flex-1">
+                      <Text
+                        {...TEXT_FLEXIBLE}
+                        style={{
+                          ...TYPE.label,
+                          fontFamily: FONT.semibold,
+                          color: colors.foreground,
+                        }}
                       >
-                        {selected ? <View className="h-2.5 w-2.5 rounded-full bg-primary" /> : null}
-                      </View>
-                      <View className="flex-1">
-                        <Text className="text-sm font-bold text-foreground">{option.label}</Text>
-                        <Text className="mt-0.5 text-xs text-muted-foreground">
-                          {option.description}
-                        </Text>
-                      </View>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            ) : null}
-            <Divider />
-            {/* All fixed guarantees live behind this one row — the settings list
-                itself contains only things the user can actually change. */}
-            <SettingRow
-              icon="shield-checkmark-outline"
-              iconColor="#41C08D"
-              title="So schützt dich Together"
-              subtitle="Profil, Standort, Chats — was immer gilt"
-              onPress={() => setPrivacyInfoVisible(true)}
-            />
-            <Divider />
-            <SettingRow
-              icon="document-text-outline"
-              title="Datenschutzerklärung"
-              subtitle="Rechtliche Informationen zur Datenverarbeitung"
-              onPress={() => router.push('/datenschutz')}
-            />
-            <Divider />
-            <SettingRow
-              icon="reader-outline"
-              title="Nutzungsbedingungen"
-              subtitle="Regeln für die Nutzung von Together"
-              onPress={() => router.push('/nutzungsbedingungen')}
-            />
-            <Divider />
-            <SettingRow
-              icon="information-circle-outline"
-              title="Impressum"
-              subtitle="Anbieterkennzeichnung"
-              onPress={() => router.push('/impressum')}
-            />
-          </SectionCard>
-        </View>
-
-        <View className="gap-2.5">
-          <AppText variant="label">Darstellung</AppText>
-          <SectionCard>
-            <View className="gap-3 p-4">
-              <View>
-                <Text className="text-[15px] font-bold text-foreground">Erscheinungsbild</Text>
-                <Text className="mt-0.5 text-xs text-muted-foreground">
-                  Passt sich auf Wunsch automatisch deinem Gerät an.
-                </Text>
-              </View>
-              <ThemeSwitcher />
-              <View className="mt-1 border-t border-border pt-4">
-                <Text className="text-[15px] font-bold text-foreground">Kartenstil</Text>
-                <Text className="mt-0.5 text-xs text-muted-foreground">
-                  Dynamisch folgt dem Tageslicht und dem Sonnenuntergang.
-                </Text>
-              </View>
-              <MapStyleSwitcher />
+                        {option.label}
+                      </Text>
+                      <Text
+                        {...TEXT_FLEXIBLE}
+                        className="mt-0.5"
+                        style={{
+                          ...TYPE.caption,
+                          fontFamily: FONT.medium,
+                          color: colors.mutedForeground,
+                        }}
+                      >
+                        {option.description}
+                      </Text>
+                    </View>
+                  </Pressable>
+                );
+              })}
             </View>
-          </SectionCard>
-        </View>
+          ) : null}
+          {/* All fixed guarantees live behind this one row — the settings list
+              itself contains only things the user can actually change. */}
+          <SettingRow
+            icon="shield-checkmark-outline"
+            iconColor={SUCCESS}
+            title="So schützt dich Together"
+            subtitle="Profil, Standort, Chats — was immer gilt"
+            onPress={() => setPrivacyInfoVisible(true)}
+          />
+          <SettingRow
+            icon="document-text-outline"
+            title="Datenschutzerklärung"
+            subtitle="Rechtliche Informationen zur Datenverarbeitung"
+            onPress={() => router.push('/datenschutz')}
+          />
+          <SettingRow
+            icon="reader-outline"
+            title="Nutzungsbedingungen"
+            subtitle="Regeln für die Nutzung von Together"
+            onPress={() => router.push('/nutzungsbedingungen')}
+          />
+          <SettingRow
+            icon="information-circle-outline"
+            title="Impressum"
+            subtitle="Anbieterkennzeichnung"
+            onPress={() => router.push('/impressum')}
+          />
+        </GroupCard>
 
-        <View className="gap-2.5">
-          <AppText variant="label">Mitteilungen</AppText>
-          <SectionCard>
-            <SettingRow
-              icon={pushEnabled ? 'notifications' : 'notifications-off-outline'}
-              title="Push-Benachrichtigungen"
-              subtitle={
-                pushEnabled
-                  ? 'Wichtige Updates zu Activities und Sicherheit sind aktiv.'
-                  : 'Aktiviere Hinweise für relevante Updates.'
-              }
-              onPress={() => void handlePushToggle()}
-              trailing={
-                <Switch
-                  value={pushEnabled}
-                  onValueChange={() => void handlePushToggle()}
-                  trackColor={{ false: colors.border, true: ACCENT }}
-                  thumbColor="#ffffff"
-                />
-              }
+        <GroupLabel>Darstellung</GroupLabel>
+        <GroupCard>
+          <View className="gap-4 p-3.5">
+            <Segmented
+              title="Erscheinungsbild"
+              subtitle="Passt sich auf Wunsch automatisch deinem Gerät an."
+              options={THEME_OPTIONS}
+              value={themePreference}
+              onChange={setThemePreference}
             />
-            <Divider />
-            {/* The reminder only OFFERS to share; each activity's location
-                release is still confirmed individually (docs/safety-mode.md). */}
-            <SettingRow
-              icon="navigate-outline"
-              title="Anreise-Erinnerungen"
-              subtitle="Eine Stunde vor beigetretenen Aktivitäten fragen, ob du deine Anreise teilen möchtest."
-              onPress={() => void handleJourneyRemindersToggle()}
-              trailing={
-                <Switch
-                  value={journeyRemindersEnabled}
-                  disabled={journeyBusy}
-                  onValueChange={() => void handleJourneyRemindersToggle()}
-                  trackColor={{ false: colors.border, true: ACCENT }}
-                  thumbColor="#ffffff"
-                />
-              }
+            <View className="h-px" style={{ backgroundColor: colors.border }} />
+            <Segmented
+              title="Kartenstil"
+              subtitle="Dynamisch folgt dem Tageslicht und dem Sonnenuntergang."
+              options={MAP_STYLE_OPTIONS}
+              value={mapStyle}
+              onChange={setMapStyle}
             />
-          </SectionCard>
-        </View>
+          </View>
+        </GroupCard>
 
-        <View className="gap-2.5">
-          <AppText variant="label">Konto</AppText>
-          <SectionCard>
+        <GroupLabel>Mitteilungen</GroupLabel>
+        <GroupCard>
+          <SettingRow
+            first
+            icon={pushEnabled ? 'notifications' : 'notifications-off-outline'}
+            title="Push-Benachrichtigungen"
+            subtitle={
+              pushEnabled
+                ? 'Wichtige Updates zu Activities und Sicherheit sind aktiv.'
+                : 'Aktiviere Hinweise für relevante Updates.'
+            }
+            onPress={() => void handlePushToggle()}
+            trailing={
+              <Switch
+                value={pushEnabled}
+                onValueChange={() => void handlePushToggle()}
+                trackColor={{ false: colors.border, true: ACCENT }}
+                thumbColor="#ffffff"
+              />
+            }
+          />
+          {/* The reminder only OFFERS to share; each activity's location
+              release is still confirmed individually (docs/safety-mode.md). */}
+          <SettingRow
+            icon="navigate-outline"
+            title="Anreise-Erinnerungen"
+            subtitle="Eine Stunde vor beigetretenen Aktivitäten fragen."
+            onPress={() => void handleJourneyRemindersToggle()}
+            trailing={
+              <Switch
+                value={journeyRemindersEnabled}
+                disabled={journeyBusy}
+                onValueChange={() => void handleJourneyRemindersToggle()}
+                trackColor={{ false: colors.border, true: ACCENT }}
+                thumbColor="#ffffff"
+              />
+            }
+          />
+        </GroupCard>
+
+        <GroupLabel>Konto</GroupLabel>
+        <GroupCard>
+          <SettingRow
+            first
+            icon="log-out-outline"
+            iconColor={WARNING}
+            title="Abmelden"
+            subtitle="Du kannst dich jederzeit wieder anmelden."
+            onPress={() => void handleSignOut()}
+          />
+        </GroupCard>
+
+        {/* Irreversible, so it stands alone rather than sharing a card with
+            "Abmelden" — the two are not peers. */}
+        <View className="mt-2.5">
+          <GroupCard tone="danger">
             <SettingRow
-              icon="log-out-outline"
-              iconColor="#E0A23E"
-              title="Abmelden"
-              subtitle="Du kannst dich jederzeit wieder anmelden."
-              onPress={() => void handleSignOut()}
-            />
-            <Divider />
-            <SettingRow
+              first
               icon="trash-outline"
-              iconColor="#E56A6A"
+              iconColor={DANGER}
               title="Account löschen"
+              titleColor={DANGER}
               subtitle="Entfernt deine Daten dauerhaft."
               onPress={handleDeleteAccount}
             />
-          </SectionCard>
+          </GroupCard>
         </View>
 
         {/* Build identity — answers "is the OTA update actually on this
             device?". The update id is the part that proves it: two bundles
             published from the same source share a version string but never
-            an id. Quiet on purpose; it is a diagnostic, not a feature. */}
-        <Text className="pb-2 pt-1 text-center text-xs text-muted-foreground">
-          {buildInfo.line} · loc:{locationState}
-        </Text>
+            an id. Dev/staging only; it is noise to a real user. */}
+        {DIAGNOSTICS_VISIBLE ? (
+          <Text
+            {...TEXT_FLEXIBLE}
+            className="pb-2 pt-5 text-center"
+            style={{
+              ...TYPE.micro,
+              fontFamily: FONT.medium,
+              color: colors.mutedForeground,
+              opacity: 0.7,
+            }}
+          >
+            {buildInfo.line} · loc:{locationState}
+          </Text>
+        ) : (
+          <View className="pb-2 pt-5" />
+        )}
       </View>
 
       {user ? (

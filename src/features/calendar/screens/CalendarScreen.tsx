@@ -20,7 +20,12 @@ import Animated, {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { useActivityEntities } from '@/features/activities';
-import { ActivityChatView, useActivityChat } from '@/features/chat';
+import {
+  activityChatAccent,
+  ActivityChatView,
+  GROUP_CHAT_ACCENT,
+  useActivityChat,
+} from '@/features/chat';
 
 import { AgendaList } from '../components/AgendaList';
 import { CalendarHeader, type CalendarViewMode } from '../components/CalendarHeader';
@@ -69,7 +74,12 @@ export function CalendarScreen({ onGoToMap, onEditActivity }: CalendarScreenProp
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [scrollActiveKey, setScrollActiveKey] = useState<string | null>(null);
   const [expandedPlanId, setExpandedPlanId] = useState<string | null>(null);
-  const [chatPlan, setChatPlan] = useState<{ id: string; title: string; count: number } | null>(
+  const [chatPlan, setChatPlan] = useState<{
+    id: string;
+    title: string;
+    count: number;
+    accent: string;
+  } | null>(
     null,
   );
 
@@ -298,6 +308,11 @@ export function CalendarScreen({ onGoToMap, onEditActivity }: CalendarScreenProp
                     count:
                       findActivityById(plan.activityId ?? plan.id)?.participantCount ??
                       plan.people.length,
+                    // Same room, same colour as on the map and in the Postfach.
+                    accent: (() => {
+                      const activity = findActivityById(plan.activityId ?? plan.id);
+                      return activity ? activityChatAccent(activity.mode) : GROUP_CHAT_ACCENT;
+                    })(),
                   })
                 }
                 onEditActivity={(plan) => onEditActivity(plan.activityId ?? plan.id)}
@@ -316,6 +331,7 @@ export function CalendarScreen({ onGoToMap, onEditActivity }: CalendarScreenProp
         {chatPlan ? (
           <ActivityChatView
             activityId={chatPlan.id}
+            accent={chatPlan.accent}
             title={chatPlan.title}
             count={chatPlan.count}
             onBack={() => setChatPlan(null)}

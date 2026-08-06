@@ -1,9 +1,11 @@
 import { Pressable, Text, View } from 'react-native';
 
-import type { ChatMessage } from '../types';
+import { useThemeColors } from '@/features/theme';
+import { FONT, TEXT_FLEXIBLE, TYPE } from '@/shared/theme';
+
+import { isRetryableFailure, SEND_FAILURE_TEXT, type ChatMessage } from '../types';
 import { formatTime } from '../utils/chatRows';
 
-const DEFAULT_ACCENT = '#6E8BF7';
 const RADIUS = 18;
 const RADIUS_GROUPED = 5;
 
@@ -18,33 +20,39 @@ export function MessageBubble({
   message,
   showAuthor,
   isGroupEnd = true,
-  accent = DEFAULT_ACCENT,
+  accent,
   onRetry,
 }: {
   message: ChatMessage;
   showAuthor: boolean;
   /** Last message of an author run — shows avatar + timestamp. */
   isGroupEnd?: boolean;
-  accent?: string;
-  /** Set for failed optimistic echoes — tapping the bubble re-sends. */
+  /** The room's colour. Required — a bubble never invents its own accent. */
+  accent: string;
+  /** Set only for retryable failures; permanent rejections get no retry. */
   onRetry?: () => void;
 }) {
+  const colors = useThemeColors();
   const spacing = isGroupEnd ? 'mb-3' : 'mb-[3px]';
+  const metaStyle = { ...TYPE.micro, fontFamily: FONT.medium, color: colors.mutedForeground };
+  const authorStyle = { ...TYPE.caption, fontFamily: FONT.semibold, color: colors.mutedForeground };
+  const bodyStyle = { ...TYPE.body, fontFamily: FONT.medium };
 
   if (message.isMe) {
     const failed = message.failed === true;
-    const Bubble = failed && onRetry ? Pressable : View;
+    const retryable = failed && isRetryableFailure(message.failureReason) && Boolean(onRetry);
+    const Bubble = retryable ? Pressable : View;
     return (
       <View className={`${spacing} items-end`}>
         {showAuthor ? (
-          <Text className="mb-1 mr-1 text-xs font-semibold text-muted-foreground">Du</Text>
+          <Text {...TEXT_FLEXIBLE} className="mb-1 mr-1" style={authorStyle}>
+            Du
+          </Text>
         ) : null}
         <Bubble
-          accessibilityRole={failed && onRetry ? 'button' : undefined}
-          accessibilityLabel={
-            failed && onRetry ? 'Nachricht nicht gesendet, erneut senden' : undefined
-          }
-          onPress={failed ? onRetry : undefined}
+          accessibilityRole={retryable ? 'button' : undefined}
+          accessibilityLabel={retryable ? 'Nachricht nicht gesendet, erneut senden' : undefined}
+          onPress={retryable ? onRetry : undefined}
           className="max-w-[80%] px-3.5 py-2"
           style={{
             backgroundColor: accent,
@@ -56,14 +64,23 @@ export function MessageBubble({
             borderBottomRightRadius: RADIUS_GROUPED,
           }}
         >
-          <Text className="text-[15px] leading-[21px] text-white">{message.text}</Text>
+          <Text {...TEXT_FLEXIBLE} style={{ ...bodyStyle, color: '#ffffff' }}>
+            {message.text}
+          </Text>
         </Bubble>
         {failed ? (
-          <Text className="mr-1 mt-1 text-[10px] font-semibold text-destructive">
-            Nicht gesendet · Tippen zum Wiederholen
+          // The reason, not a generic apology. Only a transient failure invites
+          // a retry — telling someone to tap again on a 2001-character message
+          // is an instruction that can never succeed.
+          <Text
+            {...TEXT_FLEXIBLE}
+            className="mr-1 mt-1"
+            style={{ ...TYPE.micro, fontFamily: FONT.semibold, color: colors.destructive }}
+          >
+            {SEND_FAILURE_TEXT[message.failureReason ?? 'unknown']}
           </Text>
         ) : isGroupEnd || message.pending ? (
-          <Text className="mr-1 mt-1 text-[10px] text-muted-foreground">
+          <Text {...TEXT_FLEXIBLE} className="mr-1 mt-1" style={metaStyle}>
             {message.pending ? 'Senden …' : formatTime(message.createdAt)}
           </Text>
         ) : null}
@@ -78,7 +95,7 @@ export function MessageBubble({
           className="h-7 w-7 items-center justify-center rounded-full"
           style={{ backgroundColor: `${accent}22` }}
         >
-          <Text className="text-[11px] font-bold" style={{ color: accent }}>
+          <Text {...TEXT_FLEXIBLE} style={{ ...TYPE.micro, fontFamily: FONT.bold, color: accent }}>
             {message.initials}
           </Text>
         </View>
@@ -87,7 +104,7 @@ export function MessageBubble({
       )}
       <View className="max-w-[80%] items-start">
         {showAuthor ? (
-          <Text className="mb-1 ml-1 text-xs font-semibold text-muted-foreground">
+          <Text {...TEXT_FLEXIBLE} className="mb-1 ml-1" style={authorStyle}>
             {message.authorName}
           </Text>
         ) : null}
@@ -99,10 +116,12 @@ export function MessageBubble({
             borderBottomLeftRadius: RADIUS_GROUPED,
           }}
         >
-          <Text className="text-[15px] leading-[21px] text-foreground">{message.text}</Text>
+          <Text {...TEXT_FLEXIBLE} style={{ ...bodyStyle, color: colors.foreground }}>
+            {message.text}
+          </Text>
         </View>
         {isGroupEnd ? (
-          <Text className="ml-1 mt-1 text-[10px] text-muted-foreground">
+          <Text {...TEXT_FLEXIBLE} className="ml-1 mt-1" style={metaStyle}>
             {formatTime(message.createdAt)}
           </Text>
         ) : null}

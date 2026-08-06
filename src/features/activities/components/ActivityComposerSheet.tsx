@@ -1,16 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  StyleSheet,
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
-import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import { StyleSheet, Modal, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import Animated, {
   Easing,
   interpolateColor,
@@ -22,7 +12,11 @@ import Animated, {
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useKeyboardPadding } from '@/features/chat/utils/useKeyboardHeight';
+import { useCircles } from '@/features/circles';
 import { SquircleButton } from '@/shared/components/SquircleButton';
+
+import { FieldDivider, FieldGroup, FieldRow } from './FieldGroup';
 
 import type { ActivityCategory, ActivityDraft, ActivityMode, SelectedPlace } from '../types';
 import {
@@ -46,6 +40,15 @@ import { NowFields } from './NowFields';
 import { ParticipantLimitField } from './ParticipantLimitField';
 import { SoonFields } from './SoonFields';
 import { VisibilityPicker } from './VisibilityPicker';
+
+/** Mirrors `contextLabel` in VisibilityPicker — the folded row has to say the
+ * same thing the unfolded chips do, or folding it would hide information. */
+function visibilitySummary(draft: ActivityDraft, circles: { id: string; name: string }[]): string {
+  if (draft.visibility.kind === 'all_friends') return 'Alle Freunde';
+  if (draft.visibility.kind === 'close_friends') return 'Enge Freunde';
+  const groupId = draft.visibility.kind === 'group' ? draft.visibility.groupId : undefined;
+  return circles.find((circle) => circle.id === groupId)?.name ?? 'Private Gruppe';
+}
 
 const MODE_INDEX: Record<ActivityMode, number> = {
   now: 0,
@@ -83,7 +86,11 @@ export interface ActivityComposerSheetProps {
   /** True while editing an existing activity rather than creating a new one. */
   editing?: boolean;
   onClose: () => void;
-  onOpenMapPicker?: (mode: ActivityMode, onPick: (place: SelectedPlace) => void) => void;
+  onOpenMapPicker?: (
+    mode: ActivityMode,
+    onPick: (place: SelectedPlace) => void,
+    options?: { focusCurrentLocation?: boolean; autoConfirm?: boolean; searchMode?: boolean },
+  ) => void;
   onSubmit?: (draft: ActivityDraft) => void | Promise<void>;
 }
 
@@ -105,6 +112,10 @@ export function ActivityComposerSheet({
   const [expanded, setExpanded] = useState(false);
   const [categoryManuallyChanged, setCategoryManuallyChanged] = useState(false);
   const [categorySheetOpen, setCategorySheetOpen] = useState(false);
+  // Folded by default: the chip row is three lines tall, and most activities go
+  // to "Alle Freunde" without anyone touching it. The row still SHOWS the value.
+  const [visibilityOpen, setVisibilityOpen] = useState(false);
+  const { circles } = useCircles();
   const [validationError, setValidationError] = useState<string | null>(null);
   // On publish the sheet vanishes instantly (no slide-down) so the map's
   // "Wurf & Pop" seed can take over from the button's exact position — a
@@ -186,6 +197,7 @@ export function ActivityComposerSheet({
   }));
 
   const contentPaddingBottom = useMemo(() => Math.max(insets.bottom, 12) + 96, [insets.bottom]);
+  const footerKeyboardPadding = useKeyboardPadding(Math.max(insets.bottom, 12));
 
   function updateDraft(nextDraft: ActivityDraft) {
     setValidationError(null);
@@ -203,8 +215,7 @@ export function ActivityComposerSheet({
     const categoryGuess = learned ? null : classifyActivityTitle(title);
     const autoCategory = categoryManuallyChanged
       ? draft.category
-      : (learned ??
-        (shouldAutoApplyCategory(categoryGuess) ? categoryGuess.primary : undefined));
+      : (learned ?? (shouldAutoApplyCategory(categoryGuess) ? categoryGuess.primary : undefined));
 
     updateDraft({ ...draft, title, category: autoCategory });
   }
@@ -264,10 +275,14 @@ export function ActivityComposerSheet({
       navigationBarTranslucent
     >
       <GestureHandlerRootView style={{ flex: 1 }}>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          className="flex-1 justify-end bg-black/20"
-        >
+        {/* Plain View, NOT a KeyboardAvoidingView. Padding the whole backdrop
+            lifted the entire sheet by the keyboard height — a sheet that is
+            already 82–92% tall then has nowhere to go and ends up floating in
+            the middle of the screen with a gap underneath, detached from the
+            bottom edge it is supposed to grow out of. The keyboard is handled
+            INSIDE instead: the footer rides it, the ScrollView scrolls under
+            it. Same reason the chat surfaces avoid KAV (useKeyboardHeight). */}
+        <View className="flex-1 justify-end bg-black/20">
           <View
             className="overflow-hidden rounded-t-[30px] border border-white/10 shadow-xl"
             style={{ backgroundColor: '#0E1116', height: sheetHeight }}
@@ -311,6 +326,9 @@ export function ActivityComposerSheet({
               className="mt-4 flex-1"
               pointerEvents={submitting ? 'none' : 'auto'}
               keyboardShouldPersistTaps="handled"
+              // The sheet no longer moves, so a focused field has to be able to
+              // scroll clear of the keyboard on its own (iOS; ignored elsewhere).
+              automaticallyAdjustKeyboardInsets
               contentContainerStyle={{
                 paddingHorizontal: 20,
                 paddingBottom: contentPaddingBottom,
@@ -318,8 +336,10 @@ export function ActivityComposerSheet({
               }}
             >
               <View className="gap-2">
-                <Text className="text-sm font-bold text-white">Aktivitätsname</Text>
-                {/* The category lives here as a single slot rather than its own
+                {/* No "Aktivitätsname" caption: the placeholder already says
+                    what the field is, and a heading above every control was what
+                    made six sections weigh exactly the same.
+                    The category lives here as a single slot rather than its own
                     labelled chip row: the classifier answers it while you type,
                     so showing the ANSWER next to the field beats asking the
                     question again further down the form. */}
@@ -350,29 +370,43 @@ export function ActivityComposerSheet({
               {draft.mode === 'soon' ? <SoonFields draft={draft} onChange={updateDraft} /> : null}
               {draft.mode === 'now' ? <NowFields draft={draft} onChange={updateDraft} /> : null}
 
-              <View className="gap-2">
-                <Text className="text-sm font-bold text-white">Ort</Text>
+              {/* Everything that is not the name or the time lives in ONE card
+                  with hairlines between the rows. Four separate boxes under four
+                  identical bold captions read as a ladder in which nothing is
+                  more important than anything else; a group reads as a group. */}
+              <FieldGroup>
                 <LocationPicker
+                  variant="row"
                   draft={draft}
                   onChange={updateDraft}
                   onOpenMapPicker={onOpenMapPicker}
                 />
-              </View>
 
-              {/* Audience can't be changed via an edit (see updateActivityFromDraft) —
-                hide the picker rather than show a control that silently does nothing. */}
-              {editing ? null : (
-                <View className="gap-2">
-                  <Text className="text-sm font-bold text-white">Sichtbarkeit</Text>
-                  <VisibilityPicker draft={draft} onChange={updateDraft} />
-                </View>
-              )}
+                {/* Audience can't be changed via an edit (see updateActivityFromDraft) —
+                    hide the picker rather than show a control that silently does nothing. */}
+                {editing ? null : (
+                  <>
+                    <FieldDivider />
+                    <FieldRow
+                      label="Sichtbarkeit"
+                      value={visibilityOpen ? undefined : visibilitySummary(draft, circles)}
+                      accessibilityLabel="Sichtbarkeit ändern"
+                      expandable
+                      expanded={visibilityOpen}
+                      onPress={() => setVisibilityOpen((current) => !current)}
+                    >
+                      {visibilityOpen ? (
+                        <VisibilityPicker draft={draft} onChange={updateDraft} />
+                      ) : null}
+                    </FieldRow>
+                  </>
+                )}
 
-              <View className="gap-2">
-                <Text className="text-sm font-bold text-white">Teilnehmer</Text>
-                <ParticipantLimitField draft={draft} onChange={updateDraft} />
-                <GuestInvitesField draft={draft} onChange={updateDraft} />
-              </View>
+                <FieldDivider />
+                <ParticipantLimitField bare draft={draft} onChange={updateDraft} />
+                <FieldDivider />
+                <GuestInvitesField bare draft={draft} onChange={updateDraft} />
+              </FieldGroup>
             </ScrollView>
 
             <Animated.View
@@ -380,7 +414,9 @@ export function ActivityComposerSheet({
               style={footerStyle}
             >
               <View pointerEvents="none" style={styles.footerSurface} />
-              <View style={{ paddingBottom: Math.max(insets.bottom, 12) }}>
+              {/* The CTA is the one thing that must never sit behind the
+                  keyboard, so it — and only it — grows with it. */}
+              <Animated.View style={footerKeyboardPadding}>
                 {validationError ? (
                   <Text className="mb-2 text-sm font-semibold text-destructive">
                     {validationError}
@@ -401,10 +437,10 @@ export function ActivityComposerSheet({
                   }
                   onPress={() => void submit()}
                 />
-              </View>
+              </Animated.View>
             </Animated.View>
           </View>
-        </KeyboardAvoidingView>
+        </View>
       </GestureHandlerRootView>
     </Modal>
   );

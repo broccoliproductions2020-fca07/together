@@ -53,6 +53,9 @@ export interface MarkerDetailSheetProps {
   onCancel?: () => void;
   journeyJoinPrompt?: boolean;
   onDismissJourneyJoinPrompt?: () => void;
+  /** How much of the map this sheet currently covers, in px. The camera needs
+   * it to centre a selection in the VISIBLE map, not behind the sheet. */
+  onHeightChange?: (height: number) => void;
   onClose: () => void;
 }
 
@@ -72,6 +75,7 @@ export function MarkerDetailSheet({
   onCancel,
   journeyJoinPrompt = false,
   onDismissJourneyJoinPrompt,
+  onHeightChange,
   onClose,
 }: MarkerDetailSheetProps) {
   const insets = useSafeAreaInsets();
@@ -217,6 +221,9 @@ export function MarkerDetailSheet({
           onLayout={(event) => {
             // Tracks the detail height so expanding the chat can animate from it.
             if (!chatMode) sheetHeight.value = event.nativeEvent.layout.height;
+            // Same number, second consumer: the map camera centres a selection
+            // in the strip of map this sheet leaves visible.
+            onHeightChange?.(event.nativeEvent.layout.height);
           }}
           style={[
             sheetStyle,

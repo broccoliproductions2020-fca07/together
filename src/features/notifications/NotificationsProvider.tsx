@@ -21,6 +21,11 @@ interface NotificationsContextValue {
   notifications: NotificationDoc[];
   isLoading: boolean;
   listError: string | null;
+  /** The raw Firestore error code behind `listError` (e.g. `permission-denied`,
+   * `unavailable`). Rendered only under diagnostics — but it must survive the
+   * callback boundary, because the German message alone makes three completely
+   * different failures look identical and un-diagnosable from a device. */
+  listErrorCode: string | null;
   unreadCount: number;
   isUnread: (notification: NotificationDoc) => boolean;
   pushEnabled: boolean;
@@ -36,10 +41,12 @@ const PUSH_ENABLED_PREFIX = 'together.push.enabled.v2.';
 const LEGACY_PUSH_ENABLED_KEY = 'together.push.enabled.v1';
 const PERSISTED_PUSH_KINDS = new Set<NotificationKind>([
   'activity_joined',
+  'activity_left',
   'activity_cancelled',
+  'activity_host_changed',
   'activity_updated',
   'spontaneous_round_invite',
-  'circle_invite',
+  'group_chat_invite',
   'journey_reminder',
   'safety_request',
   'safety_confirmed',
@@ -54,6 +61,20 @@ const PERSISTED_PUSH_KINDS = new Set<NotificationKind>([
 
 function pushPreferenceKey(uid: string) {
   return `${PUSH_ENABLED_PREFIX}${uid}`;
+}
+
+/** Capped, backing off, and never refilled by another failure — the whole point
+ * is that a permanently broken listener costs a bounded number of reads and then
+ * stops, handing the decision back to the user via "Erneut versuchen". */
+const MAX_AUTO_RETRIES = 3;
+const AUTO_RETRY_DELAYS_MS = [2_000, 6_000, 18_000];
+
+/** Firestore errors carry a `code` (`permission-denied`, `unavailable`,
+ * `failed-precondition`, …). That code is the entire diagnosis, so keep it. */
+function errorCode(error: unknown): string | null {
+  if (!error || typeof error !== 'object') return null;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' && code ? code : null;
 }
 
 function persistedPushKind(data: unknown): NotificationKind | null {
@@ -72,8 +93,16 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   const notificationsRef = useRef<NotificationDoc[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
+  const [listErrorCode, setListErrorCode] = useState<string | null>(null);
   const [listActive, setListActive] = useState(false);
   const [retrySequence, setRetrySequence] = useState(0);
+  // Auto-retry budget. A snapshot listener that fails transiently (offline, a
+  // dropped connection) heals on a fresh subscribe, and making the user find the
+  // retry button for that is poor. But an unbounded retry loop is a cost and
+  // battery leak, so the budget is small, backs off, and refills only on success
+  // or on a deliberate press of "Erneut versuchen".
+  const autoRetriesRef = useRef(0);
+  const autoRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushHintCount, setPushHintCount] = useState(0);
   const [localSeenAt, setLocalSeenAt] = useState(0);
@@ -127,20 +156,39 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     if (!listActive) return;
     setIsLoading(notificationsRef.current.length === 0);
     setListError(null);
-    return notificationService.subscribeNotifications(
+    setListErrorCode(null);
+    const unsubscribe = notificationService.subscribeNotifications(
       actor,
       (next) => {
         notificationsRef.current = next;
         setNotifications(next);
         setPushHintCount(0);
         setListError(null);
+        setListErrorCode(null);
         setIsLoading(false);
+        autoRetriesRef.current = 0;
       },
-      () => {
+      (error) => {
         setListError('Mitteilungen konnten gerade nicht abgeglichen werden.');
+        setListErrorCode(errorCode(error));
         setIsLoading(false);
+        if (autoRetriesRef.current >= MAX_AUTO_RETRIES) return;
+        const attempt = autoRetriesRef.current;
+        autoRetriesRef.current = attempt + 1;
+        if (autoRetryTimerRef.current) clearTimeout(autoRetryTimerRef.current);
+        autoRetryTimerRef.current = setTimeout(
+          () => setRetrySequence((current) => current + 1),
+          AUTO_RETRY_DELAYS_MS[attempt],
+        );
       },
     );
+    return () => {
+      if (autoRetryTimerRef.current) {
+        clearTimeout(autoRetryTimerRef.current);
+        autoRetryTimerRef.current = null;
+      }
+      unsubscribe();
+    };
   }, [actor, listActive, retrySequence]);
 
   const registerPushHint = useCallback((notification: ExpoNotifications.Notification) => {
@@ -193,6 +241,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       notifications,
       isLoading,
       listError,
+      listErrorCode,
       unreadCount: exactUnreadCount + pushHintCount,
       isUnread,
       pushEnabled,
@@ -210,7 +259,12 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
         await AsyncStorage.setItem(pushPreferenceKey(actor.uid), 'false').catch(() => {});
       },
       markAllSeen,
-      retryList: () => setRetrySequence((current) => current + 1),
+      // A deliberate press refills the auto-retry budget: the user has told us
+      // conditions may have changed (back on wifi, clock corrected).
+      retryList: () => {
+        autoRetriesRef.current = 0;
+        setRetrySequence((current) => current + 1);
+      },
       setListActive,
     }),
     [
@@ -219,6 +273,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       isLoading,
       isUnread,
       listError,
+      listErrorCode,
       markAllSeen,
       notifications,
       pushEnabled,

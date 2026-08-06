@@ -1,12 +1,14 @@
 import type { GoogleMapStyle } from '../utils/sunMapStyles';
-import type { PreviewStateId } from './previewStates';
+import type { SunPhase } from '../utils/sunPhase';
 
-/** Dynamic follows the real sun; light and dark are intentional manual choices.
- * The `state*` ids are TEMPORARY on-device previews — see previewStates.ts. */
-export type MapStylePreference = 'dynamic' | 'light' | 'dark' | PreviewStateId;
+/**
+ * Dynamic follows the solar cycle; light and dark remain stable manual
+ * reference choices.
+ */
+export type MapStylePreference = 'dynamic' | 'light' | 'dark';
 
 /** The concrete palette currently applied to the native map. */
-export type EffectiveMapStyle = 'day' | 'golden' | 'dusk' | 'night';
+export type EffectiveMapStyle = SunPhase;
 
 export interface MapStyleValue {
   /** The user's stored choice. */

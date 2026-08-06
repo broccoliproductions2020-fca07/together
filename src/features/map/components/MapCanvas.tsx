@@ -36,6 +36,7 @@ import { JourneyAvatarMarker } from './JourneyAvatarMarker';
 import { ACTIVITY_MARKER_ANCHOR, ACTIVITY_MARKER_AURA_OFFSET_Y } from './activityMarkerLayout';
 import { MapLiveAuraOverlay, type LiveAuraTarget } from './MapLiveAuraOverlay';
 import { MapMarkerMorphOverlay, type MorphCameraValues } from './MapMarkerMorphOverlay';
+import { MarkerDismissOverlay, type MarkerDismissRequest } from './MarkerDismissOverlay';
 import { MarkerLaunchOverlay, type MarkerLaunchRequest } from './MarkerLaunchOverlay';
 import { useMarkerImages } from './markerCapture';
 import { PreviewMapCanvas, type PreviewMapCanvasProps } from './PreviewMapCanvas';
@@ -62,10 +63,25 @@ const IOS_HAS_GOOGLE_RENDERER =
 const MAP_PROVIDER =
   Platform.OS === 'android' || IOS_HAS_GOOGLE_RENDERER ? PROVIDER_GOOGLE : PROVIDER_DEFAULT;
 
-// The detail sheet covers the lower portion of the map. Moving the map center
-// south by this share places the selected location in the visual center of the
-// remaining upper map instead of behind the sheet.
-const DETAIL_SHEET_CENTER_OFFSET = 0.28;
+/**
+ * "Centred" means centred in the map the user can actually SEE.
+ *
+ * A sheet covering the lower part of the screen moves the visible centre up, so
+ * the camera centre has to move the opposite way — south by half the covered
+ * height. This used to be a hard-coded 0.28 of the viewport, calibrated for one
+ * particular sheet; every other sheet (and no sheet at all) then put the pin
+ * somewhere between slightly and badly off. Deriving it from the real covered
+ * height is self-calibrating: 0 obstruction → dead centre, and a sheet covering
+ * 56% of the screen reproduces exactly the old 0.28.
+ *
+ * Capped at 80% because past that there is no meaningful map strip left to
+ * centre anything in, and the correction would fling the target off-screen.
+ */
+function focusCenterOffset(coveredHeight: number, viewportHeight: number) {
+  if (viewportHeight <= 0) return 0;
+  const covered = Math.max(0, Math.min(coveredHeight, viewportHeight * 0.8));
+  return covered / (2 * viewportHeight);
+}
 
 function placeFromLongPress(event: LongPressEvent) {
   const { latitude, longitude } = event.nativeEvent.coordinate;
@@ -263,14 +279,26 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
   // silently dropped — and because focusCoordinate never changes again, nothing
   // ever retries and the camera stays on the Berlin initialRegion. Depending on
   // mapReady replays the pending focus the moment the map can accept it.
+  // Whatever currently hides the bottom of the map — an open detail sheet, the
+  // Safety split deck. Read at focus time, so the camera compensates for what is
+  // actually on screen at that moment.
+  const coveredHeight = Math.max(props.bottomOverlayHeight ?? 0, props.bottomSheetHeight ?? 0);
+  const coveredRef = useRef(coveredHeight);
+  coveredRef.current = coveredHeight;
+  const viewportRef = useRef(viewport.height);
+  viewportRef.current = viewport.height;
+
   useEffect(() => {
     if (!mapReady || !props.focusCoordinate) return;
 
+    const latitudeDelta = 0.012;
     mapRef.current?.animateToRegion(
       {
-        latitude: props.focusCoordinate.latitude,
+        latitude:
+          props.focusCoordinate.latitude -
+          latitudeDelta * focusCenterOffset(coveredRef.current, viewportRef.current),
         longitude: props.focusCoordinate.longitude,
-        latitudeDelta: 0.012,
+        latitudeDelta,
         longitudeDelta: 0.01,
       },
       280,
@@ -285,7 +313,7 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
       {
         latitude:
           props.selectionFocus.coordinate.latitude -
-          region.latitudeDelta * DETAIL_SHEET_CENTER_OFFSET,
+          region.latitudeDelta * focusCenterOffset(coveredRef.current, viewportRef.current),
         longitude: props.selectionFocus.coordinate.longitude,
         latitudeDelta: region.latitudeDelta,
         longitudeDelta: region.longitudeDelta,
@@ -546,6 +574,58 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
     });
     return () => cancelAnimationFrame(frame);
   }, [mapZooming, markerMorphVisible, morphImagesReady]);
+
+  // Cancel "Pop": the pin bursts the moment the user confirms, never when the
+  // server answers. `dismissMarkerId` is armed one frame BEFORE the activity is
+  // dropped from the entity list — that frame is the only window in which the
+  // node and its map position still exist, so the run is captured here and then
+  // outlives the data it was built from.
+  const [dismissRun, setDismissRun] = useState<MarkerDismissRequest | null>(null);
+  const previousDescriptors = useRef<MarkerDescriptor[]>([]);
+  const dismissId = props.dismissMarkerId;
+  useEffect(() => {
+    if (!dismissId) {
+      setDismissRun(null);
+      return;
+    }
+    // The previous frame is the fallback: should the entity removal ever land in
+    // the same commit as the arming, this render no longer lists the marker.
+    const descriptor =
+      descriptors.find((item) => item.id === dismissId) ??
+      previousDescriptors.current.find((item) => item.id === dismissId);
+    const map = mapRef.current;
+    if (!descriptor || !map) return;
+    const source = mapMarkers.find((marker) => marker.id === dismissId);
+
+    let active = true;
+    void map
+      .pointForCoordinate(descriptor.coordinate)
+      .then((point) => {
+        if (!active || !point) return;
+        setDismissRun({
+          id: dismissId,
+          node: descriptor.node,
+          accent: markerModeStyles[source?.mode ?? 'soon'].color,
+          at: point,
+        });
+      })
+      .catch(() => {
+        // The renderer can reject projection while the map is busy. Without a
+        // position there is nothing to pop — the pin is gone either way.
+      });
+    return () => {
+      active = false;
+    };
+    // Keyed on the id ALONE on purpose: re-running on a later frame would look
+    // for a marker the optimistic cancel has already removed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dismissId]);
+
+  // Declared AFTER the effect above so that effect still sees the frame before
+  // this one. One assignment per render, no allocation.
+  useEffect(() => {
+    previousDescriptors.current = descriptors;
+  });
 
   if (Platform.OS === 'web') {
     return <PreviewMapCanvas {...props} />;
@@ -815,6 +895,11 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
         height={viewport.height}
         reducedMotion={reducedMotion}
         onComplete={() => props.onLaunchComplete?.()}
+      />
+      <MarkerDismissOverlay
+        request={dismissRun}
+        reducedMotion={reducedMotion}
+        onComplete={() => props.onDismissComplete?.()}
       />
     </View>
   );

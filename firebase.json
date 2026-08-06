@@ -1,6 +1,7 @@
 {
   "functions": {
-    "source": "functions"
+    "source": "functions",
+    "predeploy": ["node scripts/functions-predeploy-guard.cjs"]
   },
   "firestore": {
     "rules": "firestore.rules",

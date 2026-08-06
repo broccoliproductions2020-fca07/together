@@ -8,7 +8,7 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { useActivityChat } from '@/features/chat';
-import { useActivityEntities } from '@/features/activities';
+import { useActivityEntities, writeFailureMessage } from '@/features/activities';
 import { useAuth } from '@/features/auth';
 import { activityPhaseLabel } from '@/features/activities/utils/activityTiming';
 import { colorWithAlpha, markerModeStyles } from '@/features/map/utils/markerStyles';
@@ -35,7 +35,66 @@ export function PlanCard({ plan, expanded, onToggle, onOpenChat, onEditActivity 
 
   const roomId = plan.activityId ?? plan.id;
   const joined = isJoined(roomId);
-  const canEdit = findActivityById(roomId)?.hostId === (user?.id ?? 'u_you');
+  const currentUid = user?.id ?? 'u_you';
+  const activity = findActivityById(roomId);
+  const canEdit = activity?.hostId === currentUid;
+  // Same succession the callable applies: the longest-standing other
+  // participant. Without one there is nobody to hand the Activity to, so a solo
+  // host is offered "Absagen" only.
+  const successor = canEdit
+    ? activity?.participants.find((participant) => participant.userId !== currentUid)
+    : undefined;
+  const canLeave = joined && (!canEdit || Boolean(successor));
+
+  function confirmLeave() {
+    Alert.alert(
+      'Activity verlassen?',
+      successor
+        ? `${successor.displayName} übernimmt als Host. Die Activity bleibt für alle bestehen.`
+        : 'Du kannst später erneut beitreten, solange sie aktiv ist.',
+      [
+        { text: 'Abbrechen', style: 'cancel' },
+        {
+          text: 'Verlassen',
+          style: 'destructive',
+          onPress: () => {
+            void leaveActivity(roomId)
+              .then(() => leaveRoom(roomId))
+              .catch((error: unknown) => {
+                Alert.alert(
+                  'Verlassen fehlgeschlagen',
+                  writeFailureMessage(error, 'Du bist weiterhin dabei.'),
+                );
+              });
+          },
+        },
+      ],
+    );
+  }
+
+  function confirmCancel() {
+    Alert.alert(
+      'Activity absagen?',
+      'Die Activity verschwindet sofort aus Karte und Kalender — für alle. Der Chat bleibt noch kurz verfügbar.',
+      [
+        { text: 'Abbrechen', style: 'cancel' },
+        {
+          text: 'Absagen',
+          style: 'destructive',
+          onPress: () => {
+            void cancelActivity(roomId).catch((error: unknown) => {
+              // The card is already back — the provider rolls the optimistic
+              // cancel back before it throws.
+              Alert.alert(
+                'Absagen fehlgeschlagen',
+                writeFailureMessage(error, 'Deine Activity ist wieder da.'),
+              );
+            });
+          },
+        },
+      ],
+    );
+  }
   // Scheduled plans show the remaining wait time instead of a redundant “Bald”.
   const isNow = plan.sourceMode === 'now';
   const accent = isNow ? markerModeStyles.now.color : markerModeStyles.soon.color;
@@ -147,58 +206,35 @@ export function PlanCard({ plan, expanded, onToggle, onOpenChat, onEditActivity 
                     />
                   </View>
                 </View>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={canEdit ? 'Aktivität absagen' : 'Aktivität verlassen'}
-                  className="items-center py-2 active:opacity-70"
-                  onPress={() =>
-                    Alert.alert(
-                      canEdit ? 'Activity absagen?' : 'Activity verlassen?',
-                      canEdit
-                        ? 'Die Activity verschwindet sofort aus Karte und Kalender. Der Chat bleibt noch kurz verfügbar.'
-                        : 'Du kannst später erneut beitreten, solange sie aktiv ist.',
-                      [
-                        { text: 'Abbrechen', style: 'cancel' },
-                        {
-                          text: canEdit ? 'Absagen' : 'Verlassen',
-                          style: 'destructive',
-                          onPress: () => {
-                            void (async () => {
-                              try {
-                                if (canEdit) {
-                                  await cancelActivity(roomId);
-                                  return;
-                                }
-                                const left = await leaveActivity(roomId);
-                                if (!left) {
-                                  Alert.alert(
-                                    'Nicht möglich',
-                                    'Als Host kannst du die Activity nur absagen.',
-                                  );
-                                  return;
-                                }
-                                leaveRoom(roomId);
-                              } catch (error) {
-                                Alert.alert(
-                                  canEdit ? 'Absagen fehlgeschlagen' : 'Verlassen fehlgeschlagen',
-                                  error instanceof Error
-                                    ? error.message
-                                    : 'Bitte versuche es gleich noch einmal.',
-                                );
-                              }
-                            })();
-                          },
-                        },
-                      ],
-                    )
-                  }
-                >
-                  <Text
-                    className={`text-xs font-semibold ${canEdit ? 'text-destructive' : 'text-muted-foreground'}`}
-                  >
-                    {canEdit ? 'Activity absagen' : 'Verlassen'}
-                  </Text>
-                </Pressable>
+                {/* A host holds two different powers and must be able to tell
+                    them apart at a glance: stepping out (quiet, secondary) and
+                    ending it for everyone (destructive). */}
+                <View className="flex-row items-center justify-center gap-5 py-2">
+                  {canLeave ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={
+                        canEdit ? 'Aktivität abgeben und verlassen' : 'Aktivität verlassen'
+                      }
+                      className="active:opacity-70"
+                      onPress={confirmLeave}
+                    >
+                      <Text className="text-xs font-semibold text-muted-foreground">Verlassen</Text>
+                    </Pressable>
+                  ) : null}
+                  {canEdit ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Aktivität absagen"
+                      className="active:opacity-70"
+                      onPress={confirmCancel}
+                    >
+                      <Text className="text-xs font-semibold text-destructive">
+                        Activity absagen
+                      </Text>
+                    </Pressable>
+                  ) : null}
+                </View>
               </>
             ) : null}
           </Animated.View>

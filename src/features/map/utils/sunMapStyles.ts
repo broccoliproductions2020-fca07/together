@@ -48,7 +48,7 @@ export type GoogleMapStyle = MapStyleElement[];
  * full, which is what the map already does every night by itself.
  *
  * STRUCTURAL CONTRACT: `blendSunMapStyles` pairs entries BY ARRAY INDEX, so
- * all four arrays must keep the exact same 30 entries in the exact same order.
+ * all four arrays must keep the exact same entries in the exact same order.
  * Adding a rule to one palette means adding it to all four, in place.
  */
 
@@ -74,16 +74,14 @@ const dayStyle: GoogleMapStyle = [
     elementType: 'geometry.stroke',
     stylers: [{ color: '#C6C2BA' }],
   },
-  { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#F2EFE9' }] },
+  // This is used only as the day-side interpolation endpoint; real midday
+  // still ships the untouched Google map. A green endpoint stops forests
+  // briefly inheriting the beige city-ground colour at Golden Hour onset.
+  { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#D9E8C6' }] },
   {
     featureType: 'landscape.natural.terrain',
     elementType: 'geometry',
-    stylers: [{ color: '#EAE9DE' }],
-  },
-  {
-    featureType: 'landscape.natural.landcover',
-    elementType: 'geometry',
-    stylers: [{ color: '#C7DFAB' }],
+    stylers: [{ color: '#D0DFC0' }],
   },
   {
     featureType: 'landscape.man_made',
@@ -99,10 +97,10 @@ const dayStyle: GoogleMapStyle = [
   { featureType: 'poi.business', elementType: 'geometry', stylers: [{ color: '#F0EDE5' }] },
   { featureType: 'poi.medical', elementType: 'geometry', stylers: [{ color: '#F0EDE5' }] },
   { featureType: 'poi.school', elementType: 'geometry', stylers: [{ color: '#F0EDE5' }] },
-  { featureType: 'poi.sports_complex', elementType: 'geometry', stylers: [{ color: '#DFE7CD' }] },
+  { featureType: 'poi.sports_complex', elementType: 'geometry', stylers: [{ color: '#D8E5C1' }] },
   { featureType: 'poi', elementType: 'labels.text.fill', stylers: [{ color: '#6E6B64' }] },
-  { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#C8E6A0' }] },
-  { featureType: 'poi.park', elementType: 'labels.text.fill', stylers: [{ color: '#4F7A3A' }] },
+  { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#BFE09A' }] },
+  { featureType: 'poi.park', elementType: 'labels.text.fill', stylers: [{ color: '#47763A' }] },
   { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#FFFFFF' }] },
   { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#D9D5CC' }] },
   { featureType: 'road.local', elementType: 'geometry', stylers: [{ color: '#FFFFFF' }] },
@@ -126,61 +124,60 @@ const dayStyle: GoogleMapStyle = [
  * "the sun is low". Lamps are still off; every warm tone here is sunlight.
  */
 const goldenStyle: GoogleMapStyle = [
-  { elementType: 'geometry', stylers: [{ color: '#F0D9C0' }] },
-  { elementType: 'labels.text.fill', stylers: [{ color: '#5B4638' }] },
-  { elementType: 'labels.text.stroke', stylers: [{ color: '#F0D9C0' }] },
+  { elementType: 'geometry', stylers: [{ color: '#F7E6D2' }] },
+  { elementType: 'labels.text.fill', stylers: [{ color: '#514B43' }] },
+  { elementType: 'labels.text.stroke', stylers: [{ color: '#F7E6D2' }] },
   {
     featureType: 'administrative',
     elementType: 'geometry.stroke',
-    stylers: [{ color: '#CFA97F' }],
+    stylers: [{ color: '#D6B58E' }],
   },
-  { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#E9CBAB' }] },
+  // Do not use landscape.natural.landcover here. That finer rule is unstable
+  // across Google zoom levels and previously made urban tiles flash green.
+  // The broad natural surface is stable and keeps woodland distinct from the
+  // sun-warmed city with a soft olive-gold shimmer.
+  { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#B9CB8C' }] },
   {
     featureType: 'landscape.natural.terrain',
     elementType: 'geometry',
-    stylers: [{ color: '#E2C6A0' }],
-  },
-  {
-    featureType: 'landscape.natural.landcover',
-    elementType: 'geometry',
-    stylers: [{ color: '#B3BE85' }],
+    stylers: [{ color: '#AABD80' }],
   },
   {
     featureType: 'landscape.man_made',
     elementType: 'geometry.fill',
-    stylers: [{ color: '#E0C4A4' }],
+    stylers: [{ color: '#F0DCC6' }],
   },
   {
     featureType: 'landscape.man_made',
     elementType: 'geometry.stroke',
-    stylers: [{ color: '#BC9468' }],
+    stylers: [{ color: '#C9A783' }],
   },
   // Same category hues as day, but pulled into the warm wash — a violet
   // attraction block under a low sun reads rose, not lilac. The identity is
   // the RELATIVE lean, so it survives the palette it sits in.
-  { featureType: 'poi.attraction', elementType: 'geometry', stylers: [{ color: '#E9CBD0' }] },
-  { featureType: 'poi.business', elementType: 'geometry', stylers: [{ color: '#F3DDBB' }] },
-  { featureType: 'poi.medical', elementType: 'geometry', stylers: [{ color: '#F1CDC2' }] },
-  { featureType: 'poi.school', elementType: 'geometry', stylers: [{ color: '#EFDFA4' }] },
-  { featureType: 'poi.sports_complex', elementType: 'geometry', stylers: [{ color: '#D8D3A0' }] },
-  { featureType: 'poi', elementType: 'labels.text.fill', stylers: [{ color: '#64493A' }] },
-  { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#C6D2A0' }] },
-  { featureType: 'poi.park', elementType: 'labels.text.fill', stylers: [{ color: '#4E6844' }] },
+  { featureType: 'poi.attraction', elementType: 'geometry', stylers: [{ color: '#E7D7D0' }] },
+  { featureType: 'poi.business', elementType: 'geometry', stylers: [{ color: '#F1E0CC' }] },
+  { featureType: 'poi.medical', elementType: 'geometry', stylers: [{ color: '#EAD6D2' }] },
+  { featureType: 'poi.school', elementType: 'geometry', stylers: [{ color: '#ECE2B3' }] },
+  { featureType: 'poi.sports_complex', elementType: 'geometry', stylers: [{ color: '#C7D59C' }] },
+  { featureType: 'poi', elementType: 'labels.text.fill', stylers: [{ color: '#5B514A' }] },
+  { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#B1D180' }] },
+  { featureType: 'poi.park', elementType: 'labels.text.fill', stylers: [{ color: '#3B693F' }] },
   // Sun-warmed asphalt: warm but PALE and low-saturation. The lamps' orange is
   // a saturated fill; this is the same white road catching a low sun.
-  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#FFF0DC' }] },
-  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#D9AE84' }] },
-  { featureType: 'road.local', elementType: 'geometry', stylers: [{ color: '#FBE9D2' }] },
-  { featureType: 'road.local', elementType: 'geometry.stroke', stylers: [{ color: '#E2BF99' }] },
-  { featureType: 'road', elementType: 'labels.text.fill', stylers: [{ color: '#6B5039' }] },
-  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#F0BE79' }] },
-  { featureType: 'road.highway', elementType: 'geometry.stroke', stylers: [{ color: '#CE9450' }] },
-  { featureType: 'road.arterial', elementType: 'geometry', stylers: [{ color: '#FBE0BE' }] },
-  { featureType: 'transit', elementType: 'geometry', stylers: [{ color: '#C8A483' }] },
-  { featureType: 'transit.line', elementType: 'geometry', stylers: [{ color: '#AE8963' }] },
-  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#8FAFC2' }] },
-  { featureType: 'water', elementType: 'geometry.stroke', stylers: [{ color: '#6E92AA' }] },
-  { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#2B5163' }] },
+  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#FFF7EC' }] },
+  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#DEC5A4' }] },
+  { featureType: 'road.local', elementType: 'geometry', stylers: [{ color: '#FDF1E1' }] },
+  { featureType: 'road.local', elementType: 'geometry.stroke', stylers: [{ color: '#E8D5BD' }] },
+  { featureType: 'road', elementType: 'labels.text.fill', stylers: [{ color: '#5C534B' }] },
+  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#F2C881' }] },
+  { featureType: 'road.highway', elementType: 'geometry.stroke', stylers: [{ color: '#D39B58' }] },
+  { featureType: 'road.arterial', elementType: 'geometry', stylers: [{ color: '#FAE7BE' }] },
+  { featureType: 'transit', elementType: 'geometry', stylers: [{ color: '#D9C1A4' }] },
+  { featureType: 'transit.line', elementType: 'geometry', stylers: [{ color: '#B99A7B' }] },
+  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#9CC4CF' }] },
+  { featureType: 'water', elementType: 'geometry.stroke', stylers: [{ color: '#7CA8B7' }] },
+  { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#315D6C' }] },
 ];
 
 /**
@@ -192,13 +189,13 @@ const goldenStyle: GoogleMapStyle = [
  * is what makes them glow, and at this hour it is already close to full.
  */
 const duskStyle: GoogleMapStyle = [
-  { elementType: 'geometry', stylers: [{ color: '#22303D' }] },
-  { elementType: 'labels.text.fill', stylers: [{ color: '#B4C2CE' }] },
-  { elementType: 'labels.text.stroke', stylers: [{ color: '#22303D' }] },
+  { elementType: 'geometry', stylers: [{ color: '#40505E' }] },
+  { elementType: 'labels.text.fill', stylers: [{ color: '#E3ECF3' }] },
+  { elementType: 'labels.text.stroke', stylers: [{ color: '#40505E' }] },
   {
     featureType: 'administrative',
     elementType: 'geometry.stroke',
-    stylers: [{ color: '#3C4E5E' }],
+    stylers: [{ color: '#687987' }],
   },
   // Open natural land IS the base ground after dark — same surface, nothing
   // built on it and nothing lighting it. Matched exactly rather than left at a
@@ -206,16 +203,14 @@ const duskStyle: GoogleMapStyle = [
   // match). The dark phases have no luminance headroom to spend on a
   // difference that carries no information; parks, forest, water and buildings
   // carry the differentiation instead.
-  { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#22303D' }] },
+  // The sun's warmth leaves nature first, but it should not become the same
+  // blue-grey as urban ground. This restrained blue-green carries the forest
+  // silhouette naturally from Golden Hour into Blue Hour.
+  { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#3D5D50' }] },
   {
     featureType: 'landscape.natural.terrain',
     elementType: 'geometry',
-    stylers: [{ color: '#2B3C4C' }],
-  },
-  {
-    featureType: 'landscape.natural.landcover',
-    elementType: 'geometry',
-    stylers: [{ color: '#183828' }],
+    stylers: [{ color: '#4E6A5A' }],
   },
   // Same silhouette rule as night: the stroke draws the block, the fill gives
   // it mass. Twilight can carry a stronger outline than full dark because the
@@ -223,39 +218,39 @@ const duskStyle: GoogleMapStyle = [
   {
     featureType: 'landscape.man_made',
     elementType: 'geometry.fill',
-    stylers: [{ color: '#2B3D4C' }],
+    stylers: [{ color: '#4A5B68' }],
   },
   {
     featureType: 'landscape.man_made',
     elementType: 'geometry.stroke',
-    stylers: [{ color: '#405872' }],
+    stylers: [{ color: '#708391' }],
   },
   // Dark phases had the worst of it — all four categories inside ΔE00 1.1 of
   // each other and of the plain built-up block. The hue lean has to be
   // stronger here than in daylight to survive the low luminance.
-  { featureType: 'poi.attraction', elementType: 'geometry', stylers: [{ color: '#3A3853' }] },
-  { featureType: 'poi.business', elementType: 'geometry', stylers: [{ color: '#384654' }] },
-  { featureType: 'poi.medical', elementType: 'geometry', stylers: [{ color: '#4A3841' }] },
-  { featureType: 'poi.school', elementType: 'geometry', stylers: [{ color: '#414634' }] },
-  { featureType: 'poi.sports_complex', elementType: 'geometry', stylers: [{ color: '#35563C' }] },
-  { featureType: 'poi', elementType: 'labels.text.fill', stylers: [{ color: '#B8C6D2' }] },
-  { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#1E4A33' }] },
-  { featureType: 'poi.park', elementType: 'labels.text.fill', stylers: [{ color: '#7FB093' }] },
+  { featureType: 'poi.attraction', elementType: 'geometry', stylers: [{ color: '#5B5E78' }] },
+  { featureType: 'poi.business', elementType: 'geometry', stylers: [{ color: '#5A6870' }] },
+  { featureType: 'poi.medical', elementType: 'geometry', stylers: [{ color: '#6A5964' }] },
+  { featureType: 'poi.school', elementType: 'geometry', stylers: [{ color: '#6A6854' }] },
+  { featureType: 'poi.sports_complex', elementType: 'geometry', stylers: [{ color: '#456C53' }] },
+  { featureType: 'poi', elementType: 'labels.text.fill', stylers: [{ color: '#D6E2E8' }] },
+  { featureType: 'poi.park', elementType: 'geometry', stylers: [{ color: '#37684C' }] },
+  { featureType: 'poi.park', elementType: 'labels.text.fill', stylers: [{ color: '#B9DEC3' }] },
   // Unlit asphalt under a blue sky. Nothing warm here — the warmth at this
   // hour comes from the lamp layer, which is the entire point.
-  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#46596B' }] },
-  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#1B2833' }] },
-  { featureType: 'road.local', elementType: 'geometry', stylers: [{ color: '#384A5A' }] },
-  { featureType: 'road.local', elementType: 'geometry.stroke', stylers: [{ color: '#1B2833' }] },
-  { featureType: 'road', elementType: 'labels.text.fill', stylers: [{ color: '#E4EBF1' }] },
-  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#55697C' }] },
-  { featureType: 'road.highway', elementType: 'geometry.stroke', stylers: [{ color: '#1B2833' }] },
-  { featureType: 'road.arterial', elementType: 'geometry', stylers: [{ color: '#4B5F71' }] },
-  { featureType: 'transit', elementType: 'geometry', stylers: [{ color: '#334554' }] },
-  { featureType: 'transit.line', elementType: 'geometry', stylers: [{ color: '#415466' }] },
-  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#16242F' }] },
-  { featureType: 'water', elementType: 'geometry.stroke', stylers: [{ color: '#1E3646' }] },
-  { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#6E90A4' }] },
+  { featureType: 'road', elementType: 'geometry', stylers: [{ color: '#7E8E9B' }] },
+  { featureType: 'road', elementType: 'geometry.stroke', stylers: [{ color: '#35434F' }] },
+  { featureType: 'road.local', elementType: 'geometry', stylers: [{ color: '#697986' }] },
+  { featureType: 'road.local', elementType: 'geometry.stroke', stylers: [{ color: '#35434F' }] },
+  { featureType: 'road', elementType: 'labels.text.fill', stylers: [{ color: '#F0F5F7' }] },
+  { featureType: 'road.highway', elementType: 'geometry', stylers: [{ color: '#A4B0B9' }] },
+  { featureType: 'road.highway', elementType: 'geometry.stroke', stylers: [{ color: '#435461' }] },
+  { featureType: 'road.arterial', elementType: 'geometry', stylers: [{ color: '#8E9DA8' }] },
+  { featureType: 'transit', elementType: 'geometry', stylers: [{ color: '#52636E' }] },
+  { featureType: 'transit.line', elementType: 'geometry', stylers: [{ color: '#6A7B86' }] },
+  { featureType: 'water', elementType: 'geometry', stylers: [{ color: '#293F4E' }] },
+  { featureType: 'water', elementType: 'geometry.stroke', stylers: [{ color: '#466171' }] },
+  { featureType: 'water', elementType: 'labels.text.fill', stylers: [{ color: '#C2DCE9' }] },
 ];
 
 /**
@@ -272,18 +267,15 @@ const nightStyle: GoogleMapStyle = [
     elementType: 'geometry.stroke',
     stylers: [{ color: '#3C3C3C' }],
   },
-  { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#212121' }] },
+  // Nature is subtle at night, but remains a different material from the
+  // charcoal city ground. That prevents a colour snap at the end of twilight.
+  { featureType: 'landscape.natural', elementType: 'geometry', stylers: [{ color: '#202D25' }] },
   // Same rule as dusk: open land is the base ground (the entry above), while
   // terrain, forest and parks are what actually differ after dark.
   {
     featureType: 'landscape.natural.terrain',
     elementType: 'geometry',
-    stylers: [{ color: '#2C2C2C' }],
-  },
-  {
-    featureType: 'landscape.natural.landcover',
-    elementType: 'geometry',
-    stylers: [{ color: '#16301C' }],
+    stylers: [{ color: '#29372D' }],
   },
   // The city needs a SILHOUETTE. Blocks used to sit at #262626 on a #212121
   // ground — a 1.06:1 difference, i.e. invisible, which left the night map
@@ -359,6 +351,12 @@ function blendColor(from: string, to: string, progress: number) {
   )}`;
 }
 
+/**
+ * Colour and exposure travel independently. A forest can become darker before
+ * it shifts toward the cooler twilight hue; water can hold its reflection a
+ * little longer. At progress 0 and 1 this always returns the exact palette
+ * endpoints, so the four main looks remain recognisable anchors.
+ */
 /** WCAG relative luminance — the basis for a real contrast check. */
 function relativeLuminance(hex: string) {
   const parsed = hexToRgb(hex);
@@ -418,7 +416,9 @@ function ensureContrast(color: string, background: string) {
  * Each label is compared against its OWN surface where one exists (water
  * labels against water, park labels against parks), else the base geometry.
  */
-function withReadableLabels(style: GoogleMapStyle): GoogleMapStyle {
+const NIGHT_POI_LABEL_COLOR = '#9E9E9E';
+
+function withReadableLabels(style: GoogleMapStyle, litRoadNamesUseNightPoiColor = false): GoogleMapStyle {
   const colorOf = (featureType: string | undefined, elementType: string) =>
     style.find((entry) => entry.featureType === featureType && entry.elementType === elementType)
       ?.stylers[0]?.color;
@@ -453,6 +453,18 @@ function withReadableLabels(style: GoogleMapStyle): GoogleMapStyle {
       return { ...entry, stylers: [{ color: base }] };
     }
     if (entry.elementType !== 'labels.text.fill') return entry;
+    const isLitRoadName = litRoadNamesUseNightPoiColor && entry.featureType?.startsWith('road');
+    if (isLitRoadName) {
+      // Once the lamps are on, road names deliberately use the exact same
+      // neutral grey as normal Dark Mode POI names. No amber halo: Together's
+      // night typography should read as one quiet system, not as a road decal.
+      return {
+        ...entry,
+        stylers: entry.stylers.map((styler) =>
+          typeof styler.color === 'string' ? { ...styler, color: NIGHT_POI_LABEL_COLOR } : styler,
+        ),
+      };
+    }
     const background = labelSurface(entry.featureType);
     return {
       ...entry,
@@ -468,7 +480,12 @@ function withReadableLabels(style: GoogleMapStyle): GoogleMapStyle {
   // It is especially important for POI names where a dark-to-light blend can
   // otherwise leave the name technically contrasted but visually noisy.
   const labelHalos = readable
-    .filter((entry) => entry.elementType === 'labels.text.fill' && Boolean(entry.featureType))
+    .filter(
+      (entry) =>
+        entry.elementType === 'labels.text.fill' &&
+        Boolean(entry.featureType) &&
+        !(litRoadNamesUseNightPoiColor && entry.featureType?.startsWith('road')),
+    )
     .map((entry) => ({
       featureType: entry.featureType,
       elementType: 'labels.text.stroke',
@@ -486,6 +503,34 @@ function smoothStep(progress: number) {
 function remapProgress(progress: number, start: number, end: number) {
   return Math.max(0, Math.min(1, (progress - start) / (end - start)));
 }
+
+type TransitionWindow = readonly [start: number, end: number];
+
+/**
+ * Every hand-off is eased through a real portion of its SunCalc interval.
+ * Keeping the windows here makes the route continuous at each phase boundary:
+ * Day -> Golden -> Blue -> Night and the same route in reverse at dawn.
+ *
+ * This intentionally stays RGB interpolation. A prior feature-aware/HSL path
+ * caused invalid native Google style output; the geometry rules remain stable
+ * and only their valid colour values travel here.
+ */
+function smoothWindow(progress: number, [start, end]: TransitionWindow) {
+  return smoothStep(remapProgress(progress, start, end));
+}
+
+const DYNAMIC_TRANSITION_WINDOWS = {
+  // The warm shift is deliberately late in the astronomical Golden Hour, so
+  // daytime stays neutral for most of the afternoon.
+  eveningDayToGolden: [0.3, 0.72],
+  morningGoldenToDay: [0.28, 0.7],
+  // The warm city and green land both cool gradually after the actual sunset;
+  // Blue Hour then has enough time to be perceived as its own state.
+  eveningGoldenToDusk: [0.06, 0.44],
+  eveningDuskToNight: [0.8, 1],
+  morningNightToDusk: [0, 0.2],
+  morningDuskToGolden: [0.56, 0.94],
+} as const satisfies Record<string, TransitionWindow>;
 
 /* ------------------------------------------------------------------ *
  * LAYER 2 · STREET LIGHTS
@@ -606,38 +651,13 @@ function withStreetLights(style: GoogleMapStyle, level: number): GoogleMapStyle 
 const STOCK_PHASES = new Set<SunPhase>(['day']);
 
 /**
- * The ONLY thing a stock phase adds on top of Google's map.
- *
- * Google draws individual buildings from a fairly high zoom, and that zoom is
- * internal to the SDK — `showsBuildings` is a plain boolean, there is no
- * threshold to tune. But it renders built-up LAND USE much earlier, so
- * shading that is the one lever that makes a city read as a city while zoomed
- * out, before any building appears.
- *
- * Two feature-specific rules, deliberately. This is NOT the blanket
- * `{ elementType: 'geometry' }` rule that flattens everything: every other
- * feature type still renders exactly as Google draws it. Values are the pair
- * measured earlier for visible-but-quiet massing — 1.17:1 fill and 1.71:1
- * outline against Google's land tone. Keep it subtle; anything heavier stops
- * looking like Google's map.
+ * Dynamic day must be pixel-for-pixel the same native Google base map as the
+ * explicit "Hell" selection. An empty style array is the only way to leave
+ * every Google feature untouched; even a narrow built-up-area override makes
+ * the daytime map visibly darker than that reference.
  */
-const DAY_BUILT_UP_STYLE: GoogleMapStyle = [
-  {
-    featureType: 'landscape.man_made',
-    elementType: 'geometry.fill',
-    stylers: [{ color: '#E2E0DA' }],
-  },
-  {
-    featureType: 'landscape.man_made',
-    elementType: 'geometry.stroke',
-    stylers: [{ color: '#BEBAB1' }],
-  },
-];
-
-/** What each stock phase actually ships. Hell/Dunkel bypass this entirely and
- * ship nothing at all (see stockMapStyles.ts) — they stay a pure reference. */
 const STOCK_PHASE_STYLES: Partial<Record<SunPhase, GoogleMapStyle>> = {
-  day: DAY_BUILT_UP_STYLE,
+  day: [],
 };
 
 /**
@@ -657,7 +677,8 @@ const SKY_HOLD = 0.75;
  * Dynamic — picking "Dunkel" gives you the night map with its lights on. */
 export function readableSunMapStyle(phase: SunPhase): GoogleMapStyle {
   if (STOCK_PHASES.has(phase)) return STOCK_PHASE_STYLES[phase] ?? [];
-  return withReadableLabels(withStreetLights(SUN_MAP_STYLES[phase], STATIC_LIGHT_LEVEL[phase]));
+  const lightLevel = STATIC_LIGHT_LEVEL[phase];
+  return withReadableLabels(withStreetLights(SUN_MAP_STYLES[phase], lightLevel), lightLevel > 0);
 }
 
 /**
@@ -676,12 +697,12 @@ export function blendSunMapStyles(
   const from = SUN_MAP_STYLES[fromPhase];
   const to = SUN_MAP_STYLES[toPhase];
   const linear = Math.max(0, Math.min(1, progress));
-  const skyProgress = smoothStep(remapProgress(linear, SKY_HOLD, 1));
+  const heldProgress = smoothStep(remapProgress(linear, SKY_HOLD, 1));
 
-  // Still holding a stock phase: hand back Google's map plus only its built-up
-  // shading. Lamps are off in every stock phase (all of them are daylight), so
-  // there is nothing to lay over it.
-  if (skyProgress === 0 && STOCK_PHASES.has(fromPhase)) {
+  // Still holding a stock phase: hand back Google's untouched native map.
+  // Lamps are off in every stock phase (all of them are daylight), so there is
+  // nothing to lay over it.
+  if (heldProgress === 0 && STOCK_PHASES.has(fromPhase)) {
     return STOCK_PHASE_STYLES[fromPhase] ?? [];
   }
 
@@ -694,14 +715,130 @@ export function blendSunMapStyles(
         const fromColor = fromStyler.color;
         const toColor = toStyler.color;
         if (typeof fromColor === 'string' && typeof toColor === 'string') {
-          return { ...fromStyler, color: blendColor(fromColor, toColor, skyProgress) };
+          return {
+            ...fromStyler,
+            color: blendColor(fromColor, toColor, heldProgress),
+          };
         }
         return { ...fromStyler };
       }),
     };
   });
 
-  return withReadableLabels(
-    withStreetLights(blended, streetLightLevel(fromPhase, toPhase, linear)),
-  );
+  const lightLevel = streetLightLevel(fromPhase, toPhase, linear);
+  return withReadableLabels(withStreetLights(blended, lightLevel), lightLevel > 0);
+}
+
+function dynamicStreetLightsOn(phase: SunPhase, nextPhase: SunPhase, progress: number) {
+  const p = Math.max(0, Math.min(1, progress));
+  if (phase === 'night') return true;
+
+  // The blue-hour interval is defined by SunCalc's real sunset/dusk or
+  // dawn/sunrise times. A single threshold at the same solar elevation gives
+  // us the deliberate evening on-switch and the matching morning off-switch.
+  if (phase === 'dusk' && nextPhase === 'night') return p >= 0.4;
+  if (phase === 'dusk' && nextPhase === 'golden') return p < 0.6;
+  return false;
+}
+
+function styledPhase(phase: SunPhase, streetLightsOn: boolean): GoogleMapStyle {
+  if (STOCK_PHASES.has(phase)) return STOCK_PHASE_STYLES[phase] ?? [];
+  return withReadableLabels(withStreetLights(SUN_MAP_STYLES[phase], streetLightsOn ? 1 : 0), streetLightsOn);
+}
+
+function blendDynamicPhases(
+  fromPhase: SunPhase,
+  toPhase: SunPhase,
+  progress: number,
+  streetLightsOn: boolean,
+): GoogleMapStyle {
+  const p = Math.max(0, Math.min(1, progress));
+  if (p === 0) return styledPhase(fromPhase, streetLightsOn);
+  if (p === 1) return styledPhase(toPhase, streetLightsOn);
+
+  const from = SUN_MAP_STYLES[fromPhase];
+  const to = SUN_MAP_STYLES[toPhase];
+  const blended = from.map((fromElement, elementIndex) => {
+    const toElement = to[elementIndex] ?? fromElement;
+    return {
+      ...fromElement,
+      stylers: fromElement.stylers.map((fromStyler, stylerIndex) => {
+        const toStyler = toElement.stylers[stylerIndex] ?? fromStyler;
+        const fromColor = fromStyler.color;
+        const toColor = toStyler.color;
+        return typeof fromColor === 'string' && typeof toColor === 'string'
+          ? { ...fromStyler, color: blendColor(fromColor, toColor, p) }
+          : { ...fromStyler };
+      }),
+    };
+  });
+  return withReadableLabels(withStreetLights(blended, streetLightsOn ? 1 : 0), streetLightsOn);
+}
+
+/**
+ * Resolves the visual map state from the current SunCalc interval. Day and
+ * night hold steady; golden and blue hours use their real daily duration for
+ * broad, visible colour travel instead of a generic clock animation.
+ */
+export function dynamicSunMapStyle(
+  phase: SunPhase,
+  nextPhase: SunPhase,
+  progress: number,
+): GoogleMapStyle {
+  const p = Math.max(0, Math.min(1, progress));
+  const streetLightsOn = dynamicStreetLightsOn(phase, nextPhase, p);
+
+  if (phase === 'day' || phase === 'night') return styledPhase(phase, streetLightsOn);
+
+  if (phase === 'golden') {
+    // Evening: warm up slowly over the actual golden-hour interval. Morning:
+    // keep the warm sunrise for a moment, then return slowly to neutral day.
+    return nextPhase === 'dusk'
+      ? blendDynamicPhases('day', 'golden', smoothWindow(p, DYNAMIC_TRANSITION_WINDOWS.eveningDayToGolden), false)
+      : blendDynamicPhases('golden', 'day', smoothWindow(p, DYNAMIC_TRANSITION_WINDOWS.morningGoldenToDay), false);
+  }
+
+  if (phase === 'dusk' && nextPhase === 'night') {
+    // Sunset: warm -> blue, a recognisable blue plateau, then blue -> night.
+    if (p < DYNAMIC_TRANSITION_WINDOWS.eveningGoldenToDusk[1]) {
+      return blendDynamicPhases(
+        'golden',
+        'dusk',
+        smoothWindow(p, DYNAMIC_TRANSITION_WINDOWS.eveningGoldenToDusk),
+        streetLightsOn,
+      );
+    }
+    if (p < DYNAMIC_TRANSITION_WINDOWS.eveningDuskToNight[0]) {
+      return styledPhase('dusk', streetLightsOn);
+    }
+    return blendDynamicPhases(
+      'dusk',
+      'night',
+      smoothWindow(p, DYNAMIC_TRANSITION_WINDOWS.eveningDuskToNight),
+      streetLightsOn,
+    );
+  }
+
+  if (phase === 'dusk' && nextPhase === 'golden') {
+    // Dawn is the exact reverse of sunset, including the crisp lamp switch.
+    if (p < DYNAMIC_TRANSITION_WINDOWS.morningNightToDusk[1]) {
+      return blendDynamicPhases(
+        'night',
+        'dusk',
+        smoothWindow(p, DYNAMIC_TRANSITION_WINDOWS.morningNightToDusk),
+        streetLightsOn,
+      );
+    }
+    if (p < DYNAMIC_TRANSITION_WINDOWS.morningDuskToGolden[0]) {
+      return styledPhase('dusk', streetLightsOn);
+    }
+    return blendDynamicPhases(
+      'dusk',
+      'golden',
+      smoothWindow(p, DYNAMIC_TRANSITION_WINDOWS.morningDuskToGolden),
+      streetLightsOn,
+    );
+  }
+
+  return styledPhase(phase, streetLightsOn);
 }

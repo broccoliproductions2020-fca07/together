@@ -22,8 +22,10 @@ import type {
   ChatRoom,
   GroupOpening,
   ProposalData,
+  SendFailureReason,
   SpontaneousRound,
 } from './types';
+import { isRetryableFailure, MESSAGE_MAX_LENGTH } from './types';
 
 export type { GroupMember, RoomMemberProfile };
 
@@ -67,6 +69,19 @@ export interface ChatContextValue {
   removeMember: (roomId: string, memberUid: string) => Promise<void>;
   promoteAdmin: (roomId: string, memberUid: string) => Promise<void>;
   renameRoom: (roomId: string, title: string) => Promise<void>;
+  /** Admin-only: invite confirmed friends into a planning round. */
+  inviteToGroup: (
+    roomId: string,
+    inviteeUids: string[],
+  ) => Promise<{ invited: number; skipped: number }>;
+  /** Answer a pending planning-round invitation. */
+  respondToGroupInvite: (roomId: string, accept: boolean) => Promise<void>;
+  /** Loads one more page of older messages. No-op once the start is reached. */
+  loadOlderMessages: (roomId: string) => Promise<void>;
+  /** True while a page is in flight — the button shows it rather than nothing. */
+  isLoadingOlder: (roomId: string) => boolean;
+  /** False once the room's first message is on screen; hides the load button. */
+  hasMoreHistory: (roomId: string) => boolean;
   /** Joinable-group teasers ("Am Planen"). Empty unless openings are watched. */
   groupOpenings: GroupOpening[];
   /** The openings listener runs ONLY while a consumer needs it (NearbySheet). */
@@ -102,6 +117,8 @@ export type ChatActivityContextValue = Pick<
   | 'removeMember'
   | 'promoteAdmin'
   | 'renameRoom'
+  | 'inviteToGroup'
+  | 'respondToGroupInvite'
   | 'groupOpenings'
   | 'setOpeningsActive'
   | 'setGroupOpen'
@@ -124,6 +141,33 @@ function initialsOf(name: string): string {
       .slice(0, 2)
       .toUpperCase() || 'DU'
   );
+}
+
+/**
+ * Maps a callable rejection onto something the bubble can say honestly. The
+ * German messages the server sends are already user-facing, but the CODE is
+ * what decides whether a retry can ever succeed — so classify on the code and
+ * fall back to the message only for disambiguation.
+ */
+function classifySendFailure(error: unknown): SendFailureReason {
+  const code =
+    typeof error === 'object' && error && 'code' in error ? String((error as { code: unknown }).code) : '';
+  const message =
+    typeof error === 'object' && error && 'message' in error
+      ? String((error as { message: unknown }).message)
+      : '';
+  const normalized = code.replace(/^functions\//, '');
+  if (normalized === 'resource-exhausted') return 'rate_limited';
+  if (normalized === 'invalid-argument') return 'too_long';
+  if (normalized === 'permission-denied') return 'not_member';
+  if (normalized === 'not-found') return 'room_expired';
+  if (normalized === 'failed-precondition') {
+    return /abgelaufen/i.test(message) ? 'room_expired' : 'not_member';
+  }
+  if (normalized === 'unavailable' || normalized === 'deadline-exceeded' || normalized === 'internal') {
+    return 'network';
+  }
+  return normalized ? 'unknown' : 'network';
 }
 
 function sortRooms(rooms: ChatRoom[]) {
@@ -185,6 +229,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   // top still needs. Only the topmost entry streams messages.
   const [openRoomStack, setOpenRoomStack] = useState<string[]>([]);
   const openRoomId = openRoomStack.length ? openRoomStack[openRoomStack.length - 1] : null;
+  // Older pages the user explicitly asked for. Held separately from the live
+  // window so the message listener can keep replacing `messagesByRoom` without
+  // discarding history that was already paid for.
+  const [historyByRoom, setHistoryByRoom] = useState<Record<string, ChatMessage[]>>({});
+  const [loadingOlderRooms, setLoadingOlderRooms] = useState<Record<string, boolean>>({});
+  const [historyExhausted, setHistoryExhausted] = useState<Record<string, boolean>>({});
   // Optimistically-joined room ids: `joinActivity` writes go through a backend
   // round-trip, so without this the
   // "Dazustoßen" button appears to do nothing until the rooms listener catches
@@ -255,6 +305,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setRooms([]);
     pushedUnreadRoomsRef.current = {};
     setPushedUnreadRooms({});
+    // Paged history is account-scoped like everything else here — a new signed
+    // in user must never inherit another account's loaded messages.
+    setHistoryByRoom({});
+    setHistoryExhausted({});
+    setLoadingOlderRooms({});
     void loadCachedRooms(actor.uid).then((cached) => {
       if (cancelled) return;
       roomsRef.current = cached;
@@ -465,7 +520,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       const pending = pendingByRoom[roomId] ?? [];
       const full = messagesByRoom[roomId];
       if (full?.length) {
-        const mapped = full.map((m) => ({ ...m, isMe: m.authorId === actor.uid }));
+        const older = historyByRoom[roomId] ?? [];
+        // Merge by id: an older page can overlap the live window at its seam,
+        // and a duplicated bubble is more visible than a missing one.
+        const byId = new Map<string, ChatMessage>();
+        [...older, ...full].forEach((m) => byId.set(m.id, m));
+        const mapped = [...byId.values()]
+          .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
+          .map((m) => ({ ...m, isMe: m.authorId === actor.uid }));
         return pending.length ? [...mapped, ...pending] : mapped;
       }
       const last = findRoom(roomId)?.lastMessage;
@@ -486,7 +548,44 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         : [];
       return pending.length ? [...stub, ...pending] : stub;
     },
-    [messagesByRoom, pendingByRoom, findRoom, actor.uid],
+    [messagesByRoom, historyByRoom, pendingByRoom, findRoom, actor.uid],
+  );
+
+  const loadOlderMessages = useCallback(
+    async (roomId: string) => {
+      if (loadingOlderRooms[roomId] || historyExhausted[roomId]) return;
+      const older = historyByRoom[roomId] ?? [];
+      const live = messagesByRoom[roomId] ?? [];
+      const oldestKnown = older[0] ?? live[0];
+      if (!oldestKnown) return;
+
+      setLoadingOlderRooms((current) => ({ ...current, [roomId]: true }));
+      try {
+        const page = await chatService.loadOlderMessages(actor, roomId, {
+          createdAt: oldestKnown.createdAt,
+          id: oldestKnown.id,
+        });
+        setHistoryByRoom((current) => {
+          const existing = current[roomId] ?? [];
+          const byId = new Map<string, ChatMessage>();
+          [...page.messages, ...existing].forEach((m) => byId.set(m.id, m));
+          return {
+            ...current,
+            [roomId]: [...byId.values()].sort(
+              (a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id),
+            ),
+          };
+        });
+        if (page.reachedStart) {
+          setHistoryExhausted((current) => ({ ...current, [roomId]: true }));
+        }
+      } catch (error) {
+        console.warn('[chat] Ältere Nachrichten konnten nicht geladen werden:', error);
+      } finally {
+        setLoadingOlderRooms((current) => ({ ...current, [roomId]: false }));
+      }
+    },
+    [actor, historyByRoom, historyExhausted, loadingOlderRooms, messagesByRoom],
   );
 
   // Fire-and-forget writes must never surface as unhandled rejections (red
@@ -620,18 +719,34 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         },
         (error) => {
           console.warn('[chat] sendMessage fehlgeschlagen:', error);
+          const failureReason = classifySendFailure(error);
           setPendingByRoom((current) => {
             const pending = current[roomId];
             if (!pending?.some((m) => m.id === message.id)) return current;
             return {
               ...current,
-              [roomId]: pending.map((m) => (m.id === message.id ? { ...m, failed: true } : m)),
+              [roomId]: pending.map((m) =>
+                m.id === message.id ? { ...m, failed: true, failureReason } : m,
+              ),
             };
           });
         },
       );
     },
     [actor, removePending],
+  );
+
+  // Accepting adds the user to memberIds server-side. Reconciling that one
+  // room immediately means the chat is openable the moment the card resolves,
+  // without waiting for a foreground sync or opening the room list.
+  const respondToGroupInvite = useCallback(
+    async (roomId: string, accept: boolean) => {
+      await chatService.respondToGroupInvite(actor, roomId, accept);
+      if (!accept) return;
+      setOptimisticJoined((current) => new Set(current).add(roomId));
+      refreshSingleRoom(roomId);
+    },
+    [actor, refreshSingleRoom],
   );
 
   const joinedRoomIds = useMemo(() => {
@@ -679,6 +794,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       removeMember: (roomId, memberUid) => chatService.removeMember(actor, roomId, memberUid),
       promoteAdmin: (roomId, memberUid) => chatService.promoteAdmin(actor, roomId, memberUid),
       renameRoom: (roomId, title) => chatService.renameRoom(actor, roomId, title),
+      inviteToGroup: (roomId, inviteeUids) =>
+        chatService.inviteToGroup(actor, roomId, inviteeUids),
+      respondToGroupInvite,
       groupOpenings,
       setOpeningsActive,
       setGroupOpen: (roomId, open) => chatService.setGroupOpen(actor, roomId, open),
@@ -699,6 +817,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       joinActivity,
       joinedRoomIds,
       leaveRoom,
+      respondToGroupInvite,
       spontaneousRound,
       startSpontaneousRound,
       acceptSpontaneousRound,
@@ -727,7 +846,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       getRoom: findRoom,
       getMessages,
       sendMessage: (roomId, text) => {
-        const trimmed = text.trim();
+        // The composer caps input at MESSAGE_MAX_LENGTH, but a paste on some
+        // Android keyboards bypasses maxLength — so the guard lives here too,
+        // where every send path passes through.
+        const trimmed = text.trim().slice(0, MESSAGE_MAX_LENGTH);
         if (!trimmed) return;
         const pendingMessage: ChatMessage = {
           id: `pending-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -748,10 +870,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       },
       retryMessage: (roomId, messageId) => {
         const target = (pendingByRoom[roomId] ?? []).find((m) => m.id === messageId && m.failed);
-        if (!target) return;
+        // A permanent rejection cannot be retried into success — the bubble
+        // does not offer it, and this guard makes that a contract rather than
+        // a UI detail.
+        if (!target || !isRetryableFailure(target.failureReason)) return;
         const revived: ChatMessage = {
           ...target,
           failed: false,
+          failureReason: undefined,
           createdAt: Date.now(),
         };
         setPendingByRoom((current) => ({
@@ -810,6 +936,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       removeMember: (roomId, memberUid) => chatService.removeMember(actor, roomId, memberUid),
       promoteAdmin: (roomId, memberUid) => chatService.promoteAdmin(actor, roomId, memberUid),
       renameRoom: (roomId, title) => chatService.renameRoom(actor, roomId, title),
+      inviteToGroup: (roomId, inviteeUids) =>
+        chatService.inviteToGroup(actor, roomId, inviteeUids),
+      respondToGroupInvite,
+      loadOlderMessages,
+      isLoadingOlder: (roomId) => loadingOlderRooms[roomId] === true,
+      hasMoreHistory: (roomId) => historyExhausted[roomId] !== true,
       groupOpenings,
       setRoomsListActive,
       setOpeningsActive,
@@ -833,11 +965,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       deliverPending,
       groupOpenings,
       fireAndForget,
+      historyExhausted,
       joinActivity,
       leaveRoom,
+      loadOlderMessages,
+      loadingOlderRooms,
       createGroup,
       openRoom,
       closeRoom,
+      respondToGroupInvite,
       spontaneousRound,
       startSpontaneousRound,
       acceptSpontaneousRound,

@@ -38,6 +38,9 @@ export interface NearbyFriend {
   coordinate?: MapCoordinate;
   /** Optional expiry of the open status, used only in its status detail. */
   expiresAt?: number;
+  /** The vibe this friend typed themselves, if any. Ranking treats it as a
+   * signal of intent — never as a category the app may act on. */
+  vibeLabel?: string;
 }
 
 export type MapCoordinate = GeoCoordinate;

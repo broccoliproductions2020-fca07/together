@@ -1,10 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Pressable, Text, View } from 'react-native';
 
-import { useActivityChat } from '../useActivityChat';
 import { useThemeColors } from '@/features/theme';
+import { FONT, TEXT_CAPPED, TEXT_FLEXIBLE, TYPE } from '@/shared/theme';
 
-const ACCENT = '#6E8BF7';
+import { useActivityChat } from '../useActivityChat';
 
 /**
  * Compact chat preview shown inside the activity detail sheet once joined.
@@ -13,11 +13,12 @@ const ACCENT = '#6E8BF7';
  */
 export function InlineChatPreview({
   activityId,
-  accent = ACCENT,
+  accent,
   onExpand,
 }: {
   activityId: string;
-  accent?: string;
+  /** The room's colour. Required — see AGENTS.md → chat colour model. */
+  accent: string;
   onExpand: () => void;
 }) {
   const colors = useThemeColors();
@@ -36,13 +37,23 @@ export function InlineChatPreview({
       <View className="flex-row items-center justify-between">
         <View className="flex-row items-center gap-2">
           <Ionicons name="chatbubble-ellipses-outline" size={16} color={accent} />
-          <Text className="text-sm font-bold text-foreground">Activity-Chat</Text>
+          <Text
+            {...TEXT_FLEXIBLE}
+            style={{ ...TYPE.label, fontFamily: FONT.semibold, color: colors.foreground }}
+          >
+            Activity-Chat
+          </Text>
           {unread > 0 ? (
             <View
               className="min-w-[20px] items-center justify-center rounded-full px-1.5 py-0.5"
               style={{ backgroundColor: accent }}
             >
-              <Text className="text-[10px] font-bold text-white">{unread}</Text>
+              <Text
+                {...TEXT_CAPPED}
+                style={{ ...TYPE.micro, fontFamily: FONT.bold, color: '#ffffff' }}
+              >
+                {unread}
+              </Text>
             </View>
           ) : null}
         </View>
@@ -50,21 +61,33 @@ export function InlineChatPreview({
       </View>
 
       {last.length === 0 ? (
-        <Text className="text-sm text-muted-foreground">
+        <Text
+          {...TEXT_FLEXIBLE}
+          style={{ ...TYPE.label, fontFamily: FONT.medium, color: colors.mutedForeground }}
+        >
           Noch keine Nachrichten – tippen zum Schreiben
         </Text>
       ) : (
         <View className="gap-1">
           {last.map((m) => (
-            <Text key={m.id} className="text-sm text-foreground" numberOfLines={1}>
-              <Text className="font-semibold" style={{ color: accent }}>
+            <Text
+              key={m.id}
+              {...TEXT_FLEXIBLE}
+              numberOfLines={1}
+              style={{ ...TYPE.label, fontFamily: FONT.medium, color: colors.foreground }}
+            >
+              <Text style={{ fontFamily: FONT.semibold, color: accent }}>
                 {m.isMe ? 'Du' : m.authorName}:
               </Text>{' '}
               {m.text}
             </Text>
           ))}
           {messages.length > last.length ? (
-            <Text className="mt-0.5 text-xs text-muted-foreground">
+            <Text
+              {...TEXT_FLEXIBLE}
+              className="mt-0.5"
+              style={{ ...TYPE.caption, fontFamily: FONT.medium, color: colors.mutedForeground }}
+            >
               Alle {messages.length} Nachrichten ansehen
             </Text>
           ) : null}

@@ -51,9 +51,20 @@ interface PersistedStatus {
   isOpen: boolean;
   vibe: OpenVibe | null;
   expiresAt: number | null;
+  /** When this open window began. Local only — friends never need it; it exists
+   * so the map pill can draw how much of YOUR window is left, the same way an
+   * activity marker draws its countdown ring. */
+  openedAt: number | null;
   /** Whether friends may see your location (pin) while you're open, vs. list-only
    * (none). Privacy-first: resets to false each time you go open. */
   shareLocation: boolean;
+}
+
+/** Everything the "Offen stellen" form can set before you actually go open. */
+export interface GoOpenInput {
+  vibe?: OpenVibe | null;
+  expiresAt?: number;
+  shareLocation?: boolean;
 }
 
 export interface OpenStatusValue {
@@ -61,6 +72,8 @@ export interface OpenStatusValue {
   vibe: OpenVibe | null;
   /** Epoch ms when the open status auto-expires. */
   expiresAt: number | null;
+  /** Epoch ms when the current open window started (null while closed). */
+  openedAt: number | null;
   vibes: OpenVibe[];
   /** Friends who are currently open (via the presence seam; empty in single-device mock). */
   openFriends: PresenceDoc[];
@@ -69,8 +82,13 @@ export interface OpenStatusValue {
    * it. The own status write-through deliberately stays independent of this.
    */
   setFriendPresenceListening: (enabled: boolean) => void;
-  /** One tap: become open for OPEN_DURATION_MS with default (all-friends) reach. */
-  goOpen: () => void;
+  /**
+   * Become open. Called ONLY by the form's confirm button — going open sends a
+   * real signal to real friends, so it must never be the side effect of opening
+   * a sheet. Without an argument it uses the defaults (no vibe, +3 h, no
+   * location); the form passes what the user actually chose, in one write.
+   */
+  goOpen: (input?: GoOpenInput) => void;
   /** Optional refinement while open; pass null to clear the vibe. */
   setVibe: (vibe: OpenVibe | null) => void;
   /** Adjust when the open status ends (absolute epoch ms). */
@@ -90,6 +108,7 @@ const CLOSED: PersistedStatus = {
   isOpen: false,
   vibe: null,
   expiresAt: null,
+  openedAt: null,
   shareLocation: false,
 };
 
@@ -141,7 +160,12 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
             parsed.expiresAt > Date.now() &&
             parsed.expiresAt <= Date.now() + OPEN_MAX_DURATION_MS
           ) {
-            setStatus(parsed);
+            // A status persisted before openedAt existed still has to draw a
+            // sensible ring: assume it started one default window before it ends.
+            setStatus({
+              ...parsed,
+              openedAt: parsed.openedAt ?? parsed.expiresAt - OPEN_DURATION_MS,
+            });
           } else {
             AsyncStorage.removeItem(STORAGE_KEY).catch(() => {});
           }
@@ -260,14 +284,19 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const goOpen = useCallback(() => {
-    persist({
-      isOpen: true,
-      vibe: null,
-      expiresAt: Date.now() + OPEN_DURATION_MS,
-      shareLocation: false,
-    });
-  }, [persist]);
+  const goOpen = useCallback(
+    (input?: GoOpenInput) => {
+      const now = Date.now();
+      persist({
+        isOpen: true,
+        vibe: input?.vibe ?? null,
+        expiresAt: Math.min(input?.expiresAt ?? now + OPEN_DURATION_MS, now + OPEN_MAX_DURATION_MS),
+        openedAt: now,
+        shareLocation: input?.shareLocation ?? false,
+      });
+    },
+    [persist],
+  );
 
   const setVibe = useCallback((vibe: OpenVibe | null) => patch({ vibe }), [patch]);
   const setExpiresAt = useCallback(
@@ -285,6 +314,7 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
       isOpen: status.isOpen,
       vibe: status.vibe,
       expiresAt: status.expiresAt,
+      openedAt: status.openedAt,
       vibes: OPEN_VIBES,
       openFriends,
       setFriendPresenceListening,

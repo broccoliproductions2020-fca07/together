@@ -8,10 +8,11 @@ import { resolveSunPhase, type SunPhaseState } from '../utils/sunPhase';
  * Never sleep longer than this, even when the next solar boundary is hours
  * away: it bounds the drift from DST switches, manual clock changes and
  * timezone travel, and keeps us clear of the platforms' unreliable handling of
- * very long timers. Fifteen minutes makes the local palette shift imperceptibly
- * while keeping wake-ups negligible and entirely offline.
+ * very long timers. One minute makes the real twilight transitions feel
+ * continuous and keeps the lamp switch within a minute of its solar threshold,
+ * while remaining entirely local.
  */
-const MAX_SLEEP_MS = 5 * 60 * 1000;
+const MAX_SLEEP_MS = 60 * 1000;
 /** Progress only re-renders when it actually moved — see the tick below. */
 const PROGRESS_EPSILON = 0.01;
 
@@ -35,7 +36,7 @@ function resolveSunPhaseSafely(latitude: number, longitude: number): SunPhaseSta
 
 /**
  * The current solar phase at `latitude`/`longitude`, kept fresh without
- * polling: each tick schedules exactly one timer for the next phase boundary.
+ * expensive background work: each foreground tick schedules one local timer.
  *
  * Defaults to {@link DEFAULT_MAP_REGION} rather than asking for the device
  * position — a location permission prompt for a colour palette would be a bad

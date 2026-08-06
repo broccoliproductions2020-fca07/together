@@ -184,14 +184,6 @@ service cloud.firestore {
       allow read, create, update, delete: if false;
     }
 
-    // Circle membership changes and invite creation are server-authoritative.
-    match /circleInvites/{inviteId} {
-      allow read: if signedIn()
-        && (resource.data.inviteeUid == request.auth.uid
-            || resource.data.inviterUid == request.auth.uid);
-      allow create, update, delete: if false;
-    }
-
     match /blocks/{blockId} {
       allow read: if signedIn() && resource.data.blockerUid == request.auth.uid;
       allow create, update, delete: if false;
@@ -360,6 +352,15 @@ service cloud.firestore {
     }
 
     match /spontaneousRoundMemberships/{uid} {
+      allow read, write: if false;
+    }
+
+    // ---------- groupChatInvites/{roomId}_{inviteeUid} ----------
+    // A targeted planning-round invitation. Server-only for the same reason as
+    // the round invites above: the invitee learns about it through their own
+    // private notification, and nobody may probe who else was invited. Both
+    // inviteToGroupChat and respondToGroupChatInvite are callables.
+    match /groupChatInvites/{inviteId} {
       allow read, write: if false;
     }
 

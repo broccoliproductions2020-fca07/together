@@ -1,4 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
+import { useEffect, useRef } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -29,6 +30,9 @@ export interface MapLocationPickerOverlayProps {
   selectedPlaceCandidate?: SelectedPlace;
   loading?: boolean;
   searchLoading?: boolean;
+  searchError?: string;
+  searchCompleted?: boolean;
+  searchMode?: boolean;
   showSearchAttribution?: boolean;
   currentLocationLoading?: boolean;
   onCancel: () => void;
@@ -47,6 +51,9 @@ export function MapLocationPickerOverlay({
   selectedPlaceCandidate,
   loading = false,
   searchLoading = false,
+  searchError,
+  searchCompleted = false,
+  searchMode = false,
   showSearchAttribution = false,
   currentLocationLoading = false,
   onCancel,
@@ -57,13 +64,26 @@ export function MapLocationPickerOverlay({
   onUseCurrentLocation,
 }: MapLocationPickerOverlayProps) {
   const insets = useSafeAreaInsets();
+  const searchInputRef = useRef<TextInput>(null);
   const accent = MODE_ACCENTS[mode];
   const hasSearchQuery = searchQuery.trim().length >= 3;
   const hasSearchResults = hasSearchQuery && searchResults.length > 0;
+  const showSearchPanel =
+    hasSearchQuery &&
+    (hasSearchResults || searchLoading || Boolean(searchError) || searchCompleted);
   const displayTitle = selectedPlaceCandidate?.name ?? 'Kartenpunkt';
   const displaySubtitle =
     selectedPlaceCandidate?.address ??
     `${coordinate.latitude.toFixed(5)}, ${coordinate.longitude.toFixed(5)}`;
+
+  useEffect(() => {
+    if (!searchMode) return;
+    // MapView takes the first responder during the overlay hand-off on iOS.
+    // Focus after that hand-off so a tap on "Orte suchen" always opens the
+    // keyboard, rather than presenting an inert map picker.
+    const timer = setTimeout(() => searchInputRef.current?.focus(), 180);
+    return () => clearTimeout(timer);
+  }, [searchMode]);
 
   return (
     <>
@@ -93,6 +113,7 @@ export function MapLocationPickerOverlay({
         >
           <Ionicons name="search" size={18} color={accent} />
           <TextInput
+            ref={searchInputRef}
             accessibilityLabel="Ort suchen"
             className="flex-1 text-base font-semibold text-foreground"
             placeholder="Ort suchen"
@@ -105,7 +126,7 @@ export function MapLocationPickerOverlay({
         </FloatingSurface>
       </View>
 
-      {hasSearchQuery && (hasSearchResults || searchLoading) ? (
+      {showSearchPanel ? (
         <View
           pointerEvents="box-none"
           className="absolute left-16 right-4"
@@ -116,6 +137,20 @@ export function MapLocationPickerOverlay({
               <View className="flex-row items-center gap-3 px-3 py-3">
                 <ActivityIndicator color={accent} />
                 <Text className="text-sm font-semibold text-foreground">Orte werden gesucht …</Text>
+              </View>
+            ) : null}
+            {searchError && !searchLoading ? (
+              <View className="flex-row items-start gap-3 px-3 py-3">
+                <Ionicons name="alert-circle-outline" size={19} color="#D97706" />
+                <Text className="flex-1 text-sm font-semibold text-foreground">{searchError}</Text>
+              </View>
+            ) : null}
+            {searchCompleted && !searchLoading && !searchError && !hasSearchResults ? (
+              <View className="flex-row items-center gap-3 px-3 py-3">
+                <Ionicons name="search-outline" size={19} color="rgba(105,113,127,0.85)" />
+                <Text className="text-sm font-semibold text-muted-foreground">
+                  Keine passenden Orte gefunden.
+                </Text>
               </View>
             ) : null}
             {searchResults.map((place) => (
@@ -172,34 +207,36 @@ export function MapLocationPickerOverlay({
         </Pressable>
       </View>
 
-      <View
-        pointerEvents="box-none"
-        className="absolute left-4 right-4"
-        style={{ bottom: Math.max(insets.bottom, 14) + 10 }}
-      >
-        <FloatingSurface className="rounded-[28px]" contentClassName="p-4">
-          <View className="mb-4 flex-row items-center gap-3">
-            <View
-              className="h-10 w-10 items-center justify-center rounded-full"
-              style={{ backgroundColor: `${accent}22` }}
-            >
-              <Ionicons name="location-outline" size={20} color={accent} />
+      {!searchMode ? (
+        <View
+          pointerEvents="box-none"
+          className="absolute left-4 right-4"
+          style={{ bottom: Math.max(insets.bottom, 14) + 10 }}
+        >
+          <FloatingSurface className="rounded-[28px]" contentClassName="p-4">
+            <View className="mb-4 flex-row items-center gap-3">
+              <View
+                className="h-10 w-10 items-center justify-center rounded-full"
+                style={{ backgroundColor: `${accent}22` }}
+              >
+                <Ionicons name="location-outline" size={20} color={accent} />
+              </View>
+              <View className="flex-1">
+                <Text className="text-base font-bold text-foreground">{displayTitle}</Text>
+                <Text className="mt-1 text-sm text-muted-foreground">{displaySubtitle}</Text>
+              </View>
             </View>
-            <View className="flex-1">
-              <Text className="text-base font-bold text-foreground">{displayTitle}</Text>
-              <Text className="mt-1 text-sm text-muted-foreground">{displaySubtitle}</Text>
-            </View>
-          </View>
 
-          <AppButton
-            accessibilityLabel="Diesen Ort übernehmen"
-            className={MODE_BUTTON_CLASSES[mode]}
-            label="Diesen Ort übernehmen"
-            loading={loading}
-            onPress={onConfirm}
-          />
-        </FloatingSurface>
-      </View>
+            <AppButton
+              accessibilityLabel="Diesen Ort übernehmen"
+              className={MODE_BUTTON_CLASSES[mode]}
+              label="Diesen Ort übernehmen"
+              loading={loading}
+              onPress={onConfirm}
+            />
+          </FloatingSurface>
+        </View>
+      ) : null}
     </>
   );
 }

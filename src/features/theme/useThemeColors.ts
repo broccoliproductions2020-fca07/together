@@ -13,6 +13,10 @@ export interface ThemeColors {
   border: string;
   background: string;
   destructive: string;
+  /** Brand ink (`--primary`). The profile card is set in it. */
+  primary: string;
+  /** Readable ON `primary` — never assume white. */
+  primaryForeground: string;
 }
 
 const LIGHT: ThemeColors = {
@@ -23,6 +27,8 @@ const LIGHT: ThemeColors = {
   border: '#E6DFD3',
   background: '#FAF7F2',
   destructive: '#C82626',
+  primary: '#0E3B2E',
+  primaryForeground: '#FAF7F2',
 };
 
 const DARK: ThemeColors = {
@@ -33,6 +39,8 @@ const DARK: ThemeColors = {
   border: '#24332C',
   background: '#0C1512',
   destructive: '#FF6467',
+  primary: '#34D399',
+  primaryForeground: '#0C1512',
 };
 
 export function useThemeColors(): ThemeColors {

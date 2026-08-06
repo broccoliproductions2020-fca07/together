@@ -2,19 +2,23 @@ import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Modal, Platform, useWindowDimensions, View } from 'react-native';
+import { Alert, Keyboard, Modal, Platform, useWindowDimensions, View } from 'react-native';
 import { useReducedMotion } from 'react-native-reanimated';
 
 import {
   ActivityComposerSheet,
   useActivityEntities,
+  useFrequentPeople,
+  writeFailureMessage,
   type ActivityDraft,
   type ActivityInfo,
   type SelectedPlace,
 } from '@/features/activities';
 import { useAuth } from '@/features/auth';
 import {
+  activityChatAccent,
   ActivityChatView,
+  GROUP_CHAT_ACCENT,
   useActivityChatActivity,
   type GroupMember,
   type GroupOpening,
@@ -25,7 +29,7 @@ import {
   type JourneyParticipant,
 } from '@/features/journey';
 import { useFriends } from '@/features/friends';
-import { PostfachSheet } from '@/features/mailbox';
+import { PostfachSheet, type PostfachChatTarget } from '@/features/mailbox';
 import { usePushNudge } from '@/features/notifications';
 import { claimNotificationResponse } from '@/features/notifications/notificationResponse';
 import {
@@ -52,7 +56,10 @@ import {
 
 import { MapCanvas } from '../components/MapCanvas';
 import { MapLocationPickerOverlay } from '../components/MapLocationPickerOverlay';
-import { useMapLocationPicker } from '../hooks/useMapLocationPicker';
+import {
+  useMapLocationPicker,
+  type MapLocationPickerOpenOptions,
+} from '../hooks/useMapLocationPicker';
 import type {
   ActivityMode,
   ActivitySelectionPreview,
@@ -151,7 +158,15 @@ export function MapScreen({
     markerClusters,
   } = useActivityEntities();
   const { activeJourney, getActivityJourneys, getJourneySummary } = useJourney();
-  const { journeyRemindersEnabled, friends: friendProfiles } = useFriends();
+  const {
+    journeyRemindersEnabled,
+    friends: friendProfiles,
+    friendUids,
+    closeFriendUids,
+  } = useFriends();
+  // On-device co-participation history — who you actually end up doing things
+  // with. Feeds the nearby ranking only; it never leaves the phone.
+  const frequentPeople = useFrequentPeople(friendUids);
   const { maybeAskForPush } = usePushNudge();
   const {
     friendSessions,
@@ -181,14 +196,15 @@ export function MapScreen({
   } | null>(null);
   const [nearbySheetVisible, setNearbySheetVisible] = useState(false);
   const [postfachVisible, setPostfachVisible] = useState(false);
-  const [chatActivity, setChatActivity] = useState<ActivityInfo | null>(null);
+  // The open chat carries its resolved colour, so the same room looks the same
+  // whether it was opened from the Postfach, a push, or the marker sheet.
+  const [chatActivity, setChatActivity] = useState<PostfachChatTarget | null>(null);
   const [roundSheetVisible, setRoundSheetVisible] = useState(false);
   // Pill count is radius-based and viewport-independent — it does NOT change when
   // the user zooms or pans the map. See nearbySelectors.ts for the rationale.
   // The list comes from the signed-in user's live presence subscription.
   const {
     isOpen,
-    goOpen,
     shareLocation,
     openFriends,
     setFriendPresenceListening,
@@ -210,10 +226,16 @@ export function MapScreen({
     () => presenceToNearby(openFriends, myLocation),
     [openFriends, myLocation],
   );
-  // Both go through nearbySelectors — the filtering rule must never be
-  // re-implemented here (see nearbySelectors.ts).
-  const nearbyFriends = selectNearbyFriends(realNearby, radiusKm);
-  const friendsWithoutLocation = selectFriendsWithoutLocation(realNearby);
+  // Both go through nearbySelectors — the filtering AND ordering rules must
+  // never be re-implemented here (see nearbySelectors.ts). The ranking context
+  // is on-device only: who you have actually done things with, and who you
+  // marked as close. No server call, no friend-graph query.
+  const rankingContext = useMemo(
+    () => ({ affinityUids: frequentPeople, closeFriendUids }),
+    [frequentPeople, closeFriendUids],
+  );
+  const nearbyFriends = selectNearbyFriends(realNearby, radiusKm, rankingContext);
+  const friendsWithoutLocation = selectFriendsWithoutLocation(realNearby, rankingContext);
   // An empty "In deiner Nähe" section has three different causes with three
   // different fixes — the sheet must never give radius advice to someone whose
   // real problem is an empty friend list (or that simply nobody is open).
@@ -236,6 +258,13 @@ export function MapScreen({
   // Id of a just-published marker playing the "Wurf & Pop" launch. The canvas
   // hides the real marker and throws in an animated copy until it settles.
   const [launchMarkerId, setLaunchMarkerId] = useState<string>();
+  const launchTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Live height of the open detail sheet. Only the camera uses it: a selection
+  // has to land in the middle of the map you can still see, not behind a sheet.
+  const [detailSheetHeight, setDetailSheetHeight] = useState(0);
+  // Id of a just-cancelled marker playing its pop-off. Mirrors the launch id.
+  const [dismissMarkerId, setDismissMarkerId] = useState<string>();
+  const dismissTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [selectionFocus, setSelectionFocus] = useState<{
     id: number;
     coordinate: MapCoordinate;
@@ -404,6 +433,13 @@ export function MapScreen({
   const canEditSelectedActivity = Boolean(
     selectedActivity && selectedActivity.hostId && selectedActivity.hostId === currentUid,
   );
+  // Who inherits when the host walks away: the longest-standing other
+  // participant, which is what the callable picks too (participantUids[0] after
+  // the removal). A host alone in their own Activity has nobody to hand it to —
+  // there is no "leave" for them, only "absagen".
+  const successorIfHostLeaves = canEditSelectedActivity
+    ? selectedActivity?.participants.find((participant) => participant.userId !== currentUid)
+    : undefined;
 
   useEffect(() => {
     if (journeyJoinPromptActivityId && selectedActivity?.id !== journeyJoinPromptActivityId) {
@@ -539,13 +575,32 @@ export function MapScreen({
       }
 
       if (kind === 'chat_message') {
-        const activity = activityId
-          ? findActivityById(activityId)
-          : roomId
-            ? findActivityById(roomId)
-            : null;
+        const targetRoomId = activityId ?? roomId;
+        const activity = targetRoomId ? findActivityById(targetRoomId) : null;
         setPostfachVisible(true);
-        if (activity) setChatActivity(activity);
+        if (activity) {
+          setChatActivity({
+            id: activity.id,
+            title: activity.title,
+            accent: activityChatAccent(activity.mode),
+            kind: 'activity',
+            memberCount: activity.participantCount,
+          });
+        } else if (targetRoomId) {
+          // A planning round has no activity entity. It is still a real room —
+          // open it in the group colour instead of dropping the user in the
+          // Postfach with no idea which chat the push was about.
+          const group = getGroup(targetRoomId);
+          if (group) {
+            setChatActivity({
+              id: group.id,
+              title: group.title,
+              accent: GROUP_CHAT_ACCENT,
+              kind: 'group',
+              memberCount: group.memberIds.length,
+            });
+          }
+        }
         return;
       }
 
@@ -666,10 +721,13 @@ export function MapScreen({
     };
   }, [acquireOwnLocation, active, nearbySheetVisible, shareLocation]);
 
+  // The pill ONLY opens the sheet — in both states. It must never go open by
+  // itself: becoming open is a real signal to real friends, so it takes the
+  // explicit confirm button inside the sheet (OpenStatusCard). Tapping the pill
+  // while already open is the way back in to refine or end the status.
   const handleOpenPresencePress = useCallback(() => {
-    if (!isOpen) goOpen();
     setNearbySheetVisible(true);
-  }, [goOpen, isOpen]);
+  }, []);
 
   function openComposer(
     mode: ActivityMode,
@@ -726,14 +784,9 @@ export function MapScreen({
     setChatActivity({
       id: spontaneousRound.id,
       title: 'Spontane Runde',
-      mode: 'open',
-      participantCount: spontaneousRound.memberIds.length,
-      participants: spontaneousRound.memberPreview.map((member) => ({
-        userId: member.uid,
-        displayName: member.displayName,
-        initials: member.initials,
-        avatarUrl: member.avatarUrl,
-      })),
+      accent: GROUP_CHAT_ACCENT,
+      kind: 'group',
+      memberCount: spontaneousRound.memberIds.length,
     });
   }
 
@@ -753,13 +806,9 @@ export function MapScreen({
     setChatActivity({
       id: opening.id,
       title: opening.title,
-      mode: 'open',
-      participantCount: opening.memberCount + 1,
-      participants: opening.memberPreview.map((member, index) => ({
-        userId: `${opening.id}-member-${index}`,
-        displayName: member.displayName,
-        initials: member.initials,
-      })),
+      accent: GROUP_CHAT_ACCENT,
+      kind: 'group',
+      memberCount: opening.memberCount + 1,
     });
   }
 
@@ -814,12 +863,15 @@ export function MapScreen({
     if (!reducedMotion && launchLat != null && launchLng != null) {
       setMapFocusCoordinate({ latitude: launchLat, longitude: launchLng });
       setLaunchMarkerId(activity.id);
-      // Safety net: if the marker is filtered out (e.g. a full activity) the
-      // overlay never runs and never reports completion — never leave the real
-      // marker hidden. Clear the launch id after the animation's worst case.
-      setTimeout(() => {
+      // Safety net: if the marker never materialises (filtered out, write
+      // rejected) the overlay never runs and never reports completion — never
+      // leave the real marker hidden. It must outlast the flight comfortably:
+      // when this fired mid-air the overlay unmounted and the pin just popped.
+      if (launchTimeoutRef.current) clearTimeout(launchTimeoutRef.current);
+      launchTimeoutRef.current = setTimeout(() => {
+        launchTimeoutRef.current = undefined;
         setLaunchMarkerId((current) => (current === activity.id ? undefined : current));
-      }, 2000);
+      }, 6000);
     }
 
     // Optimistic success buzz, matching the optimistic marker throw.
@@ -905,28 +957,32 @@ export function MapScreen({
   function leaveSelectedActivity() {
     if (!selectedActivity) return;
     const activityId = selectedActivity.id;
+    // Leaving as host hands the Activity on; it never ends it. Naming the heir
+    // in the confirm is the whole point — handing your plan to someone must not
+    // be something you find out about afterwards.
+    const successor = successorIfHostLeaves;
     Alert.alert(
       'Activity verlassen?',
-      'Du kannst später erneut beitreten, solange noch Plätze frei sind.',
+      successor
+        ? `${successor.displayName} übernimmt als Host. Die Activity bleibt für alle bestehen.`
+        : 'Du kannst später erneut beitreten, solange noch Plätze frei sind.',
       [
         { text: 'Abbrechen', style: 'cancel' },
         {
           text: 'Verlassen',
           style: 'destructive',
           onPress: () => {
-            void (async () => {
-              try {
-                const left = await leaveActivityEntity(activityId);
-                if (!left) {
-                  Alert.alert('Nicht möglich', 'Als Host kannst du die Activity nur absagen.');
-                  return;
-                }
-                leaveRoom(activityId);
-                setSelection(null);
-              } catch {
-                Alert.alert('Verlassen fehlgeschlagen', 'Bitte versuche es gleich noch einmal.');
-              }
-            })();
+            haptics.medium();
+            setSelection(null);
+            void leaveActivityEntity(activityId)
+              .then(() => leaveRoom(activityId))
+              .catch((error: unknown) => {
+                haptics.warning();
+                Alert.alert(
+                  'Verlassen fehlgeschlagen',
+                  writeFailureMessage(error, 'Du bist weiterhin dabei.'),
+                );
+              });
           },
         },
       ],
@@ -936,6 +992,7 @@ export function MapScreen({
   function cancelSelectedActivity() {
     if (!selectedActivity) return;
     const activityId = selectedActivity.id;
+    const coordinate = selectedActivity.targetCoordinate;
     Alert.alert(
       'Activity absagen?',
       'Die Activity verschwindet aus der Karte und kann nicht wieder aktiviert werden.',
@@ -945,17 +1002,33 @@ export function MapScreen({
           text: 'Absagen',
           style: 'destructive',
           onPress: () => {
-            void (async () => {
-              try {
-                await cancelActivityEntity(activityId);
-                setSelection(null);
-              } catch (error) {
+            // The confirm IS the decision — sheet closed, pin popped, done. The
+            // callable runs behind the animation and only ever speaks up to
+            // take the cancellation back.
+            haptics.medium();
+            setSelection(null);
+            setDismissMarkerId(activityId);
+            if (dismissTimeoutRef.current) clearTimeout(dismissTimeoutRef.current);
+            dismissTimeoutRef.current = setTimeout(() => {
+              dismissTimeoutRef.current = undefined;
+              setDismissMarkerId((current) => (current === activityId ? undefined : current));
+            }, 4000);
+
+            // One frame later: the canvas has captured the marker it must pop,
+            // and only then may the entity disappear underneath it.
+            requestAnimationFrame(() => {
+              void cancelActivityEntity(activityId).catch((error: unknown) => {
+                // The entity is already back (the provider rolled it back) —
+                // bring it back on screen too, so the alert has a subject.
+                setDismissMarkerId(undefined);
+                if (coordinate) setMapFocusCoordinate(coordinate);
+                haptics.warning();
                 Alert.alert(
                   'Absagen fehlgeschlagen',
-                  error instanceof Error ? error.message : 'Bitte versuche es gleich noch einmal.',
+                  writeFailureMessage(error, 'Deine Activity ist wieder da.'),
                 );
-              }
-            })();
+              });
+            });
           },
         },
       ],
@@ -1053,34 +1126,53 @@ export function MapScreen({
   function openMapPicker(
     mode: ActivityMode,
     onPick: (place: SelectedPlace) => void,
-    options: { focusCurrentLocation?: boolean } = {},
+    options: MapLocationPickerOpenOptions = {},
   ) {
     setSelection(null);
-    mapLocationPicker.open(mode, onPick, options);
+    // Every place that comes back out of the picker also moves the camera, from
+    // whichever entry point it was chosen. Otherwise the composer reopens saying
+    // "Café Central" over a map still showing somewhere else — and the location
+    // you just picked is the one thing you would want to check.
+    mapLocationPicker.open(
+      mode,
+      (place) => {
+        if (place.latitude != null && place.longitude != null) {
+          setMapFocusCoordinate({ latitude: place.latitude, longitude: place.longitude });
+        }
+        onPick(place);
+      },
+      {
+        ...options,
+        // A search should rank cafes/bars near the user instead of near the
+        // initial Berlin fallback. This is an in-memory bias only.
+        initialCoordinate: options.initialCoordinate ?? myLocation ?? undefined,
+      },
+    );
   }
 
-  // The map search bar is a real entry point, not a decorative placeholder:
-  // search results use the same picker as activity locations and then open the
-  // place detail sheet so the user can navigate or create an activity there.
+  // The map search bar is a real entry point, not a decorative placeholder, and
+  // it is the THIRD way into the composer (after the FAB and a POI tap). Tapping
+  // a result lands exactly where tapping that POI on the map would: camera on
+  // the place, PlaceContent open, "Aktivität hier starten" one tap away — hence
+  // `autoConfirm`. Making people confirm a result they just tapped would answer
+  // the same question twice, and the two POI routes would diverge for no reason.
   function openPlaceSearch() {
     openMapPicker(
       'soon',
       (place) => {
         if (place.latitude == null || place.longitude == null) return;
-        const coordinate = { latitude: place.latitude, longitude: place.longitude };
-        setMapFocusCoordinate(coordinate);
         setSelection({
           type: 'Place',
           title: place.name,
           subtitle:
             place.address ??
             `Koordinate: ${place.latitude.toFixed(5)}, ${place.longitude.toFixed(5)}`,
-          coordinate,
+          coordinate: { latitude: place.latitude, longitude: place.longitude },
           placeId: place.id,
           source: 'poi',
         });
       },
-      { focusCurrentLocation: false },
+      { focusCurrentLocation: false, autoConfirm: true, searchMode: true },
     );
   }
 
@@ -1096,10 +1188,21 @@ export function MapScreen({
           mapLocationPicker.active ? mapLocationPicker.focusCoordinate : mapFocusCoordinate
         }
         launchMarkerId={launchMarkerId}
-        onLaunchComplete={() => setLaunchMarkerId(undefined)}
+        onLaunchComplete={() => {
+          if (launchTimeoutRef.current) clearTimeout(launchTimeoutRef.current);
+          launchTimeoutRef.current = undefined;
+          setLaunchMarkerId(undefined);
+        }}
+        dismissMarkerId={dismissMarkerId}
+        onDismissComplete={() => {
+          if (dismissTimeoutRef.current) clearTimeout(dismissTimeoutRef.current);
+          dismissTimeoutRef.current = undefined;
+          setDismissMarkerId(undefined);
+        }}
         selectionFocus={heimwegFocusActive ? safetyMarkerFocus : selectionFocus}
         fitRequest={heimwegFocusActive ? safetyFitRequest : undefined}
         bottomOverlayHeight={safetySplitPanelHeight}
+        bottomSheetHeight={selection ? detailSheetHeight : 0}
         journeyFocus={
           journeyFocus
             ? { activityId: journeyFocus.activity.id, participantId: journeyFocus.participantId }
@@ -1131,7 +1234,10 @@ export function MapScreen({
         pickingLocation={mapLocationPicker.active}
         onJourneyParticipantPress={focusJourneyMarker}
         onCanvasPress={() => {
-          if (mapLocationPicker.active) return;
+          if (mapLocationPicker.active) {
+            Keyboard.dismiss();
+            return;
+          }
           setSelection(null);
         }}
         // The normal map never needs its viewport in React state. Wiring this
@@ -1170,6 +1276,9 @@ export function MapScreen({
           currentLocationLoading={mapLocationPicker.currentLocationLoading}
           loading={mapLocationPicker.resolving}
           searchLoading={mapLocationPicker.searchLoading}
+          searchError={mapLocationPicker.searchError}
+          searchCompleted={mapLocationPicker.searchCompleted}
+          searchMode={mapLocationPicker.searchMode}
           showSearchAttribution
           mode={mapLocationPicker.mode}
           searchQuery={mapLocationPicker.searchQuery}
@@ -1276,8 +1385,8 @@ export function MapScreen({
                 );
               }
             }}
-            onOpenChat={(activity) => {
-              setChatActivity(activity);
+            onOpenChat={(target) => {
+              setChatActivity(target);
             }}
             onOpenActivity={(activityId) => {
               if (openActivityById(activityId)) setPostfachVisible(false);
@@ -1305,7 +1414,9 @@ export function MapScreen({
             onJoin={selectedActivity ? joinSelectedActivity : undefined}
             onEdit={canEditSelectedActivity ? editSelectedActivity : undefined}
             onLeave={
-              selectedActivityJoined && !canEditSelectedActivity ? leaveSelectedActivity : undefined
+              selectedActivityJoined && (!canEditSelectedActivity || successorIfHostLeaves)
+                ? leaveSelectedActivity
+                : undefined
             }
             onCancel={canEditSelectedActivity ? cancelSelectedActivity : undefined}
             onCreateAtSelection={openComposerFromSelection}
@@ -1319,6 +1430,7 @@ export function MapScreen({
                 : undefined
             }
             onCreateActivity={createActivityFromProposal}
+            onHeightChange={setDetailSheetHeight}
             journeyJoinPrompt={
               Boolean(selectedActivity) && journeyJoinPromptActivityId === selectedActivity?.id
             }
@@ -1357,8 +1469,9 @@ export function MapScreen({
         {chatActivity ? (
           <ActivityChatView
             activityId={chatActivity.id}
+            accent={chatActivity.accent}
             title={chatActivity.title}
-            count={chatActivity.participantCount}
+            count={chatActivity.memberCount}
             onBack={() => setChatActivity(null)}
             onCreateActivity={createActivityFromProposal}
             onCreateActivityDirect={() => createActivityFromChat(chatActivity.id)}

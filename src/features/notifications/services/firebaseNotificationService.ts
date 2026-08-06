@@ -21,6 +21,26 @@ import { getFirebaseDb, getFirebaseFunctions } from '@/shared/services/firebase'
 import type { NotificationDoc, NotificationService } from './notificationService.types';
 
 const NOTIFICATION_LIMIT = 50;
+/**
+ * The query bound is deliberately STRICTER than the security rule.
+ *
+ * `firestore.rules` allows a notification read only while
+ * `expireAt > request.time` — SERVER time, re-evaluated on every delivery. The
+ * query can only filter on a constant this device computed once, when the
+ * listener was created. Those two clocks drift apart in three ways: the phone's
+ * clock can simply run behind the server's, the listener stays open while time
+ * passes, and Firestore's TTL sweep is best-effort (up to 24 h late), so already
+ * expired documents linger in the collection. Any document caught in that gap
+ * satisfies the query but violates the rule — and one such document fails the
+ * WHOLE query with permission-denied, which is what surfaces as "Abgleich nicht
+ * möglich" in the Postfach.
+ *
+ * Asking for `expireAt > now + margin` closes the gap for anything inside the
+ * margin. It costs nothing: notifications are retained for 30 days
+ * (`NOTIFICATION_RETENTION_MS` in functions/index.js), so this only ever hides a
+ * notification during the last ten minutes of its second month.
+ */
+const EXPIRY_SAFETY_MARGIN_MS = 10 * 60 * 1000;
 let registeredToken: string | null = null;
 let lastUnregisteredToken: string | null = null;
 const JOURNEY_CHANNEL_ID = 'journey-status';
@@ -81,7 +101,10 @@ export const firebaseNotificationService: NotificationService = {
     const notificationQuery = query(
       notificationsRef,
       where('recipientUid', '==', actor.uid),
-      where('expireAt', '>', Timestamp.fromMillis(Date.now())),
+      where('expireAt', '>', Timestamp.fromMillis(Date.now() + EXPIRY_SAFETY_MARGIN_MS)),
+      // Firestore requires the range field to lead the ordering. This also
+      // matches the deployed notifications composite index.
+      orderBy('expireAt', 'asc'),
       orderBy('createdAt', 'desc'),
       limit(NOTIFICATION_LIMIT),
     );

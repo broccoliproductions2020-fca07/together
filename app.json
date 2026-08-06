@@ -88,7 +88,7 @@
       "eas": {
         "projectId": "d534c243-7485-4d28-b030-454eb651d5ec"
       },
-      "internalVersion": "0.3.1"
+      "internalVersion": "0.3.08"
     },
     "runtimeVersion": {
       "policy": "appVersion"

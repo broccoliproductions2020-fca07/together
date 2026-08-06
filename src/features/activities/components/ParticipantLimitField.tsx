@@ -16,6 +16,8 @@ const MAX_LIMIT = 50;
 const DEFAULT_LIMIT = 2;
 
 export interface ParticipantLimitFieldProps {
+  /** Drop the own card shell — the row lives inside a shared FieldGroup. */
+  bare?: boolean;
   draft: ActivityDraft;
   onChange: (draft: ActivityDraft) => void;
 }
@@ -25,7 +27,11 @@ export interface ParticipantLimitFieldProps {
  * switch row (same idiom as the location toggle in OpenStatusCard); the −/+
  * stepper only unfolds while a limit is active. Off (default) = unlimited.
  */
-export function ParticipantLimitField({ draft, onChange }: ParticipantLimitFieldProps) {
+export function ParticipantLimitField({
+  draft,
+  onChange,
+  bare = false,
+}: ParticipantLimitFieldProps) {
   const accent = MODE_ACCENTS[draft.mode];
   const limit = draft.maxPeople;
   const limited = limit != null;
@@ -44,8 +50,8 @@ export function ParticipantLimitField({ draft, onChange }: ParticipantLimitField
 
   return (
     <View
-      className="rounded-3xl border border-white/10 px-4 py-3.5"
-      style={{ backgroundColor: 'rgba(255,255,255,0.07)' }}
+      className={bare ? 'px-4 py-3' : 'rounded-2xl border border-white/10 px-4 py-3.5'}
+      style={bare ? undefined : { backgroundColor: 'rgba(255,255,255,0.07)' }}
     >
       <Pressable
         accessibilityRole="switch"

@@ -10,6 +10,7 @@ export type {
   AuthStatus,
   AuthState,
   AuthProviderValue,
+  SignInProvider,
   SignInWithEmailInput,
   UpdateProfileInput,
   AuthService,

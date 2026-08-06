@@ -258,6 +258,34 @@ async function main() {
     updateDoc(doc(a.db, 'chats', 'proposal-room', 'messages', 'p1'), { text: 'edited' }),
   );
 
+  // Planning-round invitations are server-only in BOTH directions: a client
+  // must not be able to grant itself an invitation, and must not be able to
+  // probe who else was invited into a round.
+  await adminDb.doc('groupChatInvites/server-owned-invite').set({
+    roomId: 'proposal-room',
+    inviteeUid: aUid,
+    inviterUid: 'someone-else',
+    status: 'pending',
+    createdAt: admin.firestore.Timestamp.now(),
+    expireAt: admin.firestore.Timestamp.fromMillis(Date.now() + 60_000),
+  });
+  await denied('client cannot read a group chat invitation', () =>
+    getDoc(doc(a.db, 'groupChatInvites', 'server-owned-invite')),
+  );
+  await denied('client cannot forge a group chat invitation', () =>
+    setDoc(doc(a.db, 'groupChatInvites', 'forged-invite'), {
+      roomId: 'proposal-room',
+      inviteeUid: aUid,
+      inviterUid: aUid,
+      status: 'pending',
+      createdAt: Timestamp.now(),
+      expireAt: Timestamp.fromMillis(Date.now() + 60_000),
+    }),
+  );
+  await denied('client cannot accept an invitation by editing it', () =>
+    updateDoc(doc(a.db, 'groupChatInvites', 'server-owned-invite'), { status: 'accepted' }),
+  );
+
   await denied('client cannot create notification directly', () =>
     setDoc(doc(a.db, 'notifications', 'n1'), {
       recipientUid: aUid,

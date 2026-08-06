@@ -2,13 +2,15 @@ import { Ionicons } from '@expo/vector-icons';
 import { Pressable, Text, View } from 'react-native';
 
 import { useAuth } from '@/features/auth';
+import { useThemeColors } from '@/features/theme';
 import { AnimatedToggleIcon } from '@/shared/components/AnimatedToggleIcon';
+import { FONT, TEXT_CAPPED, TEXT_FLEXIBLE, TYPE } from '@/shared/theme';
 
 import type { ChatMessage } from '../types';
-import { useThemeColors } from '@/features/theme';
 
-const ACCENT = '#6E8BF7';
+/** "Plan steht" is a state change, not a room colour — it keeps the now-green. */
 const PLANNED_COLOR = '#41C08D';
+
 /**
  * Renders a proposal message as a card: what / when / where + "Bin dabei" and
  * "Aktivität" (create a real activity from it). Once created it locks into a
@@ -17,13 +19,14 @@ const PLANNED_COLOR = '#41C08D';
 export function ProposalCard({
   message,
   showAuthor,
-  accent: activityAccent = ACCENT,
+  accent: roomAccent,
   onToggleConfirm,
   onCreateActivity,
 }: {
   message: ChatMessage;
   showAuthor?: boolean;
-  accent?: string;
+  /** The room's colour. Required — the card never invents its own accent. */
+  accent: string;
   onToggleConfirm?: () => void;
   onCreateActivity?: () => void;
 }) {
@@ -35,13 +38,15 @@ export function ProposalCard({
 
   const confirmed = proposal.confirmedBy.includes(currentUid);
   const planned = proposal.planned;
-  const accent = planned ? PLANNED_COLOR : activityAccent;
+  const accent = planned ? PLANNED_COLOR : roomAccent;
 
   return (
     <View className={`mb-3 ${message.isMe ? 'items-end' : 'items-start'}`}>
       {showAuthor ? (
         <Text
-          className={`mb-1 text-xs font-semibold text-muted-foreground ${message.isMe ? 'mr-1' : 'ml-1'}`}
+          {...TEXT_FLEXIBLE}
+          className={`mb-1 ${message.isMe ? 'mr-1' : 'ml-1'}`}
+          style={{ ...TYPE.caption, fontFamily: FONT.semibold, color: colors.mutedForeground }}
         >
           {message.isMe ? 'Du' : message.authorName}
         </Text>
@@ -56,40 +61,74 @@ export function ProposalCard({
             size={16}
             color={accent}
           />
-          <Text className="text-xs font-bold uppercase tracking-wide" style={{ color: accent }}>
+          <Text
+            {...TEXT_FLEXIBLE}
+            style={{
+              ...TYPE.micro,
+              fontFamily: FONT.bold,
+              color: accent,
+              letterSpacing: 0.6,
+              textTransform: 'uppercase',
+            }}
+          >
             {planned ? 'Plan steht' : 'Vorschlag'}
           </Text>
         </View>
 
-        <Text className="text-lg font-bold text-foreground">{proposal.what || 'Vorschlag'}</Text>
+        <Text
+          {...TEXT_FLEXIBLE}
+          style={{ ...TYPE.body, fontFamily: FONT.bold, color: colors.foreground }}
+        >
+          {proposal.what || 'Vorschlag'}
+        </Text>
 
         {proposal.when ? (
           <View className="flex-row items-center gap-2">
             <Ionicons name="time-outline" size={15} color={colors.mutedForeground} />
-            <Text className="text-sm text-foreground">{proposal.when}</Text>
+            <Text
+              {...TEXT_FLEXIBLE}
+              style={{ ...TYPE.label, fontFamily: FONT.medium, color: colors.foreground }}
+            >
+              {proposal.when}
+            </Text>
           </View>
         ) : null}
         {proposal.where ? (
           <View className="flex-row items-center gap-2">
             <Ionicons name="location-outline" size={15} color={colors.mutedForeground} />
-            <Text className="text-sm text-foreground">{proposal.where}</Text>
+            <Text
+              {...TEXT_FLEXIBLE}
+              style={{ ...TYPE.label, fontFamily: FONT.medium, color: colors.foreground }}
+            >
+              {proposal.where}
+            </Text>
           </View>
         ) : null}
 
-        <Text className="text-xs text-muted-foreground">{proposal.confirmedBy.length} dabei</Text>
+        <Text
+          {...TEXT_FLEXIBLE}
+          style={{ ...TYPE.caption, fontFamily: FONT.medium, color: colors.mutedForeground }}
+        >
+          {proposal.confirmedBy.length} dabei
+        </Text>
 
         {planned ? (
           <View className="flex-row items-center gap-1.5 pt-1">
             <Ionicons name="checkmark-circle" size={16} color={PLANNED_COLOR} />
-            <Text className="text-sm font-semibold" style={{ color: PLANNED_COLOR }}>
+            <Text
+              {...TEXT_FLEXIBLE}
+              style={{ ...TYPE.label, fontFamily: FONT.semibold, color: PLANNED_COLOR }}
+            >
               Aktivität erstellt
             </Text>
           </View>
         ) : (
           <View className="flex-row gap-2 pt-1">
             <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={confirmed ? 'Zusage zurückziehen' : 'Zusagen'}
               onPress={onToggleConfirm}
-              className="flex-1 flex-row items-center justify-center gap-1.5 rounded-xl border py-2 active:opacity-80"
+              className="min-h-11 flex-1 flex-row items-center justify-center gap-1.5 rounded-xl border py-2 active:opacity-80"
               style={{
                 borderColor: accent,
                 backgroundColor: confirmed ? accent : 'transparent',
@@ -103,17 +142,31 @@ export function ProposalCard({
                 activeColor="#fff"
                 inactiveColor={accent}
               />
-              <Text className="text-sm font-bold" style={{ color: confirmed ? '#fff' : accent }}>
+              <Text
+                {...TEXT_CAPPED}
+                style={{
+                  ...TYPE.label,
+                  fontFamily: FONT.bold,
+                  color: confirmed ? '#fff' : accent,
+                }}
+              >
                 {confirmed ? 'Dabei' : 'Bin dabei'}
               </Text>
             </Pressable>
             <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Aktivität aus diesem Vorschlag erstellen"
               onPress={onCreateActivity}
-              className="flex-1 flex-row items-center justify-center gap-1.5 rounded-xl py-2 active:opacity-80"
+              className="min-h-11 flex-1 flex-row items-center justify-center gap-1.5 rounded-xl py-2 active:opacity-80"
               style={{ backgroundColor: PLANNED_COLOR }}
             >
               <Ionicons name="add-circle-outline" size={16} color="#fff" />
-              <Text className="text-sm font-bold text-white">Aktivität</Text>
+              <Text
+                {...TEXT_CAPPED}
+                style={{ ...TYPE.label, fontFamily: FONT.bold, color: '#ffffff' }}
+              >
+                Aktivität
+              </Text>
             </Pressable>
           </View>
         )}

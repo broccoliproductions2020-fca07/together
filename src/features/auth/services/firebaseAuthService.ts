@@ -27,6 +27,7 @@ import type {
   AuthService,
   AuthSession,
   AuthUser,
+  SignInProvider,
   SignInWithEmailInput,
   UpdateProfileInput,
 } from '../types';
@@ -57,6 +58,19 @@ function initialsOf(name: string): string {
     .toUpperCase();
 }
 
+/**
+ * Which sign-in method this account actually uses. Firebase already knows —
+ * it is read off the live user, never persisted, so it cannot drift from the
+ * truth the way a copied field would.
+ */
+function toSignInProvider(user: FirebaseUser): SignInProvider {
+  const ids = user.providerData.map((entry) => entry?.providerId).filter(Boolean);
+  if (ids.includes('apple.com')) return 'apple';
+  if (ids.includes('google.com')) return 'google';
+  if (ids.includes('password')) return 'password';
+  return 'unknown';
+}
+
 function toAuthUser(user: FirebaseUser, username?: string): AuthUser {
   const displayName =
     user.displayName?.trim() || deriveDisplayName(username ?? '', user.email ?? '') || 'Gast';
@@ -70,6 +84,7 @@ function toAuthUser(user: FirebaseUser, username?: string): AuthUser {
     createdAt: user.metadata.creationTime
       ? new Date(user.metadata.creationTime).toISOString()
       : new Date().toISOString(),
+    signInProvider: toSignInProvider(user),
   };
 }
 

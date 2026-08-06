@@ -49,8 +49,11 @@ active Anreise and Heimweg sessions; it stores a last point, not a trail.
 - Friend presence listens only while the map surface is active.
 - Push is a nudge, not a source of truth. Closed chat lists reconcile through a
   bounded read on foreground/list open.
-- Places lookup runs through a Cloud Function with client debounce and session
-  tokens; maps keys are injected only at native build time.
+- Places lookup runs through protected Cloud Functions with client debounce and
+  one session token per active search; **Place content is never cached** (only
+  the chosen Place ID may be retained). The server-side Places key lives in
+  Firebase Secret Manager, while native Maps keys are injected only at build
+  time.
 - Activity chats, group chats, presence and notifications carry expiry fields
   and need matching Firebase TTL policies in each cloud project.
 

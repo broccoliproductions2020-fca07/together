@@ -8,7 +8,6 @@ export function NowFields({ draft, onChange }: ActivityFieldsProps) {
   return (
     <ScheduleFields
       mode={draft.mode}
-      title="Bis wann?"
       startsAt={startsAt}
       endsAt={endsAt}
       startEditable={false}

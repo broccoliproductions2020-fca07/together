@@ -165,9 +165,12 @@ function ParticipantSection({
 function ActivityManagementActions({
   onLeave,
   onCancel,
+  isHost = false,
 }: {
   onLeave?: () => void;
   onCancel?: () => void;
+  /** A host sees both actions, so the sheet has to say how they differ. */
+  isHost?: boolean;
 }) {
   const colors = useThemeColors();
   if (!onLeave && !onCancel) return null;
@@ -177,10 +180,15 @@ function ActivityManagementActions({
       <Text className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
         Activity verwalten
       </Text>
+      {isHost && onLeave && onCancel ? (
+        <Text className="-mt-1 mb-1 text-xs text-muted-foreground">
+          Verlassen gibt die Activity ab — sie läuft ohne dich weiter. Absagen beendet sie für alle.
+        </Text>
+      ) : null}
       {onLeave ? (
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel="Activity verlassen"
+          accessibilityLabel={isHost ? 'Activity abgeben und verlassen' : 'Activity verlassen'}
           className="min-h-11 flex-row items-center justify-center gap-2 rounded-2xl bg-secondary px-4 active:opacity-70"
           onPress={onLeave}
         >
@@ -354,6 +362,7 @@ export function ActivityContent({
         <ChatRoomInfoSheet
           visible={chatInfoOpen}
           roomId={selection.id}
+          accent={accent}
           fallbackTitle={selection.title}
           onClose={() => setChatInfoOpen(false)}
           onLeave={onCollapseChat}
@@ -387,7 +396,7 @@ export function ActivityContent({
         <View className="mt-4">
           <InlineChatPreview activityId={selection.id} accent={accent} onExpand={onExpandChat} />
         </View>
-        <ActivityManagementActions onLeave={onLeave} onCancel={onCancel} />
+        <ActivityManagementActions onLeave={onLeave} onCancel={onCancel} isHost={canEdit} />
       </>
     );
   }
@@ -427,7 +436,7 @@ export function ActivityContent({
           />
         )}
       </View>
-      <ActivityManagementActions onLeave={onLeave} onCancel={onCancel} />
+      <ActivityManagementActions onLeave={onLeave} onCancel={onCancel} isHost={canEdit} />
     </>
   );
 }

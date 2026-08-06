@@ -32,9 +32,46 @@ export interface ChatMessage {
   proposal?: ProposalData;
   /** Local optimistic echo — shown immediately, replaced by the server copy. */
   pending?: boolean;
-  /** Delivery failed — the bubble offers a tap-to-retry instead of vanishing. */
+  /** Delivery failed — the bubble stays visible instead of vanishing. */
   failed?: boolean;
+  /**
+   * Why delivery failed, classified from the callable's error code. Only
+   * `network` is worth retrying; the others explain themselves and must NOT
+   * offer a retry that can only fail again.
+   */
+  failureReason?: SendFailureReason;
 }
+
+/**
+ * The send failures a user can actually do something about. Anything the
+ * server rejects permanently (too long, expired room, not a member) is a
+ * different situation from a flaky connection, and saying "tap to retry" to
+ * all of them is what made a 2001-character message retry forever.
+ */
+export type SendFailureReason =
+  | 'network'
+  | 'too_long'
+  | 'rate_limited'
+  | 'room_expired'
+  | 'not_member'
+  | 'unknown';
+
+export const SEND_FAILURE_TEXT: Record<SendFailureReason, string> = {
+  network: 'Nicht gesendet · Tippen zum Wiederholen',
+  too_long: 'Nachricht zu lang',
+  rate_limited: 'Zu schnell gesendet — kurz warten',
+  room_expired: 'Dieser Chat ist abgelaufen',
+  not_member: 'Du bist kein Mitglied dieses Chats',
+  unknown: 'Nicht gesendet',
+};
+
+/** Only a transient failure may offer a retry. */
+export function isRetryableFailure(reason: SendFailureReason | undefined): boolean {
+  return reason === 'network' || reason === undefined;
+}
+
+/** Server-enforced message length (functions/index.js → createChatMessage). */
+export const MESSAGE_MAX_LENGTH = 2000;
 
 /**
  * A temporary open group: a set of friends with a shared chat where a loose

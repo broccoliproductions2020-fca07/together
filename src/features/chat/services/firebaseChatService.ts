@@ -3,12 +3,14 @@ import {
   arrayUnion,
   collection,
   doc,
+  documentId,
   getDoc,
   getDocs,
   limit,
   onSnapshot,
   orderBy,
   query,
+  startAfter,
   Timestamp,
   updateDoc,
   where,
@@ -26,7 +28,7 @@ import type {
   RoomMemberProfile,
   Unsubscribe,
 } from './chatService.types';
-import { loadCachedMessages, MAX_CACHED_MESSAGES, saveCachedMessages } from './messageCache';
+import { loadCachedMessages, saveCachedMessages } from './messageCache';
 
 /**
  * Firestore implementation of {@link ChatService} (emulator in dev, cloud later).
@@ -169,14 +171,12 @@ export const firebaseChatService: ChatService = {
   },
 
   subscribeMessages(actor, roomId, cb) {
-    // Incremental sync: cached messages paint instantly and are never re-read
-    // from the server. First-ever open fetches the newest MESSAGE_LIMIT; every
-    // later open anchors the listener at the newest cached message
-    // (`createdAt >`), so each message is downloaded exactly ONCE per device.
-    // Known tradeoffs: (a) edits to already-cached docs (proposal toggles by
-    // others) don't re-stream — own toggles still work, and expiry is enforced
-    // by the room gate + cache pruning; (b) if > MESSAGE_LIMIT messages arrived
-    // since the last open, the overflow only appears on the next open.
+    // The device cache gives an instant first paint, but the live source of
+    // truth is ALWAYS the newest bounded window. Anchoring a listener after a
+    // cached timestamp looked cheaper, but it could permanently leave a gap
+    // when more than MESSAGE_LIMIT messages arrived while the room was closed.
+    // One open room costs at most this small initial window; older history is
+    // explicitly paged only when the person asks for it.
     let cancelled = false;
     let detach: Unsubscribe = () => {};
     void loadCachedMessages(roomId).then((cached) => {
@@ -184,53 +184,23 @@ export const firebaseChatService: ChatService = {
       let known = cached.map((m) => ({ ...m, isMe: m.authorId === actor.uid }));
       if (known.length) cb([...known]);
 
-      const newestTs = known.length ? known[known.length - 1].createdAt : 0;
-      const q = newestTs
-        ? query(
-            messagesRef(roomId),
-            where('createdAt', '>', Timestamp.fromMillis(newestTs)),
-            orderBy('createdAt', 'asc'),
-            limit(MESSAGE_LIMIT),
-          )
-        : query(messagesRef(roomId), orderBy('createdAt', 'desc'), limit(MESSAGE_LIMIT));
-
-      // Cached proposals are BELOW the listener's anchor, so votes/locks by
-      // others made while this device was away would stay frozen forever.
-      // One bounded read of the newest proposal docs on open refreshes them
-      // (composite index kind+createdAt; a few reads, only when a cache
-      // exists and only for rooms that ever had proposals).
-      if (newestTs && cached.some((m) => m.kind === 'proposal')) {
-        void getDocs(
-          query(
-            messagesRef(roomId),
-            where('kind', '==', 'proposal'),
-            orderBy('createdAt', 'desc'),
-            limit(10),
-          ),
-        )
-          .then((snapshot) => {
-            if (cancelled || snapshot.empty) return;
-            const byId = new Map(known.map((m) => [m.id, m]));
-            snapshot.docs.forEach((d) => {
-              if (byId.has(d.id)) byId.set(d.id, mapMessage(actor, d.id, roomId, d.data()));
-            });
-            known = [...byId.values()].sort((a, b) => a.createdAt - b.createdAt);
-            cb([...known]);
-            saveCachedMessages(roomId, known);
-          })
-          .catch(() => {});
-      }
+      const q = query(
+        messagesRef(roomId),
+        orderBy('createdAt', 'desc'),
+        orderBy(documentId(), 'desc'),
+        limit(MESSAGE_LIMIT),
+      );
 
       detach = onSnapshot(
         q,
         (snapshot) => {
-          const incoming = snapshot.docs.map((d) => mapMessage(actor, d.id, roomId, d.data()));
-          if (!newestTs) incoming.reverse();
-          const byId = new Map(known.map((m) => [m.id, m]));
-          incoming.forEach((m) => byId.set(m.id, m));
-          known = [...byId.values()]
-            .sort((a, b) => a.createdAt - b.createdAt)
-            .slice(-MAX_CACHED_MESSAGES);
+          // Replace, rather than merge with an old cache: this is the newest
+          // contiguous server window. ChatProvider merges it with explicitly
+          // loaded older pages by id, so stale cache entries cannot create an
+          // invisible hole between history and the current conversation.
+          known = snapshot.docs
+            .map((d) => mapMessage(actor, d.id, roomId, d.data()))
+            .reverse();
           cb([...known]);
           saveCachedMessages(roomId, known);
         },
@@ -248,6 +218,26 @@ export const firebaseChatService: ChatService = {
       cancelled = true;
       detach();
     };
+  },
+
+  async loadOlderMessages(actor, roomId, cursor) {
+    // (createdAt desc, __name__ desc) is a total order, so startAfter can never
+    // land mid-millisecond and drop or duplicate a message. Firestore adds the
+    // __name__ tiebreaker to every query implicitly; naming it makes the
+    // pagination contract explicit and the index deterministic.
+    const snapshot = await getDocs(
+      query(
+        messagesRef(roomId),
+        orderBy('createdAt', 'desc'),
+        orderBy(documentId(), 'desc'),
+        startAfter(Timestamp.fromMillis(cursor.createdAt), cursor.id),
+        limit(MESSAGE_LIMIT),
+      ),
+    );
+    const messages = snapshot.docs
+      .map((d) => mapMessage(actor, d.id, roomId, d.data()))
+      .reverse();
+    return { messages, reachedStart: snapshot.size < MESSAGE_LIMIT };
   },
 
   async joinActivity(actor, activity) {
@@ -327,6 +317,21 @@ export const firebaseChatService: ChatService = {
 
   async renameRoom(_actor, roomId, title) {
     await httpsCallable(getFirebaseFunctions(), 'renameChatRoom')({ roomId, title });
+  },
+
+  async inviteToGroup(_actor, roomId, inviteeUids) {
+    const result = await httpsCallable<
+      { roomId: string; inviteeUids: string[] },
+      { ok: true; invited: number; skipped: number }
+    >(
+      getFirebaseFunctions(),
+      'inviteToGroupChat',
+    )({ roomId, inviteeUids });
+    return { invited: result.data.invited, skipped: result.data.skipped };
+  },
+
+  async respondToGroupInvite(_actor, roomId, accept) {
+    await httpsCallable(getFirebaseFunctions(), 'respondToGroupChatInvite')({ roomId, accept });
   },
 
   subscribeGroupOpenings(actor, cb) {

@@ -32,8 +32,11 @@ Sie können nicht sicher aus dem Code erledigt werden.
    Attest mit DeviceCheck-Fallback registrieren. Zuerst Staging im Monitoring
    testen; erst bei erfolgreichen echten Geräte-Tests bleibt Enforcement aktiv.
 4. In EAS die Maps-Schlüssel pro Environment hinterlegen. Android-Schlüssel auf
-   Signatur plus Paketname und iOS-Schlüssel auf Bundle-ID beschränken. Zusätzlich
-   für Places eine harte Tagesquote setzen.
+   Signatur plus Paketname und iOS-Schlüssel auf Bundle-ID beschränken. Für
+   Places einen **eigenen Server-Schlüssel** erstellen, auf die Places API (New)
+   beschränken und ihn je Firebase-Projekt als Functions-Secret
+   `GOOGLE_PLACES_API_KEY` hinterlegen (nie in EAS oder der App). Die harte
+   Tagesquote bleibt der globale Kosten-Notstopp.
 5. In GitHub die Environments `staging` und `production` anlegen. Für
    `production` verpflichtende Reviewer einschalten. Beide benötigen `EXPO_TOKEN`.
    Production benötigt zusätzlich Workload-Identity-Federation mit den Secrets
@@ -58,6 +61,19 @@ Sie können nicht sicher aus dem Code erledigt werden.
    Registrierung/E-Mail-Verifizierung, Login, Karte/Places, Activity, Chat,
    Push, App Check, Standort-Opt-in, Anreise und Heimweg inklusive automatischem
    Stoppen sowie Update/Reinstall.
+
+### Functions-Deploy-Schutz
+
+Ein vollständiger Functions-Deploy ist nur erlaubt, wenn jede live Function auch
+im lokalen `functions/index.js` exportiert wird. `deploy:functions:dev`,
+`deploy:functions:prod`, der Produktions-Workflow und auch ein direkter
+`firebase deploy --only functions` prüfen das vor dem Deploy und blockieren bei
+einem Source-Drift. Niemals die Sperre umgehen oder eine vorgeschlagene Löschung
+bestätigen.
+
+Eine bewusst eng begrenzte, unabhängige Änderung erhält ein eigenes Skript mit
+den betroffenen Namen, zum Beispiel `npm run deploy:functions:poi:dev`. Dieses
+Skript kann keine andere Function aktualisieren oder löschen.
 
 ## Production-Release
 

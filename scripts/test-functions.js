@@ -253,6 +253,22 @@ async function main() {
   });
   await batch.commit();
 
+  // Places must reject malformed input before it can trigger any paid Google
+  // request. The emulator has no Places secret, so the valid-path behaviour is
+  // covered by the email-verification gate test without external traffic.
+  await expectError('place autocomplete rejects malformed session tokens', 'INVALID_ARGUMENT', () =>
+    callFunction(alice.token, 'autocompletePlaces', {
+      query: 'Kino',
+      sessionToken: 'not valid!',
+    }),
+  );
+  await expectError('place details rejects malformed place IDs', 'INVALID_ARGUMENT', () =>
+    callFunction(alice.token, 'resolvePlaceLocation', {
+      placeId: 'place/with/slash',
+      sessionToken: 'safe-place-session-token-123456',
+    }),
+  );
+
   const avatarBase64 = Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64');
   const renamedProfile = await expectOk('profile display name change is server-owned', () =>
     callFunction(alice.token, 'updateOwnProfile', { displayName: 'Alice Neu' }),
@@ -462,6 +478,211 @@ async function main() {
     throw new Error('A group message did not refresh room and message retention together.');
   }
   console.log('OK group chat lifecycle is bounded and refreshed atomically');
+
+  // Targeted planning-round invitations. The point of this path is that the
+  // invitee DECIDES: an invite must never add anyone to a room, and every
+  // guard is re-checked when the answer arrives, not only when it was sent.
+  const inviteGroup = await expectOk('admin creates a planning round to invite into', () =>
+    callFunction(alice.token, 'createGroupChat', {
+      memberUids: [dave.uid],
+      title: 'Einladungsprobe',
+    }),
+  );
+  await expectError(
+    'inviting someone who is not a confirmed friend is refused',
+    'PERMISSION_DENIED',
+    () =>
+      callFunction(alice.token, 'inviteToGroupChat', {
+        roomId: inviteGroup.id,
+        inviteeUids: [charlie.uid],
+      }),
+  );
+  await expectError('a non-admin member cannot invite', 'PERMISSION_DENIED', () =>
+    callFunction(dave.token, 'inviteToGroupChat', {
+      roomId: inviteGroup.id,
+      inviteeUids: [bob.uid],
+    }),
+  );
+
+  await db.doc(`friendships/${friendshipId(alice.uid, bob.uid)}`).set({
+    participantUids: [alice.uid, bob.uid].sort(),
+    requesterUid: alice.uid,
+    status: 'accepted',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+
+  // A block in either direction hides the invitation entirely. Written
+  // directly so the friendship survives and the block branch is what is
+  // actually under test.
+  await db.doc(`blocks/${bob.uid}_${alice.uid}`).set({
+    blockerUid: bob.uid,
+    blockedUid: alice.uid,
+    createdAt: timestamp,
+  });
+  const blockedInvite = await expectOk('a blocked pair produces no invitation', () =>
+    callFunction(alice.token, 'inviteToGroupChat', {
+      roomId: inviteGroup.id,
+      inviteeUids: [bob.uid],
+    }),
+  );
+  if (blockedInvite?.invited !== 0 || blockedInvite?.skipped !== 1) {
+    throw new Error('A blocked invitee was not skipped.');
+  }
+  await db.doc(`blocks/${bob.uid}_${alice.uid}`).delete();
+
+  const sentInvite = await expectOk('admin invites a confirmed friend', () =>
+    callFunction(alice.token, 'inviteToGroupChat', {
+      roomId: inviteGroup.id,
+      inviteeUids: [bob.uid],
+    }),
+  );
+  if (sentInvite?.invited !== 1) throw new Error('The invitation was not created.');
+  const [inviteDoc, inviteRoom, groupInviteNotifications] = await Promise.all([
+    db.doc(`groupChatInvites/${inviteGroup.id}_${bob.uid}`).get(),
+    db.doc(`chats/${inviteGroup.id}`).get(),
+    db.collection('notifications').where('recipientUid', '==', bob.uid).get(),
+  ]);
+  if (!inviteDoc.exists || inviteDoc.data()?.status !== 'pending') {
+    throw new Error('The pending invitation document is missing.');
+  }
+  if ((inviteRoom.data()?.memberIds ?? []).includes(bob.uid)) {
+    throw new Error('An invitation added the invitee to the room — it must not.');
+  }
+  if (!groupInviteNotifications.docs.some((entry) => entry.data().kind === 'group_chat_invite')) {
+    throw new Error('The invitation did not produce a notification.');
+  }
+  console.log('OK a planning-round invitation notifies without adding anyone');
+
+  await expectOk('removing a friend retracts their pending planning invitation', () =>
+    callFunction(alice.token, 'removeFriend', { uid: bob.uid }),
+  );
+  const [removedInvite, removedNotification] = await Promise.all([
+    db.doc(`groupChatInvites/${inviteGroup.id}_${bob.uid}`).get(),
+    db.doc(`notifications/groupinvite_${inviteGroup.id}_${bob.uid}`).get(),
+  ]);
+  if (removedInvite.exists || removedNotification.exists) {
+    throw new Error('Removing a friend left a planning invitation or notification behind.');
+  }
+  await db.doc(`friendships/${friendshipId(alice.uid, bob.uid)}`).set({
+    participantUids: [alice.uid, bob.uid].sort(),
+    requesterUid: alice.uid,
+    status: 'accepted',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  await expectOk('admin re-invites after the friendship is restored', () =>
+    callFunction(alice.token, 'inviteToGroupChat', {
+      roomId: inviteGroup.id,
+      inviteeUids: [bob.uid],
+    }),
+  );
+  console.log('OK removing a friend retracts planning access immediately');
+
+  await expectError('a stranger cannot answer somebody else’s invitation', 'NOT_FOUND', () =>
+    callFunction(charlie.token, 'respondToGroupChatInvite', {
+      roomId: inviteGroup.id,
+      accept: true,
+    }),
+  );
+
+  // The invitation was only valid because Alice and Bob were friends when it
+  // was sent. Removing that relationship must revoke both the server invite
+  // and its card; an old notification may never grant access back into a room.
+  await db.doc(`friendships/${friendshipId(alice.uid, bob.uid)}`).delete();
+  await expectError('a former friend cannot accept an old planning invitation', 'PERMISSION_DENIED', () =>
+    callFunction(bob.token, 'respondToGroupChatInvite', { roomId: inviteGroup.id, accept: true }),
+  );
+  const [revokedInvite, revokedNotification] = await Promise.all([
+    db.doc(`groupChatInvites/${inviteGroup.id}_${bob.uid}`).get(),
+    db.doc(`notifications/groupinvite_${inviteGroup.id}_${bob.uid}`).get(),
+  ]);
+  if (revokedInvite.exists || revokedNotification.exists) {
+    throw new Error('A revoked friendship left a usable planning invitation behind.');
+  }
+  await db.doc(`friendships/${friendshipId(alice.uid, bob.uid)}`).set({
+    participantUids: [alice.uid, bob.uid].sort(),
+    requesterUid: alice.uid,
+    status: 'accepted',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+  await expectOk('admin can re-invite after friendship is restored', () =>
+    callFunction(alice.token, 'inviteToGroupChat', {
+      roomId: inviteGroup.id,
+      inviteeUids: [bob.uid],
+    }),
+  );
+  console.log('OK a removed friendship revokes the invitation and its notification');
+
+  await expectOk('the invitee declines', () =>
+    callFunction(bob.token, 'respondToGroupChatInvite', { roomId: inviteGroup.id, accept: false }),
+  );
+  const [declinedInvite, declinedRoom, declinedNotification] = await Promise.all([
+    db.doc(`groupChatInvites/${inviteGroup.id}_${bob.uid}`).get(),
+    db.doc(`chats/${inviteGroup.id}`).get(),
+    db.doc(`notifications/groupinvite_${inviteGroup.id}_${bob.uid}`).get(),
+  ]);
+  if (declinedInvite.exists || declinedNotification.exists) {
+    throw new Error('Declining did not clear the invitation and its notification.');
+  }
+  if ((declinedRoom.data()?.memberIds ?? []).includes(bob.uid)) {
+    throw new Error('Declining added the invitee to the room.');
+  }
+  await expectError('an answered invitation cannot be answered again', 'NOT_FOUND', () =>
+    callFunction(bob.token, 'respondToGroupChatInvite', { roomId: inviteGroup.id, accept: true }),
+  );
+  console.log('OK declining clears the invitation and never grants access');
+
+  await expectOk('admin invites again after the decline', () =>
+    callFunction(alice.token, 'inviteToGroupChat', {
+      roomId: inviteGroup.id,
+      inviteeUids: [bob.uid],
+    }),
+  );
+  await expectOk('the invitee accepts', () =>
+    callFunction(bob.token, 'respondToGroupChatInvite', { roomId: inviteGroup.id, accept: true }),
+  );
+  const [acceptedInvite, acceptedRoom, acceptedNotification] = await Promise.all([
+    db.doc(`groupChatInvites/${inviteGroup.id}_${bob.uid}`).get(),
+    db.doc(`chats/${inviteGroup.id}`).get(),
+    db.doc(`notifications/groupinvite_${inviteGroup.id}_${bob.uid}`).get(),
+  ]);
+  if (!(acceptedRoom.data()?.memberIds ?? []).includes(bob.uid)) {
+    throw new Error('Accepting did not add the invitee to the room.');
+  }
+  if (acceptedInvite.exists || acceptedNotification.exists) {
+    throw new Error('Accepting left the invitation or its notification behind.');
+  }
+  await expectOk('an accepted member can post in the round', () =>
+    callFunction(bob.token, 'sendChatMessage', { roomId: inviteGroup.id, text: 'Bin dabei!' }),
+  );
+  console.log('OK accepting joins the round and retracts the invitation');
+
+  // A full round must reject the ANSWER, not the invitation — a seat can free
+  // up again before the invite expires, so discarding it would turn "voll
+  // gerade" into "nie eingeladen gewesen".
+  await db.doc(`chats/${inviteGroup.id}`).update({ memberIds: [alice.uid, bob.uid] });
+  await expectOk('admin invites while the round still has room', () =>
+    callFunction(alice.token, 'inviteToGroupChat', {
+      roomId: inviteGroup.id,
+      inviteeUids: [dave.uid],
+    }),
+  );
+  await db.doc(`chats/${inviteGroup.id}`).update({
+    memberIds: [alice.uid, ...Array.from({ length: 24 }, (_, index) => `filler_${index}`)],
+  });
+  await expectError('a full round refuses the join', 'FAILED_PRECONDITION', () =>
+    callFunction(dave.token, 'respondToGroupChatInvite', { roomId: inviteGroup.id, accept: true }),
+  );
+  if (!(await db.doc(`groupChatInvites/${inviteGroup.id}_${dave.uid}`).get()).exists) {
+    throw new Error('A full round discarded the invitation instead of keeping it.');
+  }
+  console.log('OK a full round rejects the join but keeps the invitation');
+
+  // Restore the shared fixture: later assertions rely on Alice and Bob NOT
+  // being friends (minimal chat cards, friend-request policies).
+  await db.doc(`friendships/${friendshipId(alice.uid, bob.uid)}`).delete();
 
   // Winks are private, short-lived invitations â€” not client-writable group
   // membership. Dave may receive more than one while open, but accepting one
@@ -1113,6 +1334,13 @@ async function main() {
     throw new Error('Non-friend chat card leaked profile details.');
   }
 
+  const [aliceBeforeRequest, bobBeforeRequest] = await Promise.all([
+    db.doc(`users/${alice.uid}`).get(),
+    db.doc(`users/${bob.uid}`).get(),
+  ]);
+  const aliceFriendshipsVersionBeforeRequest = aliceBeforeRequest.data()?.friendshipsVersion ?? 0;
+  const bobFriendshipsVersionBeforeRequest = bobBeforeRequest.data()?.friendshipsVersion ?? 0;
+
   await expectOk('shared activity creates a pending request', () =>
     callFunction(alice.token, 'sendFriendRequest', {
       targetUid: bob.uid,
@@ -1129,8 +1357,8 @@ async function main() {
     db.doc(`users/${bob.uid}`).get(),
   ]);
   if (
-    aliceAfterRequest.data()?.friendshipsVersion !== 1 ||
-    bobAfterRequest.data()?.friendshipsVersion !== 1
+    aliceAfterRequest.data()?.friendshipsVersion !== aliceFriendshipsVersionBeforeRequest + 1 ||
+    bobAfterRequest.data()?.friendshipsVersion !== bobFriendshipsVersionBeforeRequest + 1
   ) {
     throw new Error('A new friendship request did not invalidate both friendship caches.');
   }
@@ -1151,8 +1379,8 @@ async function main() {
     db.doc(`users/${bob.uid}`).get(),
   ]);
   if (
-    aliceAfterRequestRetry.data()?.friendshipsVersion !== 1 ||
-    bobAfterRequestRetry.data()?.friendshipsVersion !== 1
+    aliceAfterRequestRetry.data()?.friendshipsVersion !== aliceFriendshipsVersionBeforeRequest + 1 ||
+    bobAfterRequestRetry.data()?.friendshipsVersion !== bobFriendshipsVersionBeforeRequest + 1
   ) {
     throw new Error('Retrying a pending friendship request created another relation change.');
   }
@@ -1174,8 +1402,8 @@ async function main() {
     db.doc(`users/${bob.uid}`).get(),
   ]);
   if (
-    aliceAfterAcceptance.data()?.friendshipsVersion !== 2 ||
-    bobAfterAcceptance.data()?.friendshipsVersion !== 2
+    aliceAfterAcceptance.data()?.friendshipsVersion !== aliceFriendshipsVersionBeforeRequest + 2 ||
+    bobAfterAcceptance.data()?.friendshipsVersion !== bobFriendshipsVersionBeforeRequest + 2
   ) {
     throw new Error('Accepting a request did not invalidate both friendship caches.');
   }
@@ -1536,6 +1764,13 @@ async function main() {
   await expectOk('friend starts another Safety session before removing friendship', () =>
     callFunction(alice.token, 'startSafetySession', { audienceUids: [dave.uid] }),
   );
+  const [aliceBeforeRemoval, daveBeforeRemoval] = await Promise.all([
+    db.doc(`users/${alice.uid}`).get(),
+    db.doc(`users/${dave.uid}`).get(),
+  ]);
+  const aliceFriendshipsVersionBeforeRemoval =
+    aliceBeforeRemoval.data()?.friendshipsVersion ?? 0;
+  const daveFriendshipsVersionBeforeRemoval = daveBeforeRemoval.data()?.friendshipsVersion ?? 0;
   await expectOk('removing friendship revokes Safety access immediately', () =>
     callFunction(alice.token, 'removeFriend', { uid: dave.uid }),
   );
@@ -1548,8 +1783,8 @@ async function main() {
   if (
     revokedSession.exists() ||
     revokedIndex.exists() ||
-    aliceAfterRemoval.data()?.friendshipsVersion !== 3 ||
-    daveAfterRemoval.data()?.friendshipsVersion !== 1
+    aliceAfterRemoval.data()?.friendshipsVersion !== aliceFriendshipsVersionBeforeRemoval + 1 ||
+    daveAfterRemoval.data()?.friendshipsVersion !== daveFriendshipsVersionBeforeRemoval + 1
   ) {
     throw new Error('Removing friendship left an active Safety entitlement behind.');
   }

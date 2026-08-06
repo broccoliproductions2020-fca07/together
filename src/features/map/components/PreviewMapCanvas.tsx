@@ -65,6 +65,9 @@ export interface PreviewMapCanvasProps {
   fitRequest?: { id: number; coordinates: MapCoordinate[] };
   /** Fixed lower control deck in the split Safety mode. */
   bottomOverlayHeight?: number;
+  /** Live height of an open bottom sheet covering the map. Used ONLY to centre
+   * a focused selection in the visible map strip rather than behind the sheet. */
+  bottomSheetHeight?: number;
   onMarkerPress?: (marker: MapMarker) => void;
   onClusterPress?: (cluster: MarkerCluster) => void;
   onPlacePress?: (place: MapPlaceSelection) => void;
@@ -90,6 +93,10 @@ export interface PreviewMapCanvasProps {
    * its real marker stays hidden until `onLaunchComplete` fires. */
   launchMarkerId?: string;
   onLaunchComplete?: () => void;
+  /** Cancelled marker id to pop off the map. Armed one frame BEFORE the entity
+   * is dropped, so the canvas can still capture the node it has to animate. */
+  dismissMarkerId?: string;
+  onDismissComplete?: () => void;
 }
 
 type CanvasPoint = { x: number; y: number };
@@ -460,9 +467,7 @@ export function PreviewMapCanvas({
               <View
                 key={participant.userId}
                 className="absolute -translate-x-14 -translate-y-14"
-                style={mapPosition(
-                  projectCoordinateToCanvas(participant.coordinate!),
-                )}
+                style={mapPosition(projectCoordinateToCanvas(participant.coordinate!))}
               >
                 <JourneyAvatarMarker
                   participant={participant}

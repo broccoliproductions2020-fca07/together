@@ -48,6 +48,7 @@ export function presenceToNearby(
         distanceKm: Number(haversineKm(myLocation, coordinate).toFixed(1)),
         coordinate,
         expiresAt: doc.expiresAt,
+        vibeLabel: doc.vibe?.label,
       };
     }
 
@@ -59,6 +60,7 @@ export function presenceToNearby(
       activity,
       locationVisibility: 'none',
       expiresAt: doc.expiresAt,
+      vibeLabel: doc.vibe?.label,
     };
   });
 }

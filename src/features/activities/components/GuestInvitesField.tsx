@@ -11,6 +11,8 @@ const MODE_ACCENTS = {
 };
 
 export interface GuestInvitesFieldProps {
+  /** Drop the own card shell — the row lives inside a shared FieldGroup. */
+  bare?: boolean;
   draft: ActivityDraft;
   onChange: (draft: ActivityDraft) => void;
 }
@@ -23,7 +25,7 @@ export interface GuestInvitesFieldProps {
  * Sichtbarkeit picker this stays editable in edit mode: toggling changes
  * only the FUTURE invite mechanism, never the current audience.
  */
-export function GuestInvitesField({ draft, onChange }: GuestInvitesFieldProps) {
+export function GuestInvitesField({ draft, onChange, bare = false }: GuestInvitesFieldProps) {
   const accent = MODE_ACCENTS[draft.mode];
   const enabled = draft.guestInvitesEnabled === true;
 
@@ -33,8 +35,8 @@ export function GuestInvitesField({ draft, onChange }: GuestInvitesFieldProps) {
 
   return (
     <View
-      className="rounded-3xl border border-white/10 px-4 py-3.5"
-      style={{ backgroundColor: 'rgba(255,255,255,0.07)' }}
+      className={bare ? 'px-4 py-3' : 'rounded-2xl border border-white/10 px-4 py-3.5'}
+      style={bare ? undefined : { backgroundColor: 'rgba(255,255,255,0.07)' }}
     >
       <Pressable
         accessibilityRole="switch"

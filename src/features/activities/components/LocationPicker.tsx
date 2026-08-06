@@ -2,10 +2,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
 import { InteractionManager, Modal, Pressable, Text, View } from 'react-native';
 
-import { CURRENT_LOCATION_PLACE } from '../utils/currentPlace';
 import { AppButton } from '@/shared/components';
 
 import type { ActivityDraft, SelectedPlace } from '../types';
+import { FieldRow } from './FieldGroup';
 
 const MODE_ACCENTS = {
   open: '#6E8BF7',
@@ -16,7 +16,13 @@ const MODE_ACCENTS = {
 export interface LocationPickerProps {
   draft: ActivityDraft;
   onChange: (draft: ActivityDraft) => void;
-  onOpenMapPicker?: (mode: ActivityDraft['mode'], onPick: (place: SelectedPlace) => void) => void;
+  onOpenMapPicker?: (
+    mode: ActivityDraft['mode'],
+    onPick: (place: SelectedPlace) => void,
+    options?: { focusCurrentLocation?: boolean; autoConfirm?: boolean; searchMode?: boolean },
+  ) => void;
+  /** `row` = a line inside a shared FieldGroup card; `card` = its own box. */
+  variant?: 'card' | 'row';
 }
 
 function locationSummary(draft: ActivityDraft) {
@@ -34,29 +40,45 @@ function applyPlace(draft: ActivityDraft, place: SelectedPlace): ActivityDraft {
   };
 }
 
-export function LocationPicker({ draft, onChange, onOpenMapPicker }: LocationPickerProps) {
+export function LocationPicker({
+  draft,
+  onChange,
+  onOpenMapPicker,
+  variant = 'card',
+}: LocationPickerProps) {
   const [open, setOpen] = useState(false);
   const accent = MODE_ACCENTS[draft.mode];
 
   return (
     <>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Ort auswählen"
-        className="rounded-3xl border border-white/10 px-4 py-4"
-        style={{ backgroundColor: 'rgba(255,255,255,0.08)' }}
-        onPress={() => setOpen(true)}
-      >
-        <View className="flex-row items-center justify-between gap-3">
-          <View className="flex-1">
-            <Text className="text-base font-bold text-white">{locationSummary(draft)}</Text>
-            {draft.place?.address ? (
-              <Text className="mt-1 text-sm text-white/60">{draft.place.address}</Text>
-            ) : null}
+      {variant === 'row' ? (
+        <FieldRow
+          label="Ort"
+          value={locationSummary(draft)}
+          muted={!draft.place}
+          accessibilityLabel="Ort auswählen"
+          expandable
+          onPress={() => setOpen(true)}
+        />
+      ) : (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Ort auswählen"
+          className="rounded-2xl border border-white/10 px-4 py-4"
+          style={{ backgroundColor: 'rgba(255,255,255,0.08)' }}
+          onPress={() => setOpen(true)}
+        >
+          <View className="flex-row items-center justify-between gap-3">
+            <View className="flex-1">
+              <Text className="text-base font-bold text-white">{locationSummary(draft)}</Text>
+              {draft.place?.address ? (
+                <Text className="mt-1 text-sm text-white/60">{draft.place.address}</Text>
+              ) : null}
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={accent} />
           </View>
-          <Ionicons name="chevron-forward" size={20} color={accent} />
-        </View>
-      </Pressable>
+        </Pressable>
+      )}
 
       <Modal
         transparent
@@ -85,19 +107,59 @@ export function LocationPicker({ draft, onChange, onOpenMapPicker }: LocationPic
               <View className="h-11 w-11" />
             </View>
             <Text className="mt-2 text-sm leading-5 text-white/55">
-              Nutze deinen aktuellen Standort oder wähle den Ort direkt auf der Karte.
+              Such nach einem Ort, nimm deinen aktuellen Standort oder wähle direkt auf der Karte.
             </Text>
 
             <View className="mt-5 gap-3">
+              {/* Search first: it is the only option that can name a real place,
+                  and it was previously reachable only by going through "Auf
+                  Karte auswählen" — a search field hidden behind a map picker is
+                  a search field nobody finds. `autoConfirm` returns the place on
+                  the tap that chose it, and the map moves with it. */}
               <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Ort suchen"
                 className="rounded-3xl border border-white/10 px-4 py-4"
                 style={{ backgroundColor: 'rgba(255,255,255,0.08)' }}
                 onPress={() => {
-                  onChange(applyPlace(draft, CURRENT_LOCATION_PLACE));
                   setOpen(false);
+                  InteractionManager.runAfterInteractions(() => {
+                    onOpenMapPicker?.(draft.mode, (place) => onChange(applyPlace(draft, place)), {
+                      focusCurrentLocation: false,
+                      autoConfirm: true,
+                      searchMode: true,
+                    });
+                  });
+                }}
+              >
+                <Text className="text-base font-bold text-white">Ort suchen</Text>
+                <Text className="mt-1 text-sm text-white/55">
+                  Café, Bar, Park — Treffer übernimmt den Ort direkt.
+                </Text>
+              </Pressable>
+
+              {/* Resolves a real coordinate through the picker instead of storing
+                  the CURRENT_LOCATION_PLACE placeholder, so the activity carries
+                  an actual position and the camera can move there. */}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Aktuellen Standort verwenden"
+                className="rounded-3xl border border-white/10 px-4 py-4"
+                style={{ backgroundColor: 'rgba(255,255,255,0.08)' }}
+                onPress={() => {
+                  setOpen(false);
+                  InteractionManager.runAfterInteractions(() => {
+                    onOpenMapPicker?.(draft.mode, (place) => onChange(applyPlace(draft, place)), {
+                      focusCurrentLocation: true,
+                      autoConfirm: true,
+                    });
+                  });
                 }}
               >
                 <Text className="text-base font-bold text-white">Aktuellen Standort verwenden</Text>
+                <Text className="mt-1 text-sm text-white/55">
+                  Nimmt deine Position und zentriert die Karte darauf.
+                </Text>
               </Pressable>
 
               <Pressable

@@ -1,7 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Pressable, ScrollView, Text, View } from 'react-native';
-
-import { PREVIEW_STATES } from '@/features/map/mapStyle/previewStates';
+import { Pressable, Text } from 'react-native';
 
 import type { MapStylePreference } from '@/features/map/mapStyle/types';
 import { AnimatedToggleIcon } from '@/shared/components/AnimatedToggleIcon';
@@ -16,9 +14,9 @@ const OPTIONS: {
   label: string;
   icon: keyof typeof Ionicons.glyphMap;
 }[] = [
-  { value: 'dynamic', label: 'Dynamisch', icon: 'partly-sunny' },
-  { value: 'light', label: 'Hell', icon: 'sunny' },
-  { value: 'dark', label: 'Dunkel', icon: 'moon' },
+  { value: 'dynamic', label: 'Automatisch', icon: 'partly-sunny' },
+  { value: 'light', label: 'Tag', icon: 'sunny' },
+  { value: 'dark', label: 'Nacht', icon: 'moon' },
 ];
 
 const ACCENT = SEMANTIC_COLOR.action;
@@ -32,44 +30,6 @@ export function MapStyleMenu({
   onSelect: (value: MapStylePreference) => void;
 }) {
   const colors = useOverlayColors();
-
-  // TEMPORARY: the numbered preview states. Delete this block (and
-  // previewStates.ts) once the time-of-day look is chosen.
-  const renderPreviewStates = () => (
-    <>
-      <View className="mx-2 my-1 h-px bg-muted-foreground/20" />
-      <Text className="px-2.5 pb-1 pt-1 text-xs font-bold uppercase tracking-wide text-muted-foreground">
-        Vorschau (temporär)
-      </Text>
-      {PREVIEW_STATES.map((state) => {
-        const active = state.id === preference;
-        return (
-          <Pressable
-            key={state.id}
-            accessibilityRole="button"
-            accessibilityState={{ selected: active }}
-            accessibilityLabel={`Kartenstil ${state.label}`}
-            className="flex-row items-center gap-2.5 rounded-xl py-2 pl-2.5 pr-3 active:opacity-70"
-            onPress={() => onSelect(state.id)}
-          >
-            <Ionicons
-              name={state.colorScheme === 'dark' ? 'moon-outline' : 'sunny-outline'}
-              size={16}
-              color={active ? ACCENT : colors.icon}
-            />
-            <Text
-              className="text-sm font-semibold"
-              numberOfLines={1}
-              style={{ color: active ? ACCENT : colors.icon }}
-            >
-              {state.label}
-            </Text>
-            {active ? <Ionicons name="checkmark" size={17} color={ACCENT} /> : null}
-          </Pressable>
-        );
-      })}
-    </>
-  );
 
   return (
     <FloatingSurface className="rounded-2xl" contentClassName="gap-0.5 px-1.5 py-1.5">
@@ -108,10 +68,6 @@ export function MapStyleMenu({
           </Pressable>
         );
       })}
-      {/* Scrolls so 11 rows never push the popover off-screen on a small phone. */}
-      <ScrollView style={{ maxHeight: 260 }} showsVerticalScrollIndicator={false}>
-        {renderPreviewStates()}
-      </ScrollView>
     </FloatingSurface>
   );
 }

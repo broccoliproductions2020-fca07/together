@@ -112,7 +112,9 @@ export interface ActivityService {
   /** Adds the actor to the activity's participants. Participant limits are
    * enforced atomically by the server callable. */
   joinActivity(actor: ActivityActor, id: string): Promise<boolean>;
-  /** Removes only the current user; the host must cancel instead. */
+  /** Removes only the current user. A leaving HOST hands the Activity to the
+   * longest-standing remaining participant (server-side succession); a host who
+   * is alone in it cannot leave and has to cancel. */
   leaveActivity(actor: ActivityActor, id: string): Promise<boolean>;
   /** Participant-vouched guest invite: adds one of the CALLER's confirmed
    * friends to the activity's read audience (host opt-in, server-checked). */

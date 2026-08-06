@@ -3,8 +3,7 @@ import { Modal, Pressable, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useThemeColors } from '@/features/theme';
-
-const ACCENT = '#6E8BF7';
+import { FONT, TEXT_CAPPED, TEXT_FLEXIBLE, TYPE } from '@/shared/theme';
 
 function Field({
   label,
@@ -22,9 +21,16 @@ function Field({
   const colors = useThemeColors();
   return (
     <View className="gap-1.5">
-      <Text className="text-sm font-bold text-foreground">{label}</Text>
+      <Text
+        {...TEXT_FLEXIBLE}
+        style={{ ...TYPE.label, fontFamily: FONT.semibold, color: colors.foreground }}
+      >
+        {label}
+      </Text>
       <TextInput
-        className="rounded-2xl border border-border bg-secondary px-4 py-3 text-base text-foreground"
+        {...TEXT_FLEXIBLE}
+        className="rounded-2xl border border-border bg-secondary px-4 py-3"
+        style={{ ...TYPE.body, fontFamily: FONT.medium, color: colors.foreground }}
         placeholder={placeholder}
         placeholderTextColor={colors.mutedForeground}
         value={value}
@@ -38,14 +44,17 @@ function Field({
 
 export interface ProposalComposerProps {
   visible: boolean;
+  /** The room's colour. Required — the composer never invents its own accent. */
+  accent: string;
   onClose: () => void;
   onSubmit: (data: { what: string; when?: string; where?: string }) => void;
 }
 
 /** Small modal to post a What/When/Where proposal into the chat. Only "Was"
  * is required — the proposal is deliberately looser than a real activity. */
-export function ProposalComposer({ visible, onClose, onSubmit }: ProposalComposerProps) {
+export function ProposalComposer({ visible, accent, onClose, onSubmit }: ProposalComposerProps) {
   const insets = useSafeAreaInsets();
+  const colors = useThemeColors();
   const [what, setWhat] = useState('');
   const [when, setWhen] = useState('');
   const [where, setWhere] = useState('');
@@ -96,8 +105,18 @@ export function ProposalComposer({ visible, onClose, onSubmit }: ProposalCompose
           onPress={(e) => e.stopPropagation()}
         >
           <View className="mb-4 h-1.5 w-12 self-center rounded-full bg-border" />
-          <Text className="mb-1 text-xl font-bold text-foreground">Vorschlag machen</Text>
-          <Text className="mb-4 text-sm text-muted-foreground">
+          <Text
+            {...TEXT_FLEXIBLE}
+            className="mb-1"
+            style={{ ...TYPE.body, fontFamily: FONT.bold, color: colors.foreground }}
+          >
+            Vorschlag machen
+          </Text>
+          <Text
+            {...TEXT_FLEXIBLE}
+            className="mb-4"
+            style={{ ...TYPE.label, fontFamily: FONT.medium, color: colors.mutedForeground }}
+          >
             Unverbindlich in die Runde werfen — wer mag, tippt „Bin dabei“.
           </Text>
 
@@ -128,10 +147,15 @@ export function ProposalComposer({ visible, onClose, onSubmit }: ProposalCompose
             accessibilityLabel="Vorschlagen"
             disabled={!what.trim()}
             onPress={handleSubmit}
-            className="mt-5 items-center justify-center rounded-2xl py-4 active:opacity-90"
-            style={{ backgroundColor: what.trim() ? ACCENT : `${ACCENT}4D` }}
+            className="mt-5 min-h-13 items-center justify-center rounded-2xl py-4 active:opacity-90"
+            style={{ backgroundColor: what.trim() ? accent : `${accent}4D` }}
           >
-            <Text className="text-base font-bold text-white">Vorschlagen</Text>
+            <Text
+              {...TEXT_CAPPED}
+              style={{ ...TYPE.body, fontFamily: FONT.bold, color: '#ffffff' }}
+            >
+              Vorschlagen
+            </Text>
           </Pressable>
         </Pressable>
       </Pressable>

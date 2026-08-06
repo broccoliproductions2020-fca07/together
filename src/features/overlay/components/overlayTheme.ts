@@ -14,7 +14,12 @@ export function useOverlayColors() {
     // raise it if icons lose contrast over a bright map.
     glassTint: isDark ? 'rgba(19,32,27,0.34)' : 'rgba(255,255,255,0.30)',
     highlight: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.55)',
-    border: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.72)',
+    // The edge is what gives a glass control its shape over a live map. In dark
+    // mode a white hairline does that; in light mode it CANNOT — white on a
+    // bright map is invisible, which is what made these buttons disappear. So
+    // light mode gets the opposite hairline, dark and faint, rather than a
+    // brand colour: the blue belongs to "offen", not to every button.
+    border: isDark ? 'rgba(255,255,255,0.10)' : 'rgba(20,33,28,0.16)',
     liquidWash: isDark ? 'rgba(19,32,27,0.66)' : 'rgba(255,255,255,0.42)',
   };
 }

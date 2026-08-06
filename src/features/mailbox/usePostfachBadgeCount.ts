@@ -18,7 +18,17 @@ import { useMailboxNow } from './useMailboxNow';
 export type PostfachBadgeSeverity = 'normal' | 'attention' | 'critical';
 
 export interface PostfachBadge {
+  /**
+   * The number on the map's Postfach button — everything the Postfach can show,
+   * chats included, because that button is the entry to the whole surface.
+   */
   count: number;
+  /**
+   * The number on the "Mitteilungen" row INSIDE the Postfach. Deliberately
+   * excludes chats: they are already counted on their own rows one screen
+   * below, and counting them twice made the same event appear as two.
+   */
+  mitteilungenCount: number;
   severity: PostfachBadgeSeverity;
 }
 
@@ -60,13 +70,13 @@ export function usePostfachBadge(): PostfachBadge {
     const unreadNotificationGroups = notificationGroups.filter((group) => group.unread).length;
     const loadedUnreadBeforeDeduplication = notifications.filter(isUnread).length;
     const pushOnlyHint = Math.max(0, unreadCount - loadedUnreadBeforeDeduplication);
+    // One definition, used by both surfaces. The Postfach button adds chats on
+    // top; the Mitteilungen row never does.
+    const mitteilungenCount =
+      incomingRequests.length + actionableSafetyCount + unreadNotificationGroups + pushOnlyHint;
     return {
-      count:
-        chatUnread +
-        incomingRequests.length +
-        actionableSafetyCount +
-        unreadNotificationGroups +
-        pushOnlyHint,
+      count: chatUnread + mitteilungenCount,
+      mitteilungenCount,
       severity,
     };
   }, [

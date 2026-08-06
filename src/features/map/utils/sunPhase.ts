@@ -32,12 +32,12 @@ export interface SunPhaseState {
  * night → dusk (dawn) → golden → day → golden → dusk → night.
  */
 const TRANSITIONS: { key: keyof ReturnType<typeof SunCalc.getTimes>; phase: SunPhase }[] = [
-  { key: 'nightEnd', phase: 'dusk' }, // astronomical dawn
+  { key: 'dawn', phase: 'dusk' }, // civil dawn: blue hour begins
   { key: 'sunrise', phase: 'golden' },
   { key: 'goldenHourEnd', phase: 'day' },
   { key: 'goldenHour', phase: 'golden' },
   { key: 'sunset', phase: 'dusk' },
-  { key: 'night', phase: 'night' }, // astronomical dusk
+  { key: 'dusk', phase: 'night' }, // civil dusk: night begins
 ];
 
 const DAY_MS = 24 * 60 * 60 * 1000;

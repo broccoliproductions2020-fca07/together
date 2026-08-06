@@ -327,7 +327,10 @@ export function NearbySheet({
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
       else if (next.size >= 20) {
-        Alert.alert('Bis zu 20 Personen', 'Eine spontane Runde kann hoechstens 20 Winks enthalten.');
+        Alert.alert(
+          'Bis zu 20 Personen',
+          'Eine spontane Runde kann hoechstens 20 Winks enthalten.',
+        );
         return current;
       } else next.add(id);
       return next;
@@ -406,7 +409,7 @@ export function NearbySheet({
             </View>
 
             <View className="mx-5 mb-1 mt-1">
-              <OpenStatusCard />
+              <OpenStatusCard visible={visible} />
             </View>
 
             <View className="mx-5 mb-2 mt-2">
@@ -465,8 +468,8 @@ export function NearbySheet({
                   ) : emptyReason === 'no-friends' ? (
                     <View className="items-center gap-3 py-6">
                       <Text className="text-center text-sm leading-5 text-white/40">
-                        Du hast noch niemanden bei Together. Füge zuerst Freunde hinzu — erst
-                        dann siehst du hier, wer offen ist.
+                        Du hast noch niemanden bei Together. Füge zuerst Freunde hinzu — erst dann
+                        siehst du hier, wer offen ist.
                       </Text>
                       <Pressable
                         accessibilityRole="button"
@@ -523,10 +526,7 @@ export function NearbySheet({
               )}
             </ScrollView>
 
-            <View
-              className="border-t border-white/8 px-5 pt-3"
-              style={{ paddingBottom: Math.max(insets.bottom, 12) }}
-            >
+            <View className="px-5 pt-3" style={{ paddingBottom: Math.max(insets.bottom, 12) }}>
               <SquircleButton
                 label={winkFooterLabel}
                 color={OPEN_COLOR}

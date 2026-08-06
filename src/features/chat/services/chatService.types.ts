@@ -29,6 +29,12 @@ export interface RoomMemberProfile {
 
 export type Unsubscribe = () => void;
 
+/** Stable pagination anchor: a timestamp alone is not unique enough. */
+export interface MessageCursor {
+  createdAt: number;
+  id: string;
+}
+
 /**
  * The chat backend seam. Its Firebase implementation uses Firestore and
  * callable Functions against either the emulator or the cloud project.
@@ -50,6 +56,19 @@ export interface ChatService {
     roomId: string,
     cb: (messages: ChatMessage[]) => void,
   ): Unsubscribe;
+  /**
+   * One page of OLDER messages, strictly before `cursor`. Never called
+   * automatically — only when the user presses "Ältere Nachrichten laden", so
+   * history costs reads exactly when it is asked for.
+   *
+   * The cursor is (createdAt, documentId), not a bare timestamp: messages
+   * written in the same millisecond would otherwise be skipped or repeated.
+   */
+  loadOlderMessages(
+    actor: ChatActor,
+    roomId: string,
+    cursor: MessageCursor,
+  ): Promise<{ messages: ChatMessage[]; reachedStart: boolean }>;
   /** Join an activity room (creates it on first join). Its end, or at least its
    * start, drives the 12-hour activity-chat retention. */
   joinActivity(
@@ -88,6 +107,18 @@ export interface ChatService {
   promoteAdmin(actor: ChatActor, roomId: string, memberUid: string): Promise<void>;
   /** Admin-only, group rooms only: set a custom room name. */
   renameRoom(actor: ChatActor, roomId: string, title: string): Promise<void>;
+  /**
+   * Admin-only, group rooms only: invite confirmed friends. They are NOT added
+   * — the server stores a pending invitation and notifies them, so joining
+   * stays their own decision.
+   */
+  inviteToGroup(
+    actor: ChatActor,
+    roomId: string,
+    inviteeUids: string[],
+  ): Promise<{ invited: number; skipped: number }>;
+  /** The invitee's answer. Every guard is re-checked server-side at this point. */
+  respondToGroupInvite(actor: ChatActor, roomId: string, accept: boolean): Promise<void>;
   /** Joinable-group teasers visible to the actor. Attach ONLY while the
    * NearbySheet is open (listener budget). */
   subscribeGroupOpenings(actor: ChatActor, cb: (openings: GroupOpening[]) => void): Unsubscribe;

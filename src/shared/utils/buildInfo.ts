@@ -15,6 +15,21 @@ const INTERNAL_VERSION =
   (Constants.expoConfig?.extra?.internalVersion as string | undefined) ?? '0.0.0';
 
 /**
+ * Whether this build may show technical failure detail on screen.
+ *
+ * Staging is our controlled test environment, so a device-only regression has to
+ * be diagnosable by reading the screen — a real error code, not a translated
+ * euphemism. Consumers see the euphemism. Gate anything that would be noise (or
+ * a leak) to a real user behind this.
+ */
+export const DIAGNOSTICS_VISIBLE =
+  __DEV__ ||
+  process.env.EXPO_PUBLIC_STAGING_DIAGNOSTICS === 'true' ||
+  Constants.expoConfig?.ios?.bundleIdentifier === 'com.broccolistudio.together.staging' ||
+  Constants.expoConfig?.android?.package === 'com.broccolistudio.together.staging' ||
+  Constants.expoConfig?.name === 'Together Staging';
+
+/**
  * Which native map renderer is actually live. Mirrors MAP_PROVIDER in
  * MapCanvas exactly. This matters because Apple Maps ignores `customMapStyle`
  * outright — if this reads `apple`, no map palette will ever apply, however
