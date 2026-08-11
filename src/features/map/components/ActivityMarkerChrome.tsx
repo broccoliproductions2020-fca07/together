@@ -24,6 +24,12 @@ import { MarkerImage } from './markerCapture';
 import {
   ACTIVITY_MARKER_CAPTURE_HEIGHT,
   ACTIVITY_MARKER_CAPTURE_WIDTH,
+  ACTIVITY_MARKER_GROUP_FACE_STREET,
+  ACTIVITY_MARKER_ROW_STEP,
+  ACTIVITY_MARKER_SHELL_HEIGHT,
+  ACTIVITY_MARKER_SHELL_RADIUS,
+  ACTIVITY_MARKER_SHELL_TOP,
+  activityMarkerShellWidths,
 } from './activityMarkerLayout';
 
 import { TEXT_FIXED } from '@/shared/theme';
@@ -35,10 +41,12 @@ const WARM_SURFACE = '#EFEAE1';
 const CX = ACTIVITY_MARKER_CAPTURE_WIDTH / 2;
 
 // Constant height: the marker only ever grows sideways as the map zooms in.
-const SHELL_H = 48;
-const SHELL_TOP = 6;
+// Height and radius live in activityMarkerLayout so the live aura can be the
+// SAME squircle instead of a lookalike drawn from copied numbers.
+const SHELL_H = ACTIVITY_MARKER_SHELL_HEIGHT;
+const SHELL_TOP = ACTIVITY_MARKER_SHELL_TOP;
 const CY = SHELL_TOP + SHELL_H / 2;
-const GROUP_SQUIRCLE_RADIUS = 16;
+const GROUP_SQUIRCLE_RADIUS = ACTIVITY_MARKER_SHELL_RADIUS;
 const FACE_SQUIRCLE_RADIUS = 13;
 
 // Mode ring / countdown geometry. One rounded rectangle follows the same
@@ -48,19 +56,13 @@ const RING_INNER_H = SHELL_H - RING_STROKE;
 
 const GROUP_FACE_CITY = 16;
 const GROUP_FACE_NEIGHBORHOOD = 18;
-const GROUP_FACE_STREET = 42;
+const GROUP_FACE_STREET = ACTIVITY_MARKER_GROUP_FACE_STREET;
 const SOLO_FACE_CITY = 43;
 const SOLO_FACE_NEIGHBORHOOD = 43;
 const SOLO_FACE_STREET = 43;
-const ROW_STEP = 32; // restrained 10 px overlap at the unfolded 42 px size
+const ROW_STEP = ACTIVITY_MARKER_ROW_STEP;
 
-/** Shell width per detail progress [city, neighborhood, street]. */
-function shellWidths(faceCount: number, solo: boolean): [number, number, number] {
-  // 43 px is exactly the 48 px shell's inner diameter after the 2.5 px ring.
-  if (solo) return [SHELL_H, SHELL_H, SHELL_H];
-  const streetSpan = GROUP_FACE_STREET + Math.max(0, faceCount - 1) * ROW_STEP + 10;
-  return [50, 54, streetSpan];
-}
+const shellWidths = activityMarkerShellWidths;
 
 export interface ActivityMarkerChromeProps {
   mode: ActivityMode;

@@ -108,6 +108,9 @@ export function OpenStatusCard({ visible = true }: { visible?: boolean }) {
     shareLocation,
     setShareLocation,
     shareLocationBlocked,
+    syncing,
+    syncError,
+    retrySync,
     close,
   } = useOpenStatus();
   const reducedMotion = useReducedMotion();
@@ -172,6 +175,18 @@ export function OpenStatusCard({ visible = true }: { visible?: boolean }) {
             </Text>
           </View>
         </Pressable>
+        {syncError ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Offen-Status erneut synchronisieren"
+            onPress={retrySync}
+            className="mx-3 mb-3 flex-row items-center gap-2 rounded-2xl bg-red-500/15 px-3 py-2.5 active:opacity-80"
+          >
+            <Ionicons name="alert-circle-outline" size={16} color="#F08497" />
+            <Text className="flex-1 text-xs leading-4 text-white/75">{syncError}</Text>
+            <Text className="text-xs font-bold text-[#F08497]">Erneut</Text>
+          </Pressable>
+        ) : null}
       </Animated.View>
     );
   }
@@ -200,6 +215,21 @@ export function OpenStatusCard({ visible = true }: { visible?: boolean }) {
         {shareLocation ? <Ionicons name="locate" size={13} color={OPEN_COLOR} /> : null}
         <DisclosureChevron expanded={expanded} />
       </Pressable>
+
+      {syncing ? (
+        <Text className="text-xs text-white/50">Status wird synchronisiert â€¦</Text>
+      ) : syncError ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Offen-Status erneut synchronisieren"
+          onPress={retrySync}
+          className="flex-row items-center gap-2 rounded-2xl bg-red-500/15 px-3 py-2.5 active:opacity-80"
+        >
+          <Ionicons name="alert-circle-outline" size={16} color="#F08497" />
+          <Text className="flex-1 text-xs leading-4 text-white/75">{syncError}</Text>
+          <Text className="text-xs font-bold text-[#F08497]">Erneut</Text>
+        </Pressable>
+      ) : null}
 
       {expanded ? (
         <Animated.View
@@ -343,12 +373,13 @@ function RefineControls({
                 : 'Freunde sehen dich ohne Näheangabe'}
             </Text>
           </View>
-          <Switch
-            value={shareLocation}
-            onValueChange={onShareLocationChange}
-            trackColor={{ false: 'rgba(255,255,255,0.15)', true: OPEN_COLOR }}
-            thumbColor="#ffffff"
-          />
+          <View pointerEvents="none">
+            <Switch
+              value={shareLocation}
+              trackColor={{ false: 'rgba(255,255,255,0.15)', true: OPEN_COLOR }}
+              thumbColor="#ffffff"
+            />
+          </View>
         </Pressable>
         {shareLocation && shareLocationBlocked ? (
           <Pressable

@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
 
 import { useThemeColors } from '@/features/theme';
@@ -26,15 +26,24 @@ export function ChatInputBar({
 }) {
   const colors = useThemeColors();
   const [text, setText] = useState('');
+  // State disables the control on the next render. This tiny synchronous gate
+  // closes the one-frame gap in which two physical taps could otherwise send
+  // the exact same message twice.
+  const sendInFlightRef = useRef(false);
   const canSend = text.trim().length > 0;
   const showCounter = text.length >= COUNTER_VISIBLE_FROM;
   const atLimit = text.length >= MESSAGE_MAX_LENGTH;
 
   function handleSend() {
+    if (sendInFlightRef.current) return;
     const trimmed = text.trim();
     if (!trimmed) return;
+    sendInFlightRef.current = true;
     onSend(trimmed);
     setText('');
+    requestAnimationFrame(() => {
+      sendInFlightRef.current = false;
+    });
   }
 
   return (

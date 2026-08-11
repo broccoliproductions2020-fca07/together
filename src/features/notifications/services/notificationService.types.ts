@@ -35,8 +35,12 @@ export interface NotificationDoc {
   safetyAlertAt?: number;
   createdAt: number;
   expireAt: number;
-  /** Legacy per-item cursor; new clients use users/{uid}.notificationsSeenAt. */
-  readAt?: number;
+  // No per-item read flag, on purpose. `firestore.rules` denies every client
+  // write to notifications (create/update/delete: if false) and no Cloud
+  // Function writes one, so such a field could never be set — it only promised
+  // a capability the app does not have, and `isUnread` was gating on a value
+  // that is always undefined. Read state is the single monotonic
+  // users/{uid}.notificationsSeenAt cursor.
 }
 
 export type Unsubscribe = () => void;

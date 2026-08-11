@@ -1,4 +1,4 @@
-# Together: Release-Prozess
+# Como: Release-Prozess
 
 Dieses Dokument beschreibt den ausführbaren Weg. Maßgeblich bleibt der Code;
 die Profile stehen in `eas.json`, der Backend-Region ist `europe-west3`, und die

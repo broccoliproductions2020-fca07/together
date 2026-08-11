@@ -89,7 +89,8 @@ export type Unsubscribe = () => void;
 /** A pre-generated id plus the write that makes it visible to the app. */
 export interface ActivityCreation {
   id: string;
-  ready: Promise<void>;
+  /** `queued` means the exact write is persisted locally and will resume on reconnect. */
+  ready: Promise<'sent' | 'queued'>;
 }
 
 /**

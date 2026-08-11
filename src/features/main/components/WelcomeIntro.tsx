@@ -111,7 +111,7 @@ export function WelcomeIntro() {
         <BrandGlow />
 
         <Animated.View entering={reducedMotion ? undefined : FadeInDown.duration(320)}>
-          <Text className="text-center text-3xl font-bold text-white">Willkommen bei Together</Text>
+          <Text className="text-center text-3xl font-bold text-white">Willkommen bei Como</Text>
           <Text className="mt-2 text-center text-base leading-6 text-white/60">
             Deine Zeit, deine Leute — ganz ohne Feed.
           </Text>
@@ -122,7 +122,7 @@ export function WelcomeIntro() {
             icon="people-outline"
             tint={COLORS.open}
             title="Freunde"
-            text="Together lebt von deinen Leuten — nur bestätigte Freunde sehen dich."
+            text="Como lebt von deinen Leuten — nur bestätigte Freunde sehen dich."
             delay={120}
           />
           <ValueRow

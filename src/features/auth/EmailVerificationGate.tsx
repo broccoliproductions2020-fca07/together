@@ -29,6 +29,7 @@ export function EmailVerificationGate() {
   const [checking, setChecking] = useState(false);
   const [sending, setSending] = useState(false);
   const [sentAt, setSentAt] = useState<number | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const checkingRef = useRef(false);
 
   const check = useCallback(
@@ -96,9 +97,16 @@ export function EmailVerificationGate() {
           text: 'Konto löschen',
           style: 'destructive',
           onPress: () => {
-            void deleteAccount().catch(() => {
-              void signOut();
-            });
+            if (deleting) return;
+            setDeleting(true);
+            void deleteAccount()
+              .catch(() => {
+                Alert.alert(
+                  'Konto konnte nicht gelöscht werden',
+                  'Du bist weiterhin angemeldet. Prüfe deine Verbindung und versuche es erneut.',
+                );
+              })
+              .finally(() => setDeleting(false));
           },
         },
       ],
@@ -168,7 +176,7 @@ export function EmailVerificationGate() {
               onPress={useDifferentAddress}
             >
               <Text className="text-sm font-semibold text-white/45">
-                Andere E-Mail-Adresse verwenden
+                {deleting ? 'Konto wird gelöscht …' : 'Andere E-Mail-Adresse verwenden'}
               </Text>
             </Pressable>
 

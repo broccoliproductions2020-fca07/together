@@ -90,10 +90,14 @@ module.exports = ({ config }) => {
   }
 
   const suffix = variant.suffix ? `.${variant.suffix}` : '';
+  const baseSchemes = Array.isArray(config.scheme) ? config.scheme : [config.scheme];
+  const schemes = baseSchemes.map((scheme) =>
+    variant.suffix ? `${scheme}-${variant.suffix}` : scheme,
+  );
   return {
     ...config,
     name: variant.label ? `${config.name} ${variant.label}` : config.name,
-    scheme: variant.suffix ? `${config.scheme}-${variant.suffix}` : config.scheme,
+    scheme: schemes.length === 1 ? schemes[0] : schemes,
     ...(isLocalDevServer ? { runtimeVersion: undefined } : {}),
     plugins: [
       ...(config.plugins ?? []),

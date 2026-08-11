@@ -17,9 +17,9 @@ export type PlaceSelection = Extract<MapSelection, { type: 'Place' }>;
 
 const UNKNOWN_PLACE_TITLE = 'Ort ohne Namen';
 
-function nativeMapsUrl(place: PlaceSelection, intent: 'details' | 'route') {
-  const { latitude, longitude } = place.coordinate;
-  const encodedTitle = encodeURIComponent(place.title);
+function nativeMapsUrl(coordinate: MapCoordinate, title: string, intent: 'details' | 'route') {
+  const { latitude, longitude } = coordinate;
+  const encodedTitle = encodeURIComponent(title);
   const encodedCoordinate = `${latitude},${longitude}`;
 
   if (Platform.OS === 'ios') {
@@ -36,7 +36,20 @@ function nativeMapsUrl(place: PlaceSelection, intent: 'details' | 'route') {
 }
 
 export function openNativeMaps(place: PlaceSelection, intent: 'details' | 'route') {
-  void Linking.openURL(nativeMapsUrl(place, intent));
+  void Linking.openURL(nativeMapsUrl(place.coordinate, place.title, intent));
+}
+
+/**
+ * Same hand-off to the OS maps app for anything that is not a Place selection —
+ * an Activity carries a target coordinate + place name but is a different
+ * entity, so it gets the coordinate form instead of a faked Place object.
+ */
+export function openNativeMapsAt(
+  coordinate: MapCoordinate,
+  title: string,
+  intent: 'details' | 'route',
+) {
+  void Linking.openURL(nativeMapsUrl(coordinate, title, intent));
 }
 
 function compactAddressParts(parts: (string | null | undefined)[]) {
@@ -115,6 +128,7 @@ export function infoToActivityPreview(info: ActivityInfo): ActivitySelectionPrev
     title: info.title,
     subtitle: info.description ?? `${info.participantCount} Teilnehmer`,
     mode: info.mode,
+    plannedMode: info.plannedMode,
     participantCount: info.participantCount,
     participants: info.participants,
     targetCoordinate: info.targetCoordinate,

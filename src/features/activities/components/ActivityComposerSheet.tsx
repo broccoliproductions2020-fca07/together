@@ -125,6 +125,7 @@ export function ActivityComposerSheet({
   // A ref (not state) so a rapid double-tap can't slip a second submit() call
   // through before the disabled/opacity state has actually re-rendered.
   const submittingRef = useRef(false);
+  const requestRevisionRef = useRef(0);
   const [draft, setDraft] = useState<ActivityDraft>(
     () => initialDraft ?? createInitialActivityDraft(initialMode, initialPlace, initialTitle),
   );
@@ -138,6 +139,7 @@ export function ActivityComposerSheet({
   useEffect(() => {
     if (!visible) return;
 
+    requestRevisionRef.current += 1;
     setExpanded(false);
     setCategoryManuallyChanged(Boolean(initialDraft?.category));
     setValidationError(null);
@@ -239,17 +241,20 @@ export function ActivityComposerSheet({
       return;
     }
 
-    // Vanish instantly only when the map will actually launch a marker in
     // (a new activity with a real pin, motion allowed) — otherwise slide as usual.
-    const willLaunch =
-      !editing && !reducedMotion && draft.place?.latitude != null && draft.place?.longitude != null;
-    setInstantClose(willLaunch);
+    // A new activity owns the map immediately after this tap. Its optimistic
+    // marker can launch before Firebase confirms the callable, so never leave
+    // the composer in front of that animation. Edits still wait for their write
+    // because they have no equivalent local visual to roll back to.
+    setInstantClose(!editing);
 
+    const requestRevision = ++requestRevisionRef.current;
     submittingRef.current = true;
     setSubmitting(true);
     try {
       await onSubmit?.(draft);
     } catch (error) {
+      if (requestRevision !== requestRevisionRef.current) return;
       const rawMessage = error instanceof Error ? error.message : '';
       const message = rawMessage.replace(/^\[[^\]]+\]\s*/, '').trim();
       setValidationError(
@@ -258,9 +263,16 @@ export function ActivityComposerSheet({
           : 'Die Änderungen konnten nicht gespeichert werden. Bitte versuche es erneut.',
       );
       setInstantClose(false);
+    } finally {
+      if (requestRevision !== requestRevisionRef.current) return;
       submittingRef.current = false;
       setSubmitting(false);
     }
+  }
+
+  function dismiss() {
+    requestRevisionRef.current += 1;
+    onClose();
   }
 
   return (
@@ -268,9 +280,7 @@ export function ActivityComposerSheet({
       animationType={instantClose ? 'none' : 'slide'}
       transparent
       visible={visible && !suspended}
-      onRequestClose={() => {
-        if (!submitting) onClose();
-      }}
+      onRequestClose={dismiss}
       statusBarTranslucent
       navigationBarTranslucent
     >
@@ -291,7 +301,7 @@ export function ActivityComposerSheet({
             <Animated.View pointerEvents="none" style={[styles.topWash, sheetTopWashStyle]} />
             <View pointerEvents="none" style={styles.innerSurface} />
 
-            <View className="px-5 pt-3" pointerEvents={submitting ? 'none' : 'auto'}>
+            <View className="px-5 pt-3">
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={expanded ? 'Composer verkleinern' : 'Composer erweitern'}
@@ -302,8 +312,8 @@ export function ActivityComposerSheet({
               </Pressable>
 
               <View className="mb-4 flex-row items-center">
-                <View className="h-11 w-11" />
-                <View className="flex-1 items-center">
+                <View pointerEvents="none" className="h-11 w-11" />
+                <View pointerEvents={submitting ? 'none' : 'auto'} className="flex-1 items-center">
                   <Text className="text-center text-2xl font-bold text-white">
                     {editing ? 'Aktivität bearbeiten' : 'Aktivität erstellen'}
                   </Text>
@@ -312,8 +322,7 @@ export function ActivityComposerSheet({
                   accessibilityRole="button"
                   accessibilityLabel="Composer schließen"
                   className="h-11 w-11 items-center justify-center rounded-full bg-white/10"
-                  disabled={submitting}
-                  onPress={onClose}
+                  onPress={dismiss}
                 >
                   <Ionicons name="close" size={22} color="#F4F5F7" />
                 </Pressable>

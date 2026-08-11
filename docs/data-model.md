@@ -1,4 +1,4 @@
-# Together data model
+# Como data model
 
 This is a compact map of the persisted model. The executable authorities are
 [`firestore.rules`](../firestore.rules), [`functions/index.js`](../functions/index.js)

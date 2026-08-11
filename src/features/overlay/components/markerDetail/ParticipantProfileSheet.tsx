@@ -144,7 +144,7 @@ export function ParticipantProfileSheet({
             </Text>
           </View>
           <Text className="mt-4 text-sm leading-5 text-white/55">
-            Profildetails sind bei Together nur für bestätigte Freunde sichtbar.
+            Profildetails sind bei Como nur für bestätigte Freunde sichtbar.
           </Text>
 
           {cta ? (

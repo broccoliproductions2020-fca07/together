@@ -9,7 +9,7 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { CalendarScreen } from '@/features/calendar';
-import { MapScreen } from '@/features/map';
+import { MapScreen, useMapBoot } from '@/features/map';
 import { SafetyConsoleHost, SafetyConsolePanel, useSafety } from '@/features/safety';
 
 import { useMainMode } from '../hooks/useMainMode';
@@ -56,6 +56,7 @@ function ModeLayer({ active, children }: { active: boolean; children: ReactNode 
  */
 export function MainSurface() {
   const { mode, setMode } = useMainMode();
+  const { prewarming } = useMapBoot();
   const { heimwegFocusActive } = useSafety();
   const [mapLocationPickerActive, setMapLocationPickerActive] = useState(false);
   const [mapDetailSheetVisible, setMapDetailSheetVisible] = useState(false);
@@ -84,7 +85,7 @@ export function MainSurface() {
     <View style={{ flex: 1 }} className="bg-background">
       <ModeLayer active={mode === 'map'}>
         <MapScreen
-          active={mode === 'map'}
+          active={mode === 'map' && !prewarming}
           editActivityRequest={editActivityRequest}
           onEditActivityRequestHandled={(requestId) =>
             setEditActivityRequest((current) =>

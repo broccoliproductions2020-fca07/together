@@ -11,7 +11,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { Alert } from 'react-native';
+import { Alert, AppState } from 'react-native';
 
 import { useAuth } from '@/features/auth';
 import { claimNotificationResponse } from '@/features/notifications/notificationResponse';
@@ -83,6 +83,12 @@ interface SafetyContextValue {
   startingHeimweg: boolean;
   /** Current honest activation phase for progressive feedback. */
   startPhase: SafetyStartPhase | null;
+  /** A status escalation/de-escalation is waiting for RTDB acknowledgement. */
+  statusUpdating: boolean;
+  /** A rejected status change leaves the last confirmed Safety status intact. */
+  statusError: string | null;
+  checkInUpdating: boolean;
+  checkInError: string | null;
   setConsoleMinimized: (minimized: boolean) => void;
   /**
    * Heimweg-Fokus: the map shows ONLY shared walks (activities and chrome
@@ -122,6 +128,7 @@ interface SafetyContextValue {
 }
 
 const SafetyContext = createContext<SafetyContextValue | null>(null);
+const SAFETY_REQUEST_TIMEOUT_MS = 15_000;
 
 function initialsOf(name: string): string {
   return (
@@ -161,12 +168,24 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
   const [endingHeimweg, setEndingHeimweg] = useState(false);
   const [startingHeimweg, setStartingHeimweg] = useState(false);
   const [startPhase, setStartPhase] = useState<SafetyStartPhase | null>(null);
+  const [statusUpdating, setStatusUpdating] = useState(false);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const [checkInUpdating, setCheckInUpdating] = useState(false);
+  const [checkInError, setCheckInError] = useState<string | null>(null);
+  const [appActive, setAppActive] = useState(AppState.currentState === 'active');
 
   // A later walk must never re-open the companion view unasked: the manual
   // toggle dies together with the last shared session.
   useEffect(() => {
     if (!friendSessions.length) setCompanionFocus(false);
   }, [friendSessions.length]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      setAppActive(nextState === 'active');
+    });
+    return () => subscription.remove();
+  }, []);
 
   const heimwegFocusActive =
     friendSessions.length > 0 && (session ? !consoleMinimized : companionFocus);
@@ -184,6 +203,11 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
   const endingHeimwegRef = useRef(false);
   const startingHeimwegRef = useRef(false);
   const pendingOwnCheckInResponseRef = useRef(false);
+  const statusWriteChainRef = useRef<Promise<void>>(Promise.resolve());
+  const statusRequestRevisionRef = useRef(0);
+  const requestedStatusRef = useRef<SafetyStatus | null>(null);
+  const checkInInFlightRef = useRef(false);
+  const checkInRequestRevisionRef = useRef(0);
   const pendingOwnerActionRef = useRef<SafetyOwnerNotificationAction | null>(null);
   const companionConfirmationNotificationRefs = useRef(
     new Map<string, { confirmedAt: number; identifier: string | null }>(),
@@ -258,6 +282,11 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
     setSessionResolved(false);
     return safetyService.subscribeMySession(actor, (next) => {
       setSession(next);
+      if (next && requestedStatusRef.current === next.status) {
+        requestedStatusRef.current = null;
+        setStatusUpdating(false);
+        setStatusError(null);
+      }
       setSessionResolved(true);
     });
   }, [actor]);
@@ -266,12 +295,14 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
   const ownSessionExpiresAt = session?.expiresAt;
   const ownSessionStatus = session?.status;
 
-  // Companion side — always on while signed in: safety beats listener budget
-  // here, and the fan-out index keeps it to (1 + active sessions) listeners.
+  // A backgrounded companion cannot inspect the map. Pushes remain the urgent
+  // nudge there; detach live RTDB listeners until the app is foregrounded.
+  // Keep the last local state so its already-scheduled reachability reminder is
+  // not cancelled just because the app moved to the background.
   useEffect(() => {
-    setFriendSessions([]);
+    if (!appActive) return;
     return safetyService.subscribeFriendSessions(actor, setFriendSessions);
-  }, [actor]);
+  }, [actor, appActive]);
 
   // "Ich bin erreichbar" is deliberately a short, conscious promise. The
   // reminder is entirely local: no poll, no scheduled Function and no owner
@@ -637,11 +668,46 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
 
   const setStatus = useCallback(
     (status: SafetyStatus) => {
-      // The RTDB subscription is the single source that reconfigures the
-      // native task. Doing that here as well races the subscription's restart.
-      fireAndForget('setStatus', safetyService.setStatus(actor, status));
+      if (!sessionRef.current) return;
+      if (statusUpdating && requestedStatusRef.current === status) return;
+      const requestRevision = ++statusRequestRevisionRef.current;
+      requestedStatusRef.current = status;
+      setStatusUpdating(true);
+      setStatusError(null);
+      const timeout = setTimeout(() => {
+        if (requestRevision !== statusRequestRevisionRef.current) return;
+        setStatusUpdating(false);
+        setStatusError(
+          'Deine Sicherheitsmeldung wartet noch auf eine Verbindung. Der aktuelle Status bleibt unverändert.',
+        );
+      }, SAFETY_REQUEST_TIMEOUT_MS);
+      const write = statusWriteChainRef.current
+        .catch(() => {})
+        .then(async () => {
+          // A newer hold supersedes a queued older one. If the older write has
+          // already reached RTDB, the chain still serializes the newer intent
+          // behind it so a late response cannot overwrite the final choice.
+          if (requestRevision !== statusRequestRevisionRef.current) return;
+          await safetyService.setStatus(actor, status);
+        });
+      statusWriteChainRef.current = write.catch(() => {});
+      void write.then(
+        () => {
+          clearTimeout(timeout);
+          if (requestRevision !== statusRequestRevisionRef.current) return;
+          setStatusUpdating(false);
+          setStatusError(null);
+        },
+        () => {
+          clearTimeout(timeout);
+          if (requestRevision !== statusRequestRevisionRef.current) return;
+          requestedStatusRef.current = null;
+          setStatusUpdating(false);
+          setStatusError('Deine Sicherheitsmeldung konnte nicht übermittelt werden. Bitte erneut halten.');
+        },
+      );
     },
-    [actor, fireAndForget],
+    [actor, statusUpdating],
   );
 
   const value = useMemo<SafetyContextValue>(
@@ -652,6 +718,10 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
       endingHeimweg,
       startingHeimweg,
       startPhase,
+      statusUpdating,
+      statusError,
+      checkInUpdating,
+      checkInError,
       setConsoleMinimized,
       heimwegFocusActive,
       setCompanionFocus,
@@ -674,7 +744,7 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
           await ensureSafetyNotificationPermission();
           if (safetyBackgroundRequired() && !(await requestSafetyBackgroundPermission())) {
             throw new Error(
-              'Für einen zuverlässigen Heimweg benötigt Together den Standortzugriff „Immer“. Es wird nichts im Hintergrund geteilt, bevor du den Heimweg startest.',
+              'Für einen zuverlässigen Heimweg benötigt Como den Standortzugriff „Immer“. Es wird nichts im Hintergrund geteilt, bevor du den Heimweg startest.',
             );
           }
           setStartPhase('session');
@@ -767,13 +837,45 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
       },
       continueAfterStationary,
       answerCheckIn: () => {
-        if (!session?.checkIn) return;
-        fireAndForget(
-          'answerCheckIn',
-          safetyService.updateSession(actor, {
-            checkIn: { ...session.checkIn, answeredAt: Date.now() },
-          }),
-        );
+        const current = sessionRef.current;
+        if (!current?.checkIn || checkInInFlightRef.current) return;
+        const requestRevision = ++checkInRequestRevisionRef.current;
+        checkInInFlightRef.current = true;
+        setCheckInUpdating(true);
+        setCheckInError(null);
+        const answeredAt = Date.now();
+        const timeout = setTimeout(() => {
+          if (requestRevision !== checkInRequestRevisionRef.current) return;
+          checkInInFlightRef.current = false;
+          setCheckInUpdating(false);
+          setCheckInError(
+            'Die Bestätigung wartet noch auf eine Verbindung. Dein Check-in gilt erst nach einer Bestätigung als gesendet.',
+          );
+        }, SAFETY_REQUEST_TIMEOUT_MS);
+        void safetyService
+          .updateSession(actor, {
+            checkIn: { ...current.checkIn, answeredAt },
+          })
+          .then(() => {
+            clearTimeout(timeout);
+            if (requestRevision !== checkInRequestRevisionRef.current) return;
+            setCheckInError(null);
+            const latest = sessionRef.current;
+            if (!latest?.checkIn || latest.checkIn.dueAt !== current.checkIn?.dueAt) return;
+            const next = { ...latest, checkIn: { ...latest.checkIn, answeredAt } };
+            sessionRef.current = next;
+            setSession(next);
+          })
+          .catch(() => {
+            clearTimeout(timeout);
+            if (requestRevision !== checkInRequestRevisionRef.current) return;
+            setCheckInError('Deine Bestätigung konnte nicht gesendet werden. Bitte erneut tippen.');
+          })
+          .finally(() => {
+            if (requestRevision !== checkInRequestRevisionRef.current) return;
+            checkInInFlightRef.current = false;
+            setCheckInUpdating(false);
+          });
       },
       confirmReachable: (ownerUid) => safetyService.confirmReachable(actor, ownerUid),
       withdrawReachability: (ownerUid) => safetyService.withdrawReachability(actor, ownerUid),
@@ -793,6 +895,10 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
       endingHeimweg,
       startingHeimweg,
       startPhase,
+      statusUpdating,
+      statusError,
+      checkInUpdating,
+      checkInError,
       heimwegFocusActive,
       mapFocusRequest,
       actor,

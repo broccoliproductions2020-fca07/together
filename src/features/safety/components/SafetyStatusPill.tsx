@@ -38,6 +38,7 @@ export function SafetyStatusPill({
     friendSessions,
     consoleMinimized,
     heimwegFocusActive,
+    startingHeimweg,
     setConsoleMinimized,
     setCompanionFocus,
   } = useSafety();
@@ -120,7 +121,7 @@ export function SafetyStatusPill({
       friendSessions.length === 1
         ? `Heimweg von ${friendSessions[0].displayName}`
         : `Heimwege von ${friendSessions.length} Freunden`;
-    icon = 'chevron-up';
+    icon = startingHeimweg ? 'time-outline' : 'chevron-up';
     a11yLabel = `${label}. Auf der Karte ansehen`;
     onPress = () => {
       // With an own session the focus IS the open split console.
@@ -137,7 +138,9 @@ export function SafetyStatusPill({
     color = STATUS_COLOR[session!.status];
     const count = session!.audienceUids.length;
     label =
-      session!.status === 'red'
+      startingHeimweg
+        ? 'Heimweg wird gestartet'
+        : session!.status === 'red'
         ? 'Hilferuf gesendet'
         : session!.status === 'orange'
           ? 'Unsicher gemeldet'

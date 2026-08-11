@@ -211,8 +211,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   }, [registerPushHint]);
 
   const isUnread = useCallback(
-    (notification: NotificationDoc) =>
-      !notification.readAt && notification.createdAt > effectiveSeenAt,
+    (notification: NotificationDoc) => notification.createdAt > effectiveSeenAt,
     [effectiveSeenAt],
   );
   const exactUnreadCount = useMemo(

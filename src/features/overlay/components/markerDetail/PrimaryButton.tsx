@@ -12,12 +12,23 @@ export function PrimaryButton({
   label,
   accent,
   icon,
+  loading = false,
   onPress,
 }: {
   label: string;
   accent: string;
   icon: keyof typeof Ionicons.glyphMap;
+  loading?: boolean;
   onPress?: () => void;
 }) {
-  return <SquircleButton label={label} color={accent} icon={icon} onPress={onPress} />;
+  return (
+    <SquircleButton
+      label={label}
+      color={accent}
+      icon={icon}
+      loading={loading}
+      disabled={loading}
+      onPress={onPress}
+    />
+  );
 }

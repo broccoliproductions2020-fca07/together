@@ -12,6 +12,7 @@ import * as Notifications from 'expo-notifications';
 
 import { useAuth } from '@/features/auth';
 import { claimNotificationResponse } from '@/features/notifications/notificationResponse';
+import { useSyncOutbox } from '@/features/sync';
 
 import { chatService } from './services/chatService';
 import type { ChatActor, GroupMember, RoomMemberProfile } from './services/chatService.types';
@@ -24,6 +25,7 @@ import type {
   ProposalData,
   SendFailureReason,
   SpontaneousRound,
+  SpontaneousRoundInvitePreview,
 } from './types';
 import { isRetryableFailure, MESSAGE_MAX_LENGTH } from './types';
 
@@ -52,8 +54,10 @@ export interface ChatContextValue {
   /** Re-sends a failed optimistic message (tap-to-retry on the bubble). */
   retryMessage: (roomId: string, messageId: string) => void;
   sendProposal: (roomId: string, data: Omit<ProposalData, 'confirmedBy' | 'planned'>) => void;
+  /** Retries a rejected proposal confirmation or plan write. */
+  retryProposal: (roomId: string, messageId: string) => void;
   toggleProposalConfirm: (roomId: string, messageId: string) => void;
-  markProposalPlanned: (roomId: string, messageId: string) => void;
+  markProposalPlanned: (roomId: string, messageId: string) => Promise<void>;
   getUnreadCount: (roomId: string) => number;
   markRead: (roomId: string) => void;
   /** Attach/detach the message listener for the currently open chat. */
@@ -80,6 +84,7 @@ export interface ChatContextValue {
   loadOlderMessages: (roomId: string) => Promise<void>;
   /** True while a page is in flight — the button shows it rather than nothing. */
   isLoadingOlder: (roomId: string) => boolean;
+  getHistoryError: (roomId: string) => string | null;
   /** False once the room's first message is on screen; hides the load button. */
   hasMoreHistory: (roomId: string) => boolean;
   /** Joinable-group teasers ("Am Planen"). Empty unless openings are watched. */
@@ -92,6 +97,10 @@ export interface ChatContextValue {
   setRoundSurfaceActive: (active: boolean) => void;
   startSpontaneousRound: (members: GroupMember[]) => Promise<string>;
   acceptSpontaneousRound: (roundId: string) => Promise<void>;
+  getSpontaneousRoundInvitePreview: (
+    roundId: string,
+  ) => Promise<SpontaneousRoundInvitePreview | null>;
+  declineSpontaneousRound: (roundId: string) => Promise<void>;
   leaveSpontaneousRound: (roundId: string) => Promise<void>;
 }
 
@@ -127,6 +136,8 @@ export type ChatActivityContextValue = Pick<
   | 'setRoundSurfaceActive'
   | 'startSpontaneousRound'
   | 'acceptSpontaneousRound'
+  | 'getSpontaneousRoundInvitePreview'
+  | 'declineSpontaneousRound'
   | 'leaveSpontaneousRound'
 >;
 
@@ -151,7 +162,9 @@ function initialsOf(name: string): string {
  */
 function classifySendFailure(error: unknown): SendFailureReason {
   const code =
-    typeof error === 'object' && error && 'code' in error ? String((error as { code: unknown }).code) : '';
+    typeof error === 'object' && error && 'code' in error
+      ? String((error as { code: unknown }).code)
+      : '';
   const message =
     typeof error === 'object' && error && 'message' in error
       ? String((error as { message: unknown }).message)
@@ -164,10 +177,55 @@ function classifySendFailure(error: unknown): SendFailureReason {
   if (normalized === 'failed-precondition') {
     return /abgelaufen/i.test(message) ? 'room_expired' : 'not_member';
   }
-  if (normalized === 'unavailable' || normalized === 'deadline-exceeded' || normalized === 'internal') {
+  if (
+    normalized === 'unavailable' ||
+    normalized === 'deadline-exceeded' ||
+    normalized === 'internal'
+  ) {
     return 'network';
   }
   return normalized ? 'unknown' : 'network';
+}
+
+type ProposalMutation = {
+  action: 'confirm' | 'plan';
+  /** The desired confirmation state for the current user. */
+  targetConfirmed?: boolean;
+  /** Whether the card should project the requested state over the server copy. */
+  optimistic: boolean;
+  pending: boolean;
+  error?: string;
+};
+
+function proposalMutationKey(roomId: string, messageId: string) {
+  return `${roomId}:${messageId}`;
+}
+
+function withProposalMutation(
+  message: ChatMessage,
+  mutation: ProposalMutation | undefined,
+  currentUid: string,
+): ChatMessage {
+  if (!mutation || !message.proposal) return message;
+
+  let proposal = message.proposal;
+  if (mutation.optimistic) {
+    if (mutation.action === 'confirm' && mutation.targetConfirmed !== undefined) {
+      const confirmedBy = new Set(proposal.confirmedBy);
+      if (mutation.targetConfirmed) confirmedBy.add(currentUid);
+      else confirmedBy.delete(currentUid);
+      proposal = { ...proposal, confirmedBy: [...confirmedBy] };
+    } else if (mutation.action === 'plan') {
+      proposal = { ...proposal, planned: true };
+    }
+  }
+
+  return {
+    ...message,
+    proposal,
+    proposalPending: mutation.pending ? mutation.action : undefined,
+    proposalError: mutation.error,
+  };
 }
 
 function sortRooms(rooms: ChatRoom[]) {
@@ -196,6 +254,7 @@ function readChatPush(data: unknown): { roomId: string; messageCount?: number } 
  */
 export function ChatProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
+  const { operations: syncOperations } = useSyncOutbox();
   const actor = useMemo<ChatActor>(
     () => ({
       uid: user?.id ?? 'u_you',
@@ -207,6 +266,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const [rooms, setRooms] = useState<ChatRoom[]>([]);
   const roomsRef = useRef<ChatRoom[]>([]);
+  // Async reads can resolve after an account switch or after a newer listener
+  // update. The revision makes those old answers harmless instead of letting
+  // them overwrite the current account's local truth.
+  const activeAccountUidRef = useRef(actor.uid);
+  activeAccountUidRef.current = actor.uid;
+  const roomDataRevisionRef = useRef(0);
   const [roomsCacheReady, setRoomsCacheReady] = useState(false);
   const [roomsListActive, setRoomsListActive] = useState(false);
   const roomsListActiveRef = useRef(false);
@@ -223,6 +288,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   // `pending`) instead of waiting for the callable→Firestore→listener
   // round-trip, which reads as "nothing happened" on a real network.
   const [pendingByRoom, setPendingByRoom] = useState<Record<string, ChatMessage[]>>({});
+  const [proposalMutations, setProposalMutations] = useState<Record<string, ProposalMutation>>(
+    {},
+  );
+  const queuedMessageIdsRef = useRef<Set<string>>(new Set());
+  const proposalMutationInFlightRef = useRef<Set<string>>(new Set());
   // Stack of rooms currently held open by a chat surface. Multiple surfaces can
   // overlap (inline sheet chat below a full-screen Modal) — a plain single id
   // would let the FIRST surface's unmount tear down the listener the surface on
@@ -235,6 +305,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [historyByRoom, setHistoryByRoom] = useState<Record<string, ChatMessage[]>>({});
   const [loadingOlderRooms, setLoadingOlderRooms] = useState<Record<string, boolean>>({});
   const [historyExhausted, setHistoryExhausted] = useState<Record<string, boolean>>({});
+  const [historyErrors, setHistoryErrors] = useState<Record<string, string>>({});
   // Optimistically-joined room ids: `joinActivity` writes go through a backend
   // round-trip, so without this the
   // "Dazustoßen" button appears to do nothing until the rooms listener catches
@@ -242,8 +313,67 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   // it true, so there's no flicker back.
   const [optimisticJoined, setOptimisticJoined] = useState<Set<string>>(() => new Set());
 
+  // Message sends are the one chat action that is safe to keep locally: their
+  // stable client id becomes the document id server-side, so reconnecting can
+  // never create a second copy. Rehydrate those bubbles after an app restart.
+  useEffect(() => {
+    const outboxMessages = syncOperations.flatMap((operation): ChatMessage[] => {
+      if (operation.kind !== 'chat.message') return [];
+      const { roomId, text, clientMessageId } = operation.payload;
+      return [
+        {
+          id: clientMessageId,
+          activityId: roomId,
+          authorId: actor.uid,
+          authorName: actor.displayName,
+          initials: actor.initials,
+          text,
+          createdAt: operation.createdAt,
+          isMe: true,
+          pending: operation.status === 'queued',
+          ...(operation.status === 'queued' ? { queuedForSync: true } : {}),
+          ...(operation.status === 'failed'
+            ? {
+                failed: true,
+                failureReason: classifySendFailure({ code: operation.lastErrorCode }),
+              }
+            : {}),
+        },
+      ];
+    });
+    const nextIds = new Set(outboxMessages.map((message) => message.id));
+    const settledIds = [...queuedMessageIdsRef.current].filter((id) => !nextIds.has(id));
+    queuedMessageIdsRef.current = nextIds;
+    setPendingByRoom((current) => {
+      const next = Object.fromEntries(
+        Object.entries(current).map(([roomId, messages]) => [
+          roomId,
+          messages.filter((message) => !nextIds.has(message.id)),
+        ]),
+      ) as Record<string, ChatMessage[]>;
+      outboxMessages.forEach((message) => {
+        next[message.activityId] = [...(next[message.activityId] ?? []), message];
+      });
+      return next;
+    });
+    if (settledIds.length) {
+      setTimeout(() => {
+        setPendingByRoom((current) => {
+          const next = Object.fromEntries(
+            Object.entries(current).map(([roomId, messages]) => [
+              roomId,
+              messages.filter((message) => !settledIds.includes(message.id)),
+            ]),
+          ) as Record<string, ChatMessage[]>;
+          return next;
+        });
+      }, 5000);
+    }
+  }, [actor.displayName, actor.initials, actor.uid, syncOperations]);
+
   const commitRooms = useCallback(
     (next: ChatRoom[]) => {
+      roomDataRevisionRef.current += 1;
       const normalized = sortRooms(next);
       roomsRef.current = normalized;
       setRooms(normalized);
@@ -275,8 +405,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   );
 
   const refreshRooms = useCallback(async () => {
+    const accountUid = actor.uid;
+    const revision = roomDataRevisionRef.current;
     try {
-      applyRoomList(await chatService.getRooms(actor));
+      const next = await chatService.getRooms(actor);
+      if (activeAccountUidRef.current !== accountUid || roomDataRevisionRef.current !== revision) {
+        return;
+      }
+      applyRoomList(next);
     } catch (error) {
       // Cached summaries remain usable offline. The next visible list/open room
       // will reconcile again instead of replacing the UI with an empty state.
@@ -286,9 +422,17 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const refreshSingleRoom = useCallback(
     (roomId: string) => {
+      const accountUid = actor.uid;
+      const revision = roomDataRevisionRef.current;
       void chatService
         .getRoom(actor, roomId)
         .then((room) => {
+          if (
+            activeAccountUidRef.current !== accountUid ||
+            roomDataRevisionRef.current !== revision
+          ) {
+            return;
+          }
           if (room) upsertRoom(room);
         })
         .catch((error) => console.warn('[chat] Raum konnte nicht abgeglichen werden:', error));
@@ -303,6 +447,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setRoomsCacheReady(false);
     roomsRef.current = [];
     setRooms([]);
+    setMessagesByRoom({});
+    setPendingByRoom({});
+    setProposalMutations({});
+    proposalMutationInFlightRef.current.clear();
+    setOpenRoomStack([]);
+    setOptimisticJoined(new Set());
+    roomDataRevisionRef.current += 1;
     pushedUnreadRoomsRef.current = {};
     setPushedUnreadRooms({});
     // Paged history is account-scoped like everything else here — a new signed
@@ -310,16 +461,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     setHistoryByRoom({});
     setHistoryExhausted({});
     setLoadingOlderRooms({});
+    setHistoryErrors({});
     void loadCachedRooms(actor.uid).then((cached) => {
       if (cancelled) return;
-      roomsRef.current = cached;
-      setRooms(cached);
+      commitRooms(cached);
       setRoomsCacheReady(true);
     });
     return () => {
       cancelled = true;
     };
-  }, [actor.uid]);
+  }, [actor.uid, commitRooms]);
 
   // Backgrounded apps do not need live unread/preview updates: push wakes the
   // user if needed, and the native cache makes the foreground resume immediate.
@@ -351,7 +502,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   // Listener 1: room summaries only while their visible list is open.
   useEffect(() => {
     if (appBackgrounded || !roomsListActive) return;
-    return chatService.subscribeRooms(actor, applyRoomList);
+    const accountUid = actor.uid;
+    return chatService.subscribeRooms(actor, (next) => {
+      if (activeAccountUidRef.current !== accountUid) return;
+      applyRoomList(next);
+    });
   }, [actor, appBackgrounded, applyRoomList, roomsListActive]);
 
   const markPushedUnread = useCallback(
@@ -412,10 +567,28 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   // Listener 2: messages of the open room only.
   useEffect(() => {
     if (appBackgrounded || !openRoomId) return;
+    const accountUid = actor.uid;
     return chatService.subscribeMessages(actor, openRoomId, (messages) => {
+      if (activeAccountUidRef.current !== accountUid) return;
       setMessagesByRoom((current) => ({ ...current, [openRoomId]: messages }));
-      // The server echo replaces the local pending copy (matched by author +
-      // text; the time guard tolerates minor clock skew).
+      setProposalMutations((current) => {
+        let next = current;
+        for (const message of messages) {
+          const key = proposalMutationKey(openRoomId, message.id);
+          const mutation = next[key];
+          if (!mutation || !message.proposal) continue;
+          const applied =
+            mutation.action === 'confirm'
+              ? message.proposal.confirmedBy.includes(actor.uid) === mutation.targetConfirmed
+              : message.proposal.planned === true;
+          if (!applied) continue;
+          if (next === current) next = { ...current };
+          delete next[key];
+        }
+        return next;
+      });
+      // New clients use the exact stable message id. The legacy author/text
+      // fallback keeps optimistic echoes from an older app version working.
       setPendingByRoom((current) => {
         const pending = current[openRoomId];
         if (!pending?.length) return current;
@@ -428,7 +601,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         const remaining = pending.filter((p) => {
           const index = unmatched.findIndex(
             (m) =>
-              m.authorId === p.authorId && m.text === p.text && m.createdAt >= p.createdAt - 15_000,
+              m.id === p.id ||
+              (m.authorId === p.authorId &&
+                m.text === p.text &&
+                m.createdAt >= p.createdAt - 15_000),
           );
           if (index === -1) return true;
           unmatched.splice(index, 1);
@@ -449,7 +625,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setGroupOpenings([]);
       return;
     }
-    return chatService.subscribeGroupOpenings(actor, setGroupOpenings);
+    const accountUid = actor.uid;
+    return chatService.subscribeGroupOpenings(actor, (openings) => {
+      if (activeAccountUidRef.current !== accountUid) return;
+      setGroupOpenings(openings);
+    });
   }, [actor, openingsActive, appBackgrounded]);
 
   // One tightly bounded listener powers the fixed map control. It is not an
@@ -462,12 +642,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setSpontaneousRound(null);
       return;
     }
+    const accountUid = actor.uid;
     return chatService.subscribeSpontaneousRound(actor, (round) => {
+      if (activeAccountUidRef.current !== accountUid) return;
       setSpontaneousRound(round);
       // The host has no room until the first person accepts. Reconcile that
       // one document when the listener observes the transition, without
       // keeping the complete room list live on the map.
-      if (round && round.memberIds.length >= 2 && !roomsRef.current.some((room) => room.id === round.id)) {
+      if (
+        round &&
+        round.memberIds.length >= 2 &&
+        !roomsRef.current.some((room) => room.id === round.id)
+      ) {
         refreshSingleRoom(round.id);
       }
     });
@@ -527,7 +713,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         [...older, ...full].forEach((m) => byId.set(m.id, m));
         const mapped = [...byId.values()]
           .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
-          .map((m) => ({ ...m, isMe: m.authorId === actor.uid }));
+          .map((m) =>
+            withProposalMutation(
+              { ...m, isMe: m.authorId === actor.uid },
+              proposalMutations[proposalMutationKey(roomId, m.id)],
+              actor.uid,
+            ),
+          );
         return pending.length ? [...mapped, ...pending] : mapped;
       }
       const last = findRoom(roomId)?.lastMessage;
@@ -548,23 +740,31 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         : [];
       return pending.length ? [...stub, ...pending] : stub;
     },
-    [messagesByRoom, historyByRoom, pendingByRoom, findRoom, actor.uid],
+    [messagesByRoom, historyByRoom, pendingByRoom, proposalMutations, findRoom, actor.uid],
   );
 
   const loadOlderMessages = useCallback(
     async (roomId: string) => {
       if (loadingOlderRooms[roomId] || historyExhausted[roomId]) return;
+      const accountUid = actor.uid;
       const older = historyByRoom[roomId] ?? [];
       const live = messagesByRoom[roomId] ?? [];
       const oldestKnown = older[0] ?? live[0];
       if (!oldestKnown) return;
 
       setLoadingOlderRooms((current) => ({ ...current, [roomId]: true }));
+      setHistoryErrors((current) => {
+        if (current[roomId] === undefined) return current;
+        const next = { ...current };
+        delete next[roomId];
+        return next;
+      });
       try {
         const page = await chatService.loadOlderMessages(actor, roomId, {
           createdAt: oldestKnown.createdAt,
           id: oldestKnown.id,
         });
+        if (activeAccountUidRef.current !== accountUid) return;
         setHistoryByRoom((current) => {
           const existing = current[roomId] ?? [];
           const byId = new Map<string, ChatMessage>();
@@ -580,9 +780,17 @@ export function ChatProvider({ children }: { children: ReactNode }) {
           setHistoryExhausted((current) => ({ ...current, [roomId]: true }));
         }
       } catch (error) {
-        console.warn('[chat] Ältere Nachrichten konnten nicht geladen werden:', error);
+        console.warn('[chat] Older messages could not be loaded:', error);
+        if (activeAccountUidRef.current === accountUid) {
+          setHistoryErrors((current) => ({
+            ...current,
+            [roomId]: 'Ältere Nachrichten konnten nicht geladen werden. Bitte versuche es erneut.',
+          }));
+        }
       } finally {
-        setLoadingOlderRooms((current) => ({ ...current, [roomId]: false }));
+        if (activeAccountUidRef.current === accountUid) {
+          setLoadingOlderRooms((current) => ({ ...current, [roomId]: false }));
+        }
       }
     },
     [actor, historyByRoom, historyExhausted, loadingOlderRooms, messagesByRoom],
@@ -682,6 +890,18 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     [actor, refreshSingleRoom],
   );
 
+  const getSpontaneousRoundInvitePreview = useCallback(
+    (roundId: string) => chatService.getSpontaneousRoundInvitePreview(actor, roundId),
+    [actor],
+  );
+
+  const declineSpontaneousRound = useCallback(
+    async (roundId: string) => {
+      await chatService.declineSpontaneousRound(actor, roundId);
+    },
+    [actor],
+  );
+
   const leaveSpontaneousRound = useCallback(
     async (roundId: string) => {
       await chatService.leaveSpontaneousRound(actor, roundId);
@@ -711,8 +931,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   // vanishing message is the worst possible outcome of a flaky network.
   const deliverPending = useCallback(
     (roomId: string, message: ChatMessage) => {
-      chatService.sendMessage(actor, roomId, message.text).then(
-        () => {
+      chatService.sendMessage(actor, roomId, message.text, message.id).then(
+        (result) => {
+          if (result === 'queued') return;
           // Normally the listener echo prunes the pending copy; this delayed
           // fallback only catches echoes the matcher missed (heavy clock skew).
           setTimeout(() => removePending(roomId, message.id), 5000);
@@ -734,6 +955,99 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       );
     },
     [actor, removePending],
+  );
+
+  const deliverPendingProposal = useCallback(
+    (roomId: string, message: ChatMessage) => {
+      const proposal = message.proposal;
+      if (!proposal) return;
+      chatService.sendProposal(actor, roomId, proposal).then(
+        () => {
+          // Proposal callables do not accept a client id yet. The listener's
+          // author/text matcher normally removes this local copy; retain the
+          // same bounded fallback as text messages for a missed echo.
+          setTimeout(() => removePending(roomId, message.id), 5000);
+        },
+        (error) => {
+          console.warn('[chat] sendProposal fehlgeschlagen:', error);
+          const failureReason = classifySendFailure(error);
+          setPendingByRoom((current) => {
+            const pending = current[roomId];
+            if (!pending?.some((m) => m.id === message.id)) return current;
+            return {
+              ...current,
+              [roomId]: pending.map((m) =>
+                m.id === message.id ? { ...m, failed: true, failureReason } : m,
+              ),
+            };
+          });
+        },
+      );
+    },
+    [actor, removePending],
+  );
+
+  const runProposalMutation = useCallback(
+    (
+      roomId: string,
+      messageId: string,
+      action: ProposalMutation['action'],
+      targetConfirmed?: boolean,
+    ): Promise<void> => {
+      const key = proposalMutationKey(roomId, messageId);
+      if (proposalMutationInFlightRef.current.has(key)) return Promise.resolve();
+
+      proposalMutationInFlightRef.current.add(key);
+      const mutation: ProposalMutation = {
+        action,
+        targetConfirmed,
+        optimistic: true,
+        pending: true,
+      };
+      setProposalMutations((current) => ({ ...current, [key]: mutation }));
+      const write =
+        action === 'confirm'
+          ? chatService.toggleProposalConfirm(actor, roomId, messageId, targetConfirmed !== true)
+          : chatService.markProposalPlanned(actor, roomId, messageId);
+
+      return write
+        .then(
+          () => {
+            // The acknowledgement is the confirmation. Keep the projected
+            // value until the next listener snapshot catches up, but remove
+            // the busy state immediately.
+            setProposalMutations((current) => {
+              const currentMutation = current[key];
+              if (!currentMutation || currentMutation !== mutation) return current;
+              return { ...current, [key]: { ...currentMutation, pending: false } };
+            });
+          },
+          (error) => {
+            console.warn(`[chat] proposal ${action} fehlgeschlagen:`, error);
+            setProposalMutations((current) => {
+              const currentMutation = current[key];
+              if (!currentMutation || currentMutation !== mutation) return current;
+              return {
+                ...current,
+                [key]: {
+                  ...currentMutation,
+                  optimistic: false,
+                  pending: false,
+                  error:
+                    action === 'confirm'
+                      ? 'Deine Zusage konnte nicht gespeichert werden.'
+                      : 'Die Activity wurde erstellt, aber der Vorschlag noch nicht als geplant markiert.',
+                },
+              };
+            });
+            throw error;
+          },
+        )
+        .finally(() => {
+          proposalMutationInFlightRef.current.delete(key);
+        });
+    },
+    [actor],
   );
 
   // Accepting adds the user to memberIds server-side. Reconciling that one
@@ -777,12 +1091,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         };
       },
       getRoom: findRoom,
-      markProposalPlanned: (roomId, messageId) => {
-        fireAndForget(
-          'markProposalPlanned',
-          chatService.markProposalPlanned(actor, roomId, messageId),
-        );
-      },
+      markProposalPlanned: (roomId, messageId) => runProposalMutation(roomId, messageId, 'plan'),
       getUnreadCount,
       isRoomAdmin: (roomId) => {
         const room = findRoom(roomId);
@@ -794,8 +1103,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       removeMember: (roomId, memberUid) => chatService.removeMember(actor, roomId, memberUid),
       promoteAdmin: (roomId, memberUid) => chatService.promoteAdmin(actor, roomId, memberUid),
       renameRoom: (roomId, title) => chatService.renameRoom(actor, roomId, title),
-      inviteToGroup: (roomId, inviteeUids) =>
-        chatService.inviteToGroup(actor, roomId, inviteeUids),
+      inviteToGroup: (roomId, inviteeUids) => chatService.inviteToGroup(actor, roomId, inviteeUids),
       respondToGroupInvite,
       groupOpenings,
       setOpeningsActive,
@@ -805,13 +1113,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setRoundSurfaceActive,
       startSpontaneousRound,
       acceptSpontaneousRound,
+      getSpontaneousRoundInvitePreview,
+      declineSpontaneousRound,
       leaveSpontaneousRound,
     }),
     [
       actor,
       createGroup,
       findRoom,
-      fireAndForget,
       getUnreadCount,
       groupOpenings,
       joinActivity,
@@ -821,7 +1130,10 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       spontaneousRound,
       startSpontaneousRound,
       acceptSpontaneousRound,
+      getSpontaneousRoundInvitePreview,
+      declineSpontaneousRound,
       leaveSpontaneousRound,
+      runProposalMutation,
     ],
   );
 
@@ -852,7 +1164,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         const trimmed = text.trim().slice(0, MESSAGE_MAX_LENGTH);
         if (!trimmed) return;
         const pendingMessage: ChatMessage = {
-          id: `pending-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          id: `message_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
           activityId: roomId,
           authorId: actor.uid,
           authorName: actor.displayName,
@@ -887,22 +1199,57 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         deliverPending(roomId, revived);
       },
       sendProposal: (roomId, data) => {
-        fireAndForget('sendProposal', chatService.sendProposal(actor, roomId, data));
+        const pendingProposal: ChatMessage = {
+          id: `proposal_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          activityId: roomId,
+          authorId: actor.uid,
+          authorName: actor.displayName,
+          initials: actor.initials,
+          text: data.what?.trim() || 'Vorschlag',
+          createdAt: Date.now(),
+          isMe: true,
+          kind: 'proposal',
+          proposal: { ...data, confirmedBy: [actor.uid] },
+          pending: true,
+        };
+        setPendingByRoom((current) => ({
+          ...current,
+          [roomId]: [...(current[roomId] ?? []), pendingProposal],
+        }));
+        deliverPendingProposal(roomId, pendingProposal);
+      },
+      retryProposal: (roomId, messageId) => {
+        const pending = (pendingByRoom[roomId] ?? []).find(
+          (message) => message.id === messageId && message.failed && message.proposal,
+        );
+        if (pending && isRetryableFailure(pending.failureReason)) {
+          const revived: ChatMessage = {
+            ...pending,
+            failed: false,
+            failureReason: undefined,
+            createdAt: Date.now(),
+          };
+          setPendingByRoom((current) => ({
+            ...current,
+            [roomId]: (current[roomId] ?? []).map((message) =>
+              message.id === messageId ? revived : message,
+            ),
+          }));
+          deliverPendingProposal(roomId, revived);
+          return;
+        }
+        const mutation = proposalMutations[proposalMutationKey(roomId, messageId)];
+        if (!mutation?.error) return;
+        void runProposalMutation(roomId, messageId, mutation.action, mutation.targetConfirmed).catch(
+          () => {},
+        );
       },
       toggleProposalConfirm: (roomId, messageId) => {
         const message = messagesByRoom[roomId]?.find((m) => m.id === messageId);
         const alreadyConfirmed = message?.proposal?.confirmedBy.includes(actor.uid) ?? false;
-        fireAndForget(
-          'toggleProposalConfirm',
-          chatService.toggleProposalConfirm(actor, roomId, messageId, alreadyConfirmed),
-        );
+        void runProposalMutation(roomId, messageId, 'confirm', !alreadyConfirmed).catch(() => {});
       },
-      markProposalPlanned: (roomId, messageId) => {
-        fireAndForget(
-          'markProposalPlanned',
-          chatService.markProposalPlanned(actor, roomId, messageId),
-        );
-      },
+      markProposalPlanned: (roomId, messageId) => runProposalMutation(roomId, messageId, 'plan'),
       getUnreadCount,
       markRead: (roomId) => {
         const room = findRoom(roomId);
@@ -936,11 +1283,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       removeMember: (roomId, memberUid) => chatService.removeMember(actor, roomId, memberUid),
       promoteAdmin: (roomId, memberUid) => chatService.promoteAdmin(actor, roomId, memberUid),
       renameRoom: (roomId, title) => chatService.renameRoom(actor, roomId, title),
-      inviteToGroup: (roomId, inviteeUids) =>
-        chatService.inviteToGroup(actor, roomId, inviteeUids),
+      inviteToGroup: (roomId, inviteeUids) => chatService.inviteToGroup(actor, roomId, inviteeUids),
       respondToGroupInvite,
       loadOlderMessages,
       isLoadingOlder: (roomId) => loadingOlderRooms[roomId] === true,
+      getHistoryError: (roomId) => historyErrors[roomId] ?? null,
       hasMoreHistory: (roomId) => historyExhausted[roomId] !== true,
       groupOpenings,
       setRoomsListActive,
@@ -951,6 +1298,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       setRoundSurfaceActive,
       startSpontaneousRound,
       acceptSpontaneousRound,
+      getSpontaneousRoundInvitePreview,
+      declineSpontaneousRound,
       leaveSpontaneousRound,
     }),
     [
@@ -963,9 +1312,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       messagesByRoom,
       pendingByRoom,
       deliverPending,
+      deliverPendingProposal,
       groupOpenings,
       fireAndForget,
       historyExhausted,
+      historyErrors,
       joinActivity,
       leaveRoom,
       loadOlderMessages,
@@ -977,7 +1328,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       spontaneousRound,
       startSpontaneousRound,
       acceptSpontaneousRound,
+      getSpontaneousRoundInvitePreview,
+      declineSpontaneousRound,
       leaveSpontaneousRound,
+      proposalMutations,
+      runProposalMutation,
     ],
   );
 

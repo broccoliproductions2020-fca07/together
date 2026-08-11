@@ -7,6 +7,7 @@
     "@expo/vector-icons": "^15.0.2",
     "@react-native-async-storage/async-storage": "^2.2.0",
     "@react-native-community/datetimepicker": "8.4.4",
+    "@react-native-community/netinfo": "11.4.1",
     "@react-native-firebase/app": "^25.1.0",
     "@react-native-firebase/app-check": "^25.1.0",
     "@react-native-firebase/auth": "^25.1.0",
@@ -61,7 +62,6 @@
     "@types/suncalc": "^1.9.2",
     "@xenova/transformers": "^2.17.2",
     "cross-env": "^10.1.0",
-    "eas-cli": "21.4.0",
     "electron": "^41.1.0",
     "electron-builder": "^26.15.3",
     "eslint": "^9.39.4",
@@ -95,8 +95,8 @@
     "check:node": "node scripts/check-node-version.cjs",
     "legal:html": "node scripts/generate-legal-html.mjs",
     "update:development": "cross-env APP_VARIANT=development EXPO_PUBLIC_FIREBASE_EMULATORS=true EXPO_PUBLIC_CRASH_REPORTING_ENABLED=false eas update --channel development --environment development --platform all",
-    "update:staging": "npm run verify:release && eas update --channel staging --environment preview --platform all --non-interactive",
-    "update:production": "node scripts/release-guard.cjs && npm run verify:release && eas update --channel production --environment production --platform all --non-interactive",
+    "update:staging": "npm run verify:release && cross-env APP_VARIANT=staging EXPO_PUBLIC_FIREBASE_EMULATORS=false EXPO_PUBLIC_FIREBASE_APP_CHECK_ENABLED=true EXPO_PUBLIC_CRASH_REPORTING_ENABLED=true EXPO_PUBLIC_STAGING_DIAGNOSTICS=true eas update --channel staging --environment preview --platform ios --non-interactive",
+    "update:production": "node scripts/release-guard.cjs && npm run verify:release && cross-env APP_VARIANT=production EXPO_PUBLIC_FIREBASE_EMULATORS=false EXPO_PUBLIC_FIREBASE_APP_CHECK_ENABLED=true EXPO_PUBLIC_CRASH_REPORTING_ENABLED=true eas update --channel production --environment production --platform all --non-interactive",
     "test:activity-understanding": "node scripts/evaluate-activity-embeddings.mjs Xenova/multilingual-e5-small",
     "typecheck": "tsc --noEmit",
     "lint": "expo lint",
@@ -110,10 +110,13 @@
     "preflight:functions:prod": "node scripts/functions-deploy-safety.cjs --project prod",
     "deploy:functions:dev": "node scripts/functions-deploy-safety.cjs --project dev --deploy",
     "deploy:functions:prod": "node scripts/functions-deploy-safety.cjs --project prod --deploy",
-    "deploy:functions:poi:dev": "node scripts/functions-deploy-safety.cjs --project dev --only autocompletePlaces,resolvePlaceLocation --deploy",
+    "deploy:functions:timers:dev": "node scripts/functions-deploy-safety.cjs --project dev --only maintainRuntime,scheduleJourneyReminder,dispatchJourneyReminder,scheduleSafetyAutoExtend,dispatchSafetyAutoExtend --force --deploy",
+    "deploy:functions:timers:prod": "node scripts/functions-deploy-safety.cjs --project prod --only maintainRuntime,scheduleJourneyReminder,dispatchJourneyReminder,scheduleSafetyAutoExtend,dispatchSafetyAutoExtend --force --deploy",
+    "test:safety-task": "node scripts/firebase-functions-emulators-exec.js \"node scripts/test-safety-task.js\"",
+    "deploy:functions:poi:dev": "node scripts/functions-deploy-safety.cjs --project dev --only places --deploy",
     "deploy:dev": "npm run preflight:functions:dev && npm run deploy:rules:dev && npm run deploy:functions:dev",
     "deploy:prod": "node scripts/release-guard.cjs && npm run verify:release && npm run preflight:functions:prod && npm run deploy:rules:prod && npm run deploy:functions:prod",
-    "verify:release": "npm run check:node && npm run typecheck && npm run lint:src && npm run test:firestore-rules && npm run test:storage-rules && npm run test:journey-rtdb && npm run test:activity-backfill && npm run test:functions && npm run test:email-verification-gate",
+    "verify:release": "npm run check:node && npm run typecheck && npm run lint:src && npm run test:firestore-rules && npm run test:storage-rules && npm run test:journey-rtdb && npm run test:activity-backfill && npm run test:functions && npm run test:safety-task && npm run test:email-verification-gate",
     "build:staging": "eas build --profile staging --platform all",
     "build:production": "eas build --profile production --platform all",
     "android:build": "powershell -ExecutionPolicy Bypass -File scripts/build-android-devclient.ps1",
@@ -133,7 +136,7 @@
   },
   "build": {
     "appId": "com.broccolistudio.together.operations",
-    "productName": "Together Betrieb",
+    "productName": "Como Betrieb",
     "artifactName": "${productName}-Setup-${version}.${ext}",
     "directories": {
       "output": "admin/desktop/release"
@@ -166,7 +169,14 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Together Betrieb"
+      "shortcutName": "Como Betrieb"
+    }
+  },
+  "expo": {
+    "install": {
+      "exclude": [
+        "react-native-maps"
+      ]
     }
   }
 }

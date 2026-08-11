@@ -97,6 +97,10 @@ function ConsoleContent({
     imSafe,
     arriveSafe,
     endingHeimweg,
+    statusUpdating,
+    statusError,
+    checkInUpdating,
+    checkInError,
     extendHeimweg,
     answerCheckIn,
     setConsoleMinimized,
@@ -180,7 +184,7 @@ function ConsoleContent({
           {activating ? 'Heimweg wird gestartet' : STATUS_WORD[session.status]}
         </Text>
         <View className="flex-row items-center gap-1.5">
-          {activating ? (
+          {activating || statusUpdating ? (
             <ActivityIndicator size="small" color={STATUS_COLOR.blue} />
           ) : (
             <Ionicons name="locate-outline" size={14} color="rgba(244,245,247,0.55)" />
@@ -188,9 +192,12 @@ function ConsoleContent({
           <Text className="text-sm text-white/55">
             {activating
               ? 'Deine Freunde werden informiert'
-              : `Letztes Update · ${agoLabel(session.updatedAt, now)}`}
+              : statusUpdating
+                ? 'Deine Sicherheitsmeldung wird übermittelt'
+                : `Letztes Update · ${agoLabel(session.updatedAt, now)}`}
           </Text>
         </View>
+        {statusError ? <Text className="text-center text-xs text-[#E87773]">{statusError}</Text> : null}
         {expirySoon ? (
           <View className="flex-row items-center gap-2">
             <Ionicons name="timer-outline" size={14} color="rgba(244,245,247,0.55)" />
@@ -244,6 +251,7 @@ function ConsoleContent({
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Alles okay bestätigen"
+            disabled={checkInUpdating}
             onPress={answerCheckIn}
             className="mt-2 w-full flex-row items-center gap-3 rounded-2xl border px-4 py-3.5 active:opacity-85"
             style={{
@@ -253,7 +261,9 @@ function ConsoleContent({
           >
             <Ionicons name="hand-left-outline" size={20} color={STATUS_COLOR.orange} />
             <View className="flex-1">
-              <Text className="text-base font-bold text-white">Alles okay?</Text>
+              <Text className="text-base font-bold text-white">
+                {checkInUpdating ? 'Wird bestätigt …' : 'Alles okay?'}
+              </Text>
               <Text className="text-xs text-white/55">
                 Tippe, damit deine Freunde wissen, dass es dir gut geht.
               </Text>
@@ -263,6 +273,7 @@ function ConsoleContent({
             </Text>
           </Pressable>
         ) : null}
+        {checkInError ? <Text className="text-center text-xs text-[#E87773]">{checkInError}</Text> : null}
 
         {session.status === 'red' ? (
           <Pressable

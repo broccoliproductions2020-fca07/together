@@ -17,6 +17,7 @@ export const JOURNEY_LOCATION_TASK = 'together.journey.location.v1';
 export const JOURNEY_NOTIFICATION_TASK = 'together.journey.notification.v1';
 export const JOURNEY_REMINDER_CATEGORY = 'together.journey.reminder.v1';
 export const JOURNEY_AUTO_SHARE_ACTION = 'together.journey.auto-share.v1';
+export const JOURNEY_NOT_NOW_ACTION = 'together.journey.not-now.v1';
 /** Data-only local trigger that (best-effort) starts the watcher at T-30 —
  * see `scheduleArmTrigger`. Never shown as the reminder push; no user copy. */
 const JOURNEY_ARM_TRIGGER_KIND = 'journey_arm_due';
@@ -32,13 +33,18 @@ const HARD_MAX_MS = 2 * 60 * 60 * 1000;
 const EVENT_END_BUFFER_MS = 30 * 60 * 1000;
 const ARRIVAL_RADIUS_METERS = 100;
 const ARRIVAL_CONFIRMATIONS = 2;
-const ARRIVAL_VISIBLE_MS = 15 * 60 * 1000;
+const ARRIVAL_STATUS_RETENTION_MS = 15 * 60 * 1000;
 const LOCATION_INTERVAL_MS = 30_000;
 const LOCATION_DISTANCE_INTERVAL_METERS = 20;
 const MAX_USABLE_ACCURACY_METERS = 45;
 const MIN_MOVEMENT_METERS = 40;
 const MIN_MOVEMENT_SPEED_MPS = 0.45;
 const MAX_MOVEMENT_SAMPLE_GAP_MS = 4 * 60 * 1000;
+
+// iOS and Android can deliver several deferred fixes in one task callback, or
+// invoke callbacks close together. Keep only the latest publishable state and
+// serialize batches so an older fix can never win the RTDB rate-limit race.
+let locationBatchProcessing: Promise<void> = Promise.resolve();
 
 type AutomationStatus = 'armed' | 'underway' | 'arrived';
 
@@ -312,7 +318,7 @@ async function startNativeLocationUpdates() {
     ...(Platform.OS === 'android'
       ? {
           foregroundService: {
-            notificationTitle: 'Together: Anreise vorbereitet',
+            notificationTitle: 'Como: Anreise vorbereitet',
             notificationBody: 'Dein Standort wird erst bei Bewegung mit Teilnehmern geteilt.',
             notificationColor: '#6E8BF7',
             killServiceOnDestroy: true,
@@ -335,10 +341,7 @@ async function publishLocation(
   now: number,
   initial = false,
 ) {
-  const expiresAt =
-    status === 'arrived'
-      ? Math.min(now + ARRIVAL_VISIBLE_MS, journeyExpiry(state, now))
-      : journeyExpiry(state, now);
+  const expiresAt = journeyExpiry(state, now);
   const location = {
     lat: coordinate.latitude,
     lng: coordinate.longitude,
@@ -358,6 +361,26 @@ async function finishForExpiry(state: StoredJourney) {
   await journeyService.stopJourney(state.actor, state.activity.id).catch(() => {});
   await stopNativeLocationUpdates().catch(() => {});
   await writeStoredJourney(null);
+}
+
+async function finishForArrival(state: StoredJourney, now: number) {
+  await cancelArmTrigger(state);
+  // The RTDB node is removed before the local state says "arrived". That way
+  // the confirmation is never shown while a participant could still read a
+  // final coordinate.
+  await journeyService.stopJourney(state.actor, state.activity.id);
+  await stopNativeLocationUpdates().catch(() => {});
+  state.status = 'arrived';
+  state.arrivalExpiresAt = Math.min(now + ARRIVAL_STATUS_RETENTION_MS, journeyExpiry(state, now));
+  state.currentCoordinate = undefined;
+  state.lastObservation = undefined;
+  state.updatedAt = new Date(now).toISOString();
+  await writeStoredJourney(state);
+  await notificationService.showJourneyStatus({
+    activityId: state.activity.id,
+    title: state.activity.title,
+    state: 'arrived',
+  });
 }
 
 /**
@@ -382,7 +405,7 @@ export async function ensureBackgroundWatcherArmed() {
   await startNativeLocationUpdates();
 }
 
-async function processLocation(location: Location.LocationObject) {
+async function processLocation(location: Location.LocationObject, allowPublish = true) {
   const state = await readStoredJourney();
   if (!state || state.status === 'arrived') return;
   if (!(await hasMatchingSignedInUser(state))) return;
@@ -415,7 +438,9 @@ async function processLocation(location: Location.LocationObject) {
     state.status = 'underway';
     state.startedAt = new Date(now).toISOString();
     state.currentCoordinate = observation.coordinate;
-    await publishLocation(state, observation.coordinate, 'onTheWay', now, true);
+    if (allowPublish) {
+      await publishLocation(state, observation.coordinate, 'onTheWay', now, true);
+    }
     await writeStoredJourney(state);
     await notificationService.showJourneyStatus({
       activityId: state.activity.id,
@@ -434,21 +459,41 @@ async function processLocation(location: Location.LocationObject) {
       : 0;
 
   if (state.arrivalHits >= ARRIVAL_CONFIRMATIONS) {
-    state.status = 'arrived';
-    state.arrivalExpiresAt = Math.min(now + ARRIVAL_VISIBLE_MS, journeyExpiry(state, now));
-    await publishLocation(state, observation.coordinate, 'arrived', now);
-    await writeStoredJourney(state);
-    await stopNativeLocationUpdates().catch(() => {});
-    await notificationService.showJourneyStatus({
-      activityId: state.activity.id,
-      title: state.activity.title,
-      state: 'arrived',
-    });
+    await finishForArrival(state, now);
     return;
   }
 
-  await publishLocation(state, observation.coordinate, 'onTheWay', now);
+  if (allowPublish) {
+    await publishLocation(state, observation.coordinate, 'onTheWay', now);
+  }
   await writeStoredJourney(state);
+}
+
+async function processLocationBatch(locations: Location.LocationObject[]) {
+  const usable = locations.filter(locationIsUsable);
+  if (!usable.length) return;
+
+  // A newly armed journey needs two observations to establish real movement.
+  // Consume the oldest one locally only, then publish the newest one at most
+  // once. An underway journey always skips straight to the newest fix.
+  const initialState = await readStoredJourney();
+  if (
+    initialState?.status === 'armed' &&
+    !initialState.lastObservation &&
+    usable.length > 1
+  ) {
+    await processLocation(usable[0], false);
+  }
+  await processLocation(usable[usable.length - 1]);
+}
+
+function enqueueLocationBatch(locations: Location.LocationObject[]) {
+  const work = locationBatchProcessing.then(
+    () => processLocationBatch(locations),
+    () => processLocationBatch(locations),
+  );
+  locationBatchProcessing = work.catch(() => undefined);
+  return work;
 }
 
 async function handleBackgroundNotification(payload: Notifications.NotificationTaskPayload) {
@@ -486,8 +531,10 @@ if (Platform.OS !== 'web' && !TaskManager.isTaskDefined(JOURNEY_LOCATION_TASK)) 
         console.warn('[journey] Hintergrund-Standort fehlgeschlagen:', error.message);
         return;
       }
-      for (const location of data?.locations ?? []) {
-        await processLocation(location);
+      try {
+        await enqueueLocationBatch(data?.locations ?? []);
+      } catch (taskError) {
+        console.warn('[journey] Hintergrund-Standort konnte nicht verarbeitet werden:', taskError);
       }
     },
   );
@@ -520,6 +567,13 @@ export async function prepareJourneyAutomation() {
       // install would otherwise tap "Aktivieren" and silently do nothing.
       // Robustness beats slickness for a safety-adjacent action.
       options: { opensAppToForeground: true },
+    },
+    {
+      identifier: JOURNEY_NOT_NOW_ACTION,
+      buttonTitle: 'Nicht jetzt',
+      // A deliberate decline must never start tracking or wake the app. The
+      // person can still enable Anreise later from the activity.
+      options: { opensAppToForeground: false },
     },
   ]);
 
@@ -624,12 +678,16 @@ export async function armBackgroundJourney(input: {
   }
 }
 
-export async function stopBackgroundJourney(actor: JourneyActor, activityId: string) {
+export async function stopBackgroundJourney(
+  actor: JourneyActor,
+  activityId: string,
+  options?: { skipRemoteStop?: boolean },
+) {
   const state = await readStoredJourney();
   if (!state || state.activity.id !== activityId) return;
   await cancelArmTrigger(state);
   await stopNativeLocationUpdates().catch(() => {});
-  await journeyService.stopJourney(actor, activityId).catch(() => {});
+  if (!options?.skipRemoteStop) await journeyService.stopJourney(actor, activityId).catch(() => {});
   await writeStoredJourney(null);
 }
 
@@ -645,21 +703,16 @@ export async function markBackgroundJourneyArrived(actor: JourneyActor, activity
     return;
   }
   const now = Date.now();
-  state.status = 'arrived';
-  state.arrivalExpiresAt = Math.min(now + ARRIVAL_VISIBLE_MS, journeyExpiry(state, now));
-  state.updatedAt = new Date(now).toISOString();
-  await publishLocation(state, state.currentCoordinate, 'arrived', now);
-  await writeStoredJourney(state);
-  await stopNativeLocationUpdates().catch(() => {});
-  await notificationService.showJourneyStatus({
-    activityId,
-    title: state.activity.title,
-    state: 'arrived',
-  });
+  await finishForArrival(state, now);
 }
 
-export async function getBackgroundJourneyRecord() {
+/**
+ * The stored consent belongs to one account. A foreground provider passes its
+ * uid so an account switch can never briefly render another person's journey.
+ */
+export async function getBackgroundJourneyRecord(expectedActorUid?: string) {
   const state = await readStoredJourney();
+  if (state && expectedActorUid && state.actor.uid !== expectedActorUid) return null;
   return state ? recordFromStored(state) : null;
 }
 

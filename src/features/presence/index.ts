@@ -6,4 +6,8 @@ export {
 } from './OpenStatusProvider';
 export type { OpenStatusValue } from './OpenStatusProvider';
 export type { OpenVibe, PresenceDoc, CoarseLocation } from './services/presenceService.types';
-export { presenceToNearby } from './presenceSelectors';
+export {
+  isOpenPresenceMarkerId,
+  presenceToMapMarkers,
+  presenceToNearby,
+} from './presenceSelectors';

@@ -60,12 +60,13 @@ export function GuestInvitesField({ draft, onChange, bare = false }: GuestInvite
               : 'Nur deine Freunde sehen die Aktivität'}
           </Text>
         </View>
-        <Switch
-          value={enabled}
-          onValueChange={toggle}
-          trackColor={{ false: 'rgba(255,255,255,0.15)', true: accent }}
-          thumbColor="#ffffff"
-        />
+        <View pointerEvents="none">
+          <Switch
+            value={enabled}
+            trackColor={{ false: 'rgba(255,255,255,0.15)', true: accent }}
+            thumbColor="#ffffff"
+          />
+        </View>
       </Pressable>
     </View>
   );

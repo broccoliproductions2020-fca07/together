@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -11,6 +12,7 @@ import {
 import { useAuth } from '@/features/auth';
 import { useCircles } from '@/features/circles';
 import { useFriends } from '@/features/friends';
+import { useSyncOutbox } from '@/features/sync';
 import type { ActivityCategory, ActivityMode } from '@/domain/activity';
 import type { GeoCoordinate } from '@/domain/geo';
 import type { ParticipantPreview } from '@/domain/person';
@@ -49,6 +51,13 @@ export interface ActivityInfo {
   id: string;
   title: string;
   mode: ActivityMode;
+  /**
+   * The stored, unresolved mode from the backing document. `mode` above may
+   * have been auto-advanced from `soon` to `now`; this one never is, so it is
+   * the only way to tell a spontaneous activity from a planned one that has
+   * started. Undefined when no document backs the entity.
+   */
+  plannedMode?: ActivityMode;
   timeLabel?: string;
   placeLabel?: string;
   participantCount: number;
@@ -81,6 +90,8 @@ export interface ActivityUpdate {
 }
 
 interface ActivityEntityContextValue {
+  /** True after the bounded feed listener delivered its first snapshot. */
+  initialFeedReady: boolean;
   mapMarkers: MapMarker[];
   markerClusters: MarkerCluster[];
   plans: Plan[];
@@ -149,6 +160,7 @@ function mapSelectionFromInfo(
     title: info.title,
     subtitle: info.description ?? `${info.participantCount} Teilnehmer`,
     mode: info.mode,
+    plannedMode: info.plannedMode,
     participantCount: info.participantCount,
     participants: info.participants,
     maxParticipants: info.maxParticipants,
@@ -197,6 +209,20 @@ function activityPlaceFromDraft(
 }
 
 const EMPTY_MARKER_CLUSTERS: MarkerCluster[] = [];
+
+function queuedActivityToDoc(
+  operation: ReturnType<typeof useSyncOutbox>['operations'][number],
+): ActivityDoc | null {
+  if (operation.kind !== 'activity.create' || operation.status !== 'queued') return null;
+  const { audienceContext: _audienceContext, ...activity } = operation.payload.activity;
+  return {
+    ...activity,
+    id: operation.payload.activityId,
+    hostId: activity.participants[0]?.uid ?? operation.accountId,
+    status: 'active' as const,
+    createdAt: operation.createdAt,
+  } satisfies ActivityDoc;
+}
 
 /** Persisted activity document to its calendar projection. */
 function docToPlan(doc: ActivityDoc, now: number): Plan {
@@ -262,6 +288,7 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const { circles } = useCircles();
   const { friendUids, closeFriendUids } = useFriends();
+  const { operations: syncOperations } = useSyncOutbox();
   const actor = useMemo<ActivityActor>(
     () => ({
       uid: user?.id ?? 'u_you',
@@ -272,12 +299,18 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
   );
 
   const [docs, setDocs] = useState<ActivityDoc[]>([]);
+  // Lets the boot gate wait for a real first feed snapshot without guessing
+  // from an empty array (an empty feed is a perfectly valid result).
+  const [initialFeedReady, setInitialFeedReady] = useState(false);
   // Creation is a CALLABLE, so the feed listener only echoes a new activity a
   // full server round-trip later (cold start included). Until then the app has
   // no entity to show — no pin to throw, no plan, nothing. These local twins
   // bridge exactly that gap and are dropped the moment the real doc lands or
   // the write fails. They are never persisted and never read from.
   const [pendingDocs, setPendingDocs] = useState<ActivityDoc[]>([]);
+  const queuedActivityIdsRef = useRef<Set<string>>(new Set());
+  const activeAccountUidRef = useRef(actor.uid);
+  activeAccountUidRef.current = actor.uid;
   // Cancellation is optimistic for the same reason: the tap is the decision, the
   // callable is only its bookkeeping. Ids here are hidden everywhere at once and
   // put back if the write fails.
@@ -285,10 +318,16 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
 
   // The one bounded activity-feed listener.
   useEffect(() => {
+    const accountUid = actor.uid;
     setDocs([]);
+    setInitialFeedReady(false);
     setPendingDocs([]);
     setCancellingIds([]);
-    return activityService.subscribeActivities(actor, setDocs);
+    return activityService.subscribeActivities(actor, (next) => {
+      if (activeAccountUidRef.current !== accountUid) return;
+      setDocs(next);
+      setInitialFeedReady(true);
+    });
   }, [actor]);
 
   // Hold the hide until the feed agrees the activity is no longer active —
@@ -310,6 +349,26 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
     if (!pendingDocs.some((doc) => known.has(doc.id))) return;
     setPendingDocs((current) => current.filter((doc) => !known.has(doc.id)));
   }, [docs, pendingDocs]);
+
+  // Persisted activity creates restore the same immediate local entity after a
+  // restart. The server feed remains authoritative and removes the twin as
+  // soon as it arrives; a short fallback prevents a stale local pin if the
+  // callable is permanently rejected after reconnecting.
+  useEffect(() => {
+    const queued = syncOperations
+      .filter((operation) => operation.accountId === actor.uid)
+      .map(queuedActivityToDoc)
+      .filter((doc): doc is ActivityDoc => doc !== null);
+    const nextIds = new Set(queued.map((doc) => doc.id));
+    const settledIds = [...queuedActivityIdsRef.current].filter((id) => !nextIds.has(id));
+    queuedActivityIdsRef.current = nextIds;
+    setPendingDocs((current) => [...current.filter((doc) => !nextIds.has(doc.id)), ...queued]);
+    if (settledIds.length) {
+      setTimeout(() => {
+        setPendingDocs((current) => current.filter((doc) => !settledIds.includes(doc.id)));
+      }, TWIN_MAX_LIFETIME_MS);
+    }
+  }, [actor.uid, syncOperations]);
 
   const activityDocs = useMemo(() => {
     const known = new Set(docs.map((doc) => doc.id));
@@ -390,6 +449,9 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
       const cluster = markerClusters.find((item) => item.id === id);
       const backingDoc = activityDocs.find((doc) => doc.id === id);
       const hostId = backingDoc?.hostId;
+      // Straight off the document, never through resolveActivityMode — see
+      // ActivityInfo.plannedMode. It is what decides whether Anreise exists.
+      const plannedMode = backingDoc?.mode;
       const guestInvitesEnabled = backingDoc?.guestInvitesEnabled === true || undefined;
       const maxParticipants =
         backingDoc?.maxParticipants ?? marker?.maxParticipants ?? cluster?.maxParticipants;
@@ -406,6 +468,7 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
           id,
           title: plan?.title ?? cluster.label,
           mode: plan ? modeFromPlan(plan, cluster.mode) : cluster.mode,
+          plannedMode,
           timeLabel: plan ? formatTimeRange(plan.startsAt, plan.endsAt) : undefined,
           placeLabel: plan ? planPlaceLabel(plan) : undefined,
           participantCount: Math.max(cluster.count, participants.length),
@@ -426,6 +489,7 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
           id,
           title: marker.title ?? plan?.title ?? marker.label ?? marker.displayName,
           mode: marker.mode,
+          plannedMode,
           timeLabel:
             marker.timeLabel ?? (plan ? formatTimeRange(plan.startsAt, plan.endsAt) : undefined),
           placeLabel: marker.placeLabel ?? (plan ? planPlaceLabel(plan) : marker.label),
@@ -447,6 +511,7 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
           id: planActivityId(plan),
           title: plan.title,
           mode: modeFromPlan(plan),
+          plannedMode,
           timeLabel: formatTimeRange(plan.startsAt, plan.endsAt),
           placeLabel: planPlaceLabel(plan),
           participantCount: participants.length,
@@ -586,7 +651,9 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
       // A resolved one gets a hard expiry too: the feed effect normally removes
       // the twin within a second, and a pin only this device can see must never
       // outlive that.
-      creation.ready.then(() => setTimeout(dropTwin, TWIN_MAX_LIFETIME_MS), dropTwin);
+      creation.ready.then((result) => {
+        if (result === 'sent') setTimeout(dropTwin, TWIN_MAX_LIFETIME_MS);
+      }, dropTwin);
 
       return creation;
     },
@@ -665,7 +732,18 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
       const doc = docs.find((item) => item.id === id);
       if (!doc || doc.hostId !== actor.uid || !isActivityLive(doc)) return null;
 
-      const mode = resolveActivityMode(doc.mode, doc.startsAt, Date.now());
+      // The STORED mode, not the resolved one. `updateActivityFromDraft` writes
+      // `mode` back whenever it differs from the document, so seeding the draft
+      // with the display mode meant that fixing a typo on a started `soon`
+      // activity silently rewrote it to `now` — permanently, and now that
+      // `now` activities have no Anreise at all, that silently stripped a
+      // running Anreise off a plan. An edit fixes mistakes; it never changes
+      // what kind of activity this is.
+      const mode = doc.mode;
+      // The display mode still decides how the form READS the time fields: a
+      // started activity is presented with its remaining runtime, exactly as
+      // before.
+      const displayMode = resolveActivityMode(doc.mode, doc.startsAt, Date.now());
       return {
         mode,
         title: doc.title,
@@ -685,7 +763,8 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
         startsAt: doc.startsAt,
         endsAt: doc.endsAt,
         plannedDurationMinutes: durationMinutes(doc.startsAt, doc.endsAt),
-        expiresInMinutes: mode === 'now' ? durationMinutes(doc.startsAt, doc.endsAt) : undefined,
+        expiresInMinutes:
+          displayMode === 'now' ? durationMinutes(doc.startsAt, doc.endsAt) : undefined,
         maxPeople: doc.maxParticipants,
         category: doc.category,
         guestInvitesEnabled: doc.guestInvitesEnabled,
@@ -739,6 +818,7 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<ActivityEntityContextValue>(
     () => ({
+      initialFeedReady,
       mapMarkers,
       markerClusters,
       plans,
@@ -756,6 +836,7 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
       updateActivityFromDraft,
     }),
     [
+      initialFeedReady,
       mapMarkers,
       markerClusters,
       plans,

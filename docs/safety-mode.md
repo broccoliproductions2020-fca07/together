@@ -1,4 +1,4 @@
-# Together — Safety-Modus „Heimweg“
+# Como — Safety-Modus „Heimweg“
 
 Stand: Juli 2026 · Status: **technische und visuelle Basis gebaut; nicht releasebereit**.
 
@@ -77,7 +77,7 @@ Karte. Der Mode-Switch (Karte/Socialize-Pille) ist im Fokus ausgeblendet.
    Löschversprechen stecken im Text: „…nur so lange, bis du sicher zu Hause bist. Danach wird er
    gelöscht."), **„Ich fühle mich unsicher"** (orange) und **„Ich bin in Gefahr"** (rot; „Deine
    Freunde werden alarmiert, damit sie dich kontaktieren oder schnell Hilfe rufen können.") — plus
-   Ehrlichkeitszeile „Together ersetzt keinen Notruf — 112", Button „Weiter". Die Ich-Titel sind
+   Ehrlichkeitszeile „Como ersetzt keinen Notruf — 112", Button „Weiter". Die Ich-Titel sind
    die nutzerseitigen Modusnamen und müssen mit den Konsolen-Buttons übereinstimmen.
    **Formulierungsregel für alle Safety-Texte:** beschreiben, was die Person selbst tut und was
    Freunde sehen können — nie, was deren Gerät tun wird. „Alarmieren" als eigene
@@ -150,7 +150,7 @@ ansonsten läuft sie nur mit dem verbleibenden Empfängerkreis weiter.
 - Orange: 1,5 Sekunden halten.
 - Rot: separate Hilfe-Taste 2,2 Sekunden halten, danach keine Rückfrage.
 - **Rot wird nie automatisch ausgelöst.**
-- Together ruft niemals automatisch 112. Bei Rot ist „112 anrufen“ die erste sichtbare Aktion.
+- Como ruft niemals automatisch 112. Bei Rot ist „112 anrufen“ die erste sichtbare Aktion.
 - Nach Orange fragt die App diskret nach. Eine ausbleibende Antwort und ein Datenabriss werden
   unterschiedlich dargestellt.
 - „Sicher angekommen“ ist eine bewusste Aktion; es gibt keinen Zuhause-Geofence und keinen
@@ -183,12 +183,13 @@ ansonsten läuft sie nur mit dem verbleibenden Empfängerkreis weiter.
   Benachrichtigung direkt „Bist du schon zuhause?“ mit den Aktionen „1 Stunde verlängern“ oder
   „Sicher angekommen“. Jede manuelle Verlängerung ist eine bewusste Aktion und serverseitig nur in
   den letzten 15 Minuten möglich; der Server begrenzt die Gesamtlaufzeit zusätzlich (12 h ab Start).
-- Ohne bewusste Verlängerung endet die Standortübertragung nach zwei Stunden. Begleiter sehen
-  anschließend ehrlich „Automatisch beendet · Ankunft nicht bestätigt“; es gibt keine stille
+- Ohne bewusste Ankunftsbestätigung verlängert der Server die Session im Schlussfenster höchstens
+  zweimal um je 20 Minuten. Danach endet die Standortübertragung. Begleiter sehen anschließend
+  ehrlich „Automatisch beendet · Ankunft nicht bestätigt“; es gibt keine weitere stille
   Verlängerung und keine weiteren Standortupdates.
 - Nach dem Ende ist kein Standortschreiben mehr möglich. Bei Blau bleibt der letzte Punkt nur für
   ein kurzes Abschlussfenster lesbar; bei Orange/Rot bleibt er 30 Minuten schreibgeschützt für den
-  zuletzt bewusst festgelegten Empfängerkreis sichtbar. Danach löscht der bestehende Cleanup-Lauf Session und
+  zuletzt bewusst festgelegten Empfängerkreis sichtbar. Danach löscht der bestehende Wartungs-Lauf Session und
   Fan-out-Index. Es gibt bewusst kein `onDisconnect().remove()`: App-Abbruch oder Funkloch darf
   nicht wie „sicher beendet“ aussehen.
 - Pushes enthalten keine Koordinaten. Standort ist nur für den aktuell bewusst festgelegten Empfängerkreis lesbar.

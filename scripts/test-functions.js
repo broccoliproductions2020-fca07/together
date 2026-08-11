@@ -49,7 +49,34 @@ async function callFunction(token, name, data) {
     },
     body: JSON.stringify({ data }),
   });
-  const body = await response.json();
+  const responseText = await response.text();
+  let body = null;
+  if (responseText) {
+    try {
+      body = JSON.parse(responseText);
+    } catch {
+      body = responseText;
+    }
+  }
+  return { status: response.status, ok: response.ok, body };
+}
+
+async function callTask(name, data) {
+  const response = await fetch(`${FUNCTIONS_BASE}/${name}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    // The emulator exposes task functions as HTTP endpoints with this wrapper.
+    body: JSON.stringify({ data }),
+  });
+  const responseText = await response.text();
+  let body = null;
+  if (responseText) {
+    try {
+      body = JSON.parse(responseText);
+    } catch {
+      body = responseText;
+    }
+  }
   return { status: response.status, ok: response.ok, body };
 }
 
@@ -256,14 +283,16 @@ async function main() {
   // Places must reject malformed input before it can trigger any paid Google
   // request. The emulator has no Places secret, so the valid-path behaviour is
   // covered by the email-verification gate test without external traffic.
-  await expectError('place autocomplete rejects malformed session tokens', 'INVALID_ARGUMENT', () =>
-    callFunction(alice.token, 'autocompletePlaces', {
+  await expectError('unified place autocomplete rejects malformed session tokens', 'INVALID_ARGUMENT', () =>
+    callFunction(alice.token, 'places', {
+      action: 'autocomplete',
       query: 'Kino',
       sessionToken: 'not valid!',
     }),
   );
-  await expectError('place details rejects malformed place IDs', 'INVALID_ARGUMENT', () =>
-    callFunction(alice.token, 'resolvePlaceLocation', {
+  await expectError('unified place details rejects malformed place IDs', 'INVALID_ARGUMENT', () =>
+    callFunction(alice.token, 'places', {
+      action: 'resolve',
       placeId: 'place/with/slash',
       sessionToken: 'safe-place-session-token-123456',
     }),
@@ -399,6 +428,56 @@ async function main() {
   if (!activeFeed.docs.some((document) => document.id === createdActivityId)) {
     throw new Error('The new live activity was not returned by the production feed query.');
   }
+  await expectOk('activity retry with the same client id stays idempotent', () =>
+    callFunction(alice.token, 'createActivity', {
+      activityId: createdActivityId,
+      activity: {
+        mode: 'soon',
+        title: 'Sichtbarkeit testen',
+        audienceContext: { kind: 'all_friends' },
+        startsAt: createdStartsAt,
+        endsAt: createdEndsAt,
+        place: createdPlace,
+      },
+    }),
+  );
+  const journeyReminderGeneration = createdActivity?.journeyReminderGeneration;
+  if (typeof journeyReminderGeneration !== 'string' || !journeyReminderGeneration) {
+    throw new Error('New activity did not receive a reminder task generation.');
+  }
+  const firstJourneyTask = await callTask('dispatchJourneyReminder', {
+    activityId: createdActivityId,
+    generation: journeyReminderGeneration,
+  });
+  if (!firstJourneyTask.ok) {
+    throw new Error(
+      `Journey reminder task failed with ${firstJourneyTask.status}: ${JSON.stringify(firstJourneyTask.body)}`,
+    );
+  }
+  const firstJourneyReminder = await waitFor(async () => {
+    const snapshot = await db
+      .collection('notifications')
+      .where('activityId', '==', createdActivityId)
+      .where('kind', '==', 'journey_reminder')
+      .get();
+    return snapshot.size === 1 ? snapshot : null;
+  });
+  const repeatedJourneyTask = await callTask('dispatchJourneyReminder', {
+    activityId: createdActivityId,
+    generation: journeyReminderGeneration,
+  });
+  if (!repeatedJourneyTask.ok) {
+    throw new Error(`Repeated journey reminder task failed with ${repeatedJourneyTask.status}.`);
+  }
+  const repeatedJourneyReminder = await db
+    .collection('notifications')
+    .where('activityId', '==', createdActivityId)
+    .where('kind', '==', 'journey_reminder')
+    .get();
+  if (repeatedJourneyReminder.size !== firstJourneyReminder.size) {
+    throw new Error('Journey reminder task was not idempotent.');
+  }
+  console.log('OK Journey reminder tasks are idempotent');
   console.log('OK activity feed returns only the explicit visibility window');
 
   await expectOk('open presence accepts a duration below twelve hours', () =>
@@ -476,6 +555,30 @@ async function main() {
     groupMessage?.expireAt?.toMillis?.() < groupMessageBefore + 29 * 24 * 60 * 60 * 1000
   ) {
     throw new Error('A group message did not refresh room and message retention together.');
+  }
+  // The next write is intentionally distinct, so respect the production burst guard.
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  const idempotentMessageId = `outbox_message_${now}`;
+  await expectOk('chat message accepts a stable client id', () =>
+    callFunction(alice.token, 'sendChatMessage', {
+      roomId: group.id,
+      text: 'Diese Nachricht darf nur einmal erscheinen.',
+      clientMessageId: idempotentMessageId,
+    }),
+  );
+  await expectOk('chat retry with the same client id stays idempotent', () =>
+    callFunction(alice.token, 'sendChatMessage', {
+      roomId: group.id,
+      text: 'Diese Nachricht darf nur einmal erscheinen.',
+      clientMessageId: idempotentMessageId,
+    }),
+  );
+  const [idempotentRoom, idempotentMessage] = await Promise.all([
+    db.doc(`chats/${group.id}`).get(),
+    db.doc(`chats/${group.id}/messages/${idempotentMessageId}`).get(),
+  ]);
+  if (idempotentRoom.data()?.messageCount !== 2 || !idempotentMessage.exists) {
+    throw new Error('A retry with the same client message id created a duplicate.');
   }
   console.log('OK group chat lifecycle is bounded and refreshed atomically');
 
@@ -590,8 +693,11 @@ async function main() {
   // was sent. Removing that relationship must revoke both the server invite
   // and its card; an old notification may never grant access back into a room.
   await db.doc(`friendships/${friendshipId(alice.uid, bob.uid)}`).delete();
-  await expectError('a former friend cannot accept an old planning invitation', 'PERMISSION_DENIED', () =>
-    callFunction(bob.token, 'respondToGroupChatInvite', { roomId: inviteGroup.id, accept: true }),
+  await expectError(
+    'a former friend cannot accept an old planning invitation',
+    'PERMISSION_DENIED',
+    () =>
+      callFunction(bob.token, 'respondToGroupChatInvite', { roomId: inviteGroup.id, accept: true }),
   );
   const [revokedInvite, revokedNotification] = await Promise.all([
     db.doc(`groupChatInvites/${inviteGroup.id}_${bob.uid}`).get(),
@@ -722,6 +828,34 @@ async function main() {
   ) {
     throw new Error('A pending wink exposed a room or did not create private server projections.');
   }
+  const invitePreview = await expectOk('the intended recipient gets a compact round preview', () =>
+    callFunction(dave.token, 'getSpontaneousRoundInvitePreview', { roundId: aliceRound.id }),
+  );
+  if (
+    invitePreview?.state !== 'available' ||
+    invitePreview?.roundId !== aliceRound.id ||
+    invitePreview?.host?.uid !== alice.uid ||
+    invitePreview?.memberCount !== 1 ||
+    invitePreview?.memberPreview?.length !== 1
+  ) {
+    throw new Error('A recipient did not receive the minimal, current wink preview.');
+  }
+  const hiddenPreview = await expectOk('a non-recipient cannot probe a wink preview', () =>
+    callFunction(charlie.token, 'getSpontaneousRoundInvitePreview', { roundId: aliceRound.id }),
+  );
+  if (hiddenPreview?.state !== 'unavailable') {
+    throw new Error('A non-recipient could distinguish or inspect a private wink.');
+  }
+  await expectOk('a recipient can quietly decline a competing wink', () =>
+    callFunction(dave.token, 'declineSpontaneousRound', { roundId: bobRound.id }),
+  );
+  const [declinedWinkInvite, declinedWinkNotification] = await Promise.all([
+    db.doc(`spontaneousRoundInvites/${bobRound.id}_${dave.uid}`).get(),
+    db.doc(`notifications/${bobRound.id}_${dave.uid}`).get(),
+  ]);
+  if (declinedWinkInvite.exists || declinedWinkNotification.exists) {
+    throw new Error('Declining a wink did not retract only the recipient’s private state.');
+  }
   await expectError('a non-recipient cannot accept a private wink', 'PERMISSION_DENIED', () =>
     callFunction(charlie.token, 'acceptSpontaneousRound', { roundId: aliceRound.id }),
   );
@@ -754,10 +888,14 @@ async function main() {
   }
   const roundMessageAt = Date.now();
   await expectOk('forming round messages keep the short round expiry', () =>
-    callFunction(alice.token, 'sendChatMessage', { roomId: aliceRound.id, text: 'Lust auf einen Kaffee?' }),
+    callFunction(alice.token, 'sendChatMessage', {
+      roomId: aliceRound.id,
+      text: 'Lust auf einen Kaffee?',
+    }),
   );
-  const formingMessage = (await db.collection(`chats/${aliceRound.id}/messages`).limit(1).get()).docs[0]
-    ?.data();
+  const formingMessage = (
+    await db.collection(`chats/${aliceRound.id}/messages`).limit(1).get()
+  ).docs[0]?.data();
   if (
     !formingMessage?.expireAt ||
     formingMessage.expireAt.toMillis() > roundMessageAt + 31 * 60 * 1000
@@ -794,7 +932,9 @@ async function main() {
     aliceMembership.exists ||
     deletedDaveMembership.exists
   ) {
-    throw new Error('Round promotion did not convert membership, retention, and private guards together.');
+    throw new Error(
+      'Round promotion did not convert membership, retention, and private guards together.',
+    );
   }
   // Restore the fixture's original friendship graph for the independent guest
   // invite tests below, where Bob deliberately must not be able to invite Dave.
@@ -1082,6 +1222,27 @@ async function main() {
     callFunction(dave.token, 'joinActivity', { activityId: 'guest-activity' }),
   );
 
+  await expectOk('participant gains guarded journey view access', () =>
+    callFunction(bob.token, 'ensureJourneyMember', { activityId: 'shared-activity' }),
+  );
+  const journeyViewerMembership = await realtimeDb
+    .ref(`journeys/shared-activity/members/${bob.uid}`)
+    .get();
+  if (journeyViewerMembership.val() !== true) {
+    throw new Error('Accepted participant did not receive the guarded Journey viewer entitlement.');
+  }
+  console.log('OK accepted participant can receive guarded journey view access');
+
+  await realtimeDb.ref(`journeys/shared-activity/locations/${bob.uid}`).set({
+    status: 'onTheWay',
+    updatedAt: Date.now(),
+    expiresAt: Date.parse(editedEndsAt),
+  });
+  await realtimeDb.ref(`journeys/shared-activity/locations/${charlie.uid}`).set({
+    status: 'onTheWay',
+    updatedAt: Date.now(),
+    expiresAt: Date.parse(editedEndsAt),
+  });
   await expectOk('participant starts a location-free journey summary', () =>
     callFunction(bob.token, 'setJourneyLiveStatus', {
       activityId: 'shared-activity',
@@ -1136,14 +1297,16 @@ async function main() {
     ]);
   const cancelledActivity = cancelledActivitySnapshot.data();
   const cancelledRoom = cancelledRoomSnapshot.data();
-  const cancellationExpiry = cancellationStartedAt + ACTIVITY_CHAT_RETENTION_MS;
   if (
     cancelledActivity?.status !== 'cancelled' ||
     cancelledActivity?.journeyUnderwayCount !== 0 ||
     Math.abs((cancelledActivity?.visibleUntil?.toMillis?.() ?? 0) - cancellationStartedAt) >
       60_000 ||
-    Math.abs((cancelledActivity?.expireAt?.toMillis?.() ?? 0) - cancellationExpiry) > 60_000 ||
-    Math.abs((cancelledRoom?.expireAt?.toMillis?.() ?? 0) - cancellationExpiry) > 60_000 ||
+    Math.abs(
+      (cancelledActivity?.expireAt?.toMillis?.() ?? 0) -
+        (cancellationStartedAt + ACTIVITY_CHAT_RETENTION_MS),
+    ) > 60_000 ||
+    Math.abs((cancelledRoom?.expireAt?.toMillis?.() ?? 0) - cancellationStartedAt) > 60_000 ||
     journeySnapshot.exists() ||
     // Admin-SDK Firestore snapshot: `exists` is a property (the RTDB snapshot
     // one line up has it as a method).
@@ -1151,7 +1314,7 @@ async function main() {
   ) {
     throw new Error('Cancellation did not close the planned activity lifecycle cleanly.');
   }
-  console.log('OK cancellation removes live journey data and keeps a 12-hour chat window');
+  console.log('OK cancellation removes live journey data and closes its chat immediately');
 
   await waitFor(async () => {
     const snapshot = await db
@@ -1379,7 +1542,8 @@ async function main() {
     db.doc(`users/${bob.uid}`).get(),
   ]);
   if (
-    aliceAfterRequestRetry.data()?.friendshipsVersion !== aliceFriendshipsVersionBeforeRequest + 1 ||
+    aliceAfterRequestRetry.data()?.friendshipsVersion !==
+      aliceFriendshipsVersionBeforeRequest + 1 ||
     bobAfterRequestRetry.data()?.friendshipsVersion !== bobFriendshipsVersionBeforeRequest + 1
   ) {
     throw new Error('Retrying a pending friendship request created another relation change.');
@@ -1510,6 +1674,53 @@ async function main() {
   if (extension.expiresAt !== extensionBase + 60 * 60 * 1000) {
     throw new Error('Safety extension did not add exactly one hour.');
   }
+
+  const taskSafetyExpiresAt = Date.now() + 5 * 60 * 1000;
+  await realtimeDb.ref(`heimwege/${dave.uid}`).set({
+    displayName: 'Dave Dietrich',
+    initials: 'DD',
+    status: 'blue',
+    startedAt: Date.now() - 60 * 60 * 1000,
+    updatedAt: Date.now(),
+    expiresAt: taskSafetyExpiresAt,
+    retainUntil: taskSafetyExpiresAt + 3 * 60 * 1000,
+    audienceUids: { [alice.uid]: true },
+    companions: {},
+  });
+  // Give the separate Functions worker one RTDB-emulator turn to observe the write.
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  const firstSafetyTask = await callTask('dispatchSafetyAutoExtend', {
+    uid: dave.uid,
+    expiresAt: taskSafetyExpiresAt,
+  });
+  if (!firstSafetyTask.ok) {
+    throw new Error(
+      `Safety auto-extension task failed with ${firstSafetyTask.status}: ${JSON.stringify(firstSafetyTask.body)}`,
+    );
+  }
+  const extendedTaskSafety = (await realtimeDb.ref(`heimwege/${dave.uid}`).get()).val();
+  if (
+    extendedTaskSafety?.expiresAt !== taskSafetyExpiresAt + 20 * 60 * 1000 ||
+    extendedTaskSafety?.autoExtendCount !== 1
+  ) {
+    throw new Error(
+      `Safety auto-extension task did not extend exactly once: ${JSON.stringify({
+        expectedExpiresAt: taskSafetyExpiresAt + 20 * 60 * 1000,
+        actualExpiresAt: extendedTaskSafety?.expiresAt,
+        actualCount: extendedTaskSafety?.autoExtendCount,
+        taskResult: firstSafetyTask.body,
+      })}`,
+    );
+  }
+  const repeatedSafetyTask = await callTask('dispatchSafetyAutoExtend', {
+    uid: dave.uid,
+    expiresAt: taskSafetyExpiresAt,
+  });
+  const repeatedTaskSafety = (await realtimeDb.ref(`heimwege/${dave.uid}`).get()).val();
+  if (!repeatedSafetyTask.ok || repeatedTaskSafety?.autoExtendCount !== 1) {
+    throw new Error('Stale Safety auto-extension task was not a no-op.');
+  }
+  console.log('OK Safety auto-extension tasks reject stale windows');
 
   await expectError(
     'stranger cannot confirm another person’s Safety session',
@@ -1768,8 +1979,7 @@ async function main() {
     db.doc(`users/${alice.uid}`).get(),
     db.doc(`users/${dave.uid}`).get(),
   ]);
-  const aliceFriendshipsVersionBeforeRemoval =
-    aliceBeforeRemoval.data()?.friendshipsVersion ?? 0;
+  const aliceFriendshipsVersionBeforeRemoval = aliceBeforeRemoval.data()?.friendshipsVersion ?? 0;
   const daveFriendshipsVersionBeforeRemoval = daveBeforeRemoval.data()?.friendshipsVersion ?? 0;
   await expectOk('removing friendship revokes Safety access immediately', () =>
     callFunction(alice.token, 'removeFriend', { uid: dave.uid }),
@@ -2089,6 +2299,72 @@ async function main() {
     );
   }
   console.log('OK push token ownership is unique, idempotent, and capped at ten');
+
+  // Host succession is a server transaction, not a UI convention: the same
+  // callable must transfer the Activity, chat membership and host invariant.
+  const handoffActivityId = 'host-handoff-activity';
+  const handoffExpiry = admin.firestore.Timestamp.fromMillis(Date.now() + 2 * 60 * 60 * 1000);
+  await Promise.all([
+    db.doc(`activities/${handoffActivityId}`).set({
+      hostId: alice.uid,
+      mode: 'soon',
+      title: 'Übergabe testen',
+      audienceUids: [alice.uid, bob.uid],
+      participantUids: [alice.uid, bob.uid],
+      participants: [
+        { uid: alice.uid, displayName: 'Alice Adams', initials: 'AA' },
+        { uid: bob.uid, displayName: 'Bob Berger', initials: 'BB' },
+      ],
+      status: 'active',
+      createdAt: timestamp,
+      visibleUntil: handoffExpiry,
+      expireAt: handoffExpiry,
+    }),
+    db.doc(`chats/${handoffActivityId}`).set({
+      type: 'activity',
+      title: 'Übergabe testen',
+      memberIds: [alice.uid, bob.uid],
+      adminUids: [alice.uid],
+      messageCount: 0,
+      readCount: {},
+      createdAt: timestamp,
+      expireAt: handoffExpiry,
+    }),
+  ]);
+  await expectOk('a host can hand an active activity to its longest-standing participant', () =>
+    callFunction(alice.token, 'leaveActivity', { activityId: handoffActivityId }),
+  );
+  const [handedOffActivity, handedOffRoom] = await Promise.all([
+    db.doc(`activities/${handoffActivityId}`).get(),
+    db.doc(`chats/${handoffActivityId}`).get(),
+  ]);
+  if (
+    handedOffActivity.data()?.hostId !== bob.uid ||
+    handedOffActivity.data()?.participantUids?.join(',') !== bob.uid ||
+    handedOffActivity.data()?.participants?.[0]?.uid !== bob.uid ||
+    handedOffRoom.data()?.memberIds?.join(',') !== bob.uid ||
+    handedOffRoom.data()?.adminUids?.join(',') !== bob.uid
+  ) {
+    throw new Error('Host succession did not atomically preserve Activity and chat invariants.');
+  }
+  await expectError(
+    'the final host must cancel instead of leaving an orphaned activity',
+    'FAILED_PRECONDITION',
+    () => callFunction(bob.token, 'leaveActivity', { activityId: handoffActivityId }),
+  );
+  const hostChangeNotifications = await waitFor(async () => {
+    const snapshot = await db
+      .collection('notifications')
+      .where('recipientUid', '==', bob.uid)
+      .where('kind', '==', 'activity_host_changed')
+      .where('activityId', '==', handoffActivityId)
+      .get();
+    return snapshot.size === 1 ? snapshot : null;
+  });
+  if (hostChangeNotifications.docs[0]?.data()?.roomId !== handoffActivityId) {
+    throw new Error('Host succession did not create an actionable participant notification.');
+  }
+  console.log('OK host succession is atomic and the new host is informed');
 
   const cleanupCutoff = admin.firestore.Timestamp.fromMillis(Date.now());
   await db

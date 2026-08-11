@@ -4,6 +4,9 @@ export { ActivityComposerSheet } from './components/ActivityComposerSheet';
 // rather than two different time widgets that mean the same thing.
 export { DurationPicker } from './components/DurationPicker';
 export { writeFailureMessage } from './utils/writeFailure';
+// The "does this activity have an Anreise at all?" rule — one predicate, used
+// by the detail sheet and by the create/join prompts alike.
+export { activitySupportsJourney } from './utils/activityMode';
 export { useFrequentPeople } from './inviteHistory';
 export { ActivityEntityProvider, useActivityEntities } from './ActivityEntityProvider';
 export type { ActivityInfo, ActivityUpdate } from './ActivityEntityProvider';

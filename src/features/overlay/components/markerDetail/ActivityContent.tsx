@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useMemo, useState } from 'react';
 import { Image, Pressable, Text, View } from 'react-native';
 
+import { activitySupportsJourney } from '@/features/activities';
 import {
   ChatRoomInfoSheet,
   InlineActivityChat,
@@ -25,13 +26,31 @@ import { PrimaryButton } from './PrimaryButton';
 import type { ActivitySelection } from './types';
 
 const JOURNEY_ENTRY_LEAD_MS = 6 * 60 * 60 * 1000;
+// Mirrors journeyBackground's auto-stop bounds: an Anreise started now can run
+// until the event ends (+ buffer) and never longer than the hard two-hour cap.
+const JOURNEY_END_BUFFER_MS = 30 * 60 * 1000;
+const JOURNEY_HARD_MAX_MS = 2 * 60 * 60 * 1000;
 const ACTIVITY_CLOCK_TICK_MS = 60_000;
 
-function journeyEntryIsProminent(startsAt: string | undefined, now: number) {
+/** Last moment at which starting an Anreise to this activity still means anything. */
+function journeyEntryClosesAt(start: number, endsAt: string | undefined) {
+  const end = endsAt ? Date.parse(endsAt) : NaN;
+  return Number.isFinite(end) ? end + JOURNEY_END_BUFFER_MS : start + JOURNEY_HARD_MAX_MS;
+}
+
+// The idle entry opens six hours before the start and stays available while the
+// activity runs — a `now` activity you joined is exactly the case where you are
+// still on your way AFTER the start time, and it is also the only way back in
+// after stopping a shared Anreise (the focus X ends the sharing).
+function journeyEntryIsProminent(
+  startsAt: string | undefined,
+  endsAt: string | undefined,
+  now: number,
+) {
   if (!startsAt) return false;
   const start = Date.parse(startsAt);
   if (!Number.isFinite(start)) return false;
-  return now >= start - JOURNEY_ENTRY_LEAD_MS && now < start;
+  return now >= start - JOURNEY_ENTRY_LEAD_MS && now < journeyEntryClosesAt(start, endsAt);
 }
 
 function activityToJourneyContext(activity: ActivitySelection): JourneyActivityContext {
@@ -217,10 +236,12 @@ function ActivityManagementActions({
 export function ActivityContent({
   selection,
   joined,
+  joining = false,
   chatExpanded,
   canEdit,
   onJoin,
   onEdit,
+  onStartRoute,
   onExpandChat,
   onCollapseChat,
   onOpenParticipants,
@@ -228,15 +249,15 @@ export function ActivityContent({
   onCreateActivity,
   onLeave,
   onCancel,
-  journeyJoinPrompt = false,
-  onDismissJourneyJoinPrompt,
 }: {
   selection: ActivitySelection;
   joined: boolean;
+  joining?: boolean;
   chatExpanded: boolean;
   canEdit?: boolean;
   onJoin?: () => void;
   onEdit?: () => void;
+  onStartRoute?: () => void;
   onExpandChat: () => void;
   onCollapseChat: () => void;
   onOpenParticipants: () => void;
@@ -244,9 +265,6 @@ export function ActivityContent({
   onCreateActivity?: (roomId: string, messageId: string, proposal: ProposalData) => void;
   onLeave?: () => void;
   onCancel?: () => void;
-  /** One-off offer after successfully joining an already-running activity. */
-  journeyJoinPrompt?: boolean;
-  onDismissJourneyJoinPrompt?: () => void;
 }) {
   const accent = markerModeStyles[selection.mode].color;
   const { activeJourney, getActivityJourneys, watchActivityJourney } = useJourney();
@@ -278,7 +296,7 @@ export function ActivityContent({
     const interval = setInterval(updateClock, ACTIVITY_CLOCK_TICK_MS);
     const start = selection.startsAt ? Date.parse(selection.startsAt) : NaN;
     const boundaryTimers = Number.isFinite(start)
-      ? [start - JOURNEY_ENTRY_LEAD_MS, start]
+      ? [start - JOURNEY_ENTRY_LEAD_MS, journeyEntryClosesAt(start, selection.endsAt)]
           .map((boundary) => boundary - Date.now())
           .filter((delay) => delay > 0 && delay <= 2_147_483_647)
           .map((delay) => setTimeout(updateClock, delay + 25))
@@ -288,21 +306,22 @@ export function ActivityContent({
       clearInterval(interval);
       boundaryTimers.forEach(clearTimeout);
     };
-  }, [selection.startsAt]);
+  }, [selection.startsAt, selection.endsAt]);
+  // A `now` activity has no Anreise at all, so it also gets no RTDB journey
+  // listener — the feature being absent has to be absent in the cost, too.
+  const journeySupported = activitySupportsJourney(selection.plannedMode);
   useEffect(() => {
-    if (!joined) return;
+    if (!joined || !journeySupported) return;
     return watchActivityJourney(journeyContext);
-  }, [joined, journeyContext, watchActivityJourney]);
-  const journeys = joined ? getActivityJourneys(journeyContext) : [];
+  }, [joined, journeySupported, journeyContext, watchActivityJourney]);
+  const journeys = joined && journeySupported ? getActivityJourneys(journeyContext) : [];
   const armedJourney =
     activeJourney?.activityId === selection.id && activeJourney.status === 'armed'
       ? activeJourney
       : undefined;
-  const journeyIdlePresentation = journeyJoinPrompt
-    ? 'prompt'
-    : journeyEntryIsProminent(selection.startsAt, now)
-      ? 'action'
-      : 'hidden';
+  const journeyIdlePresentation = journeyEntryIsProminent(selection.startsAt, selection.endsAt, now)
+    ? 'action'
+    : 'hidden';
   const journeyFocusShortcut = (
     <JourneyFocusShortcut
       journeys={journeys}
@@ -381,18 +400,20 @@ export function ActivityContent({
           joined={joined}
           canEdit={canEdit}
           onEdit={onEdit}
+          onStartRoute={onStartRoute}
         />
         {journeyFocusShortcut}
         {participantSection}
-        <JourneyShareRow
-          activityId={selection.id}
-          context={journeyContext}
-          journeys={journeys}
-          armedJourney={armedJourney}
-          idlePresentation={journeyIdlePresentation}
-          onPromptDismiss={onDismissJourneyJoinPrompt}
-          onFocusParticipant={onFocusJourney}
-        />
+        {journeySupported ? (
+          <JourneyShareRow
+            activityId={selection.id}
+            context={journeyContext}
+            journeys={journeys}
+            armedJourney={armedJourney}
+            idlePresentation={journeyIdlePresentation}
+            onFocusParticipant={onFocusJourney}
+          />
+        ) : null}
         <View className="mt-4">
           <InlineChatPreview activityId={selection.id} accent={accent} onExpand={onExpandChat} />
         </View>
@@ -413,6 +434,7 @@ export function ActivityContent({
         joined={joined}
         canEdit={canEdit}
         onEdit={onEdit}
+        onStartRoute={onStartRoute}
       />
 
       {/* 4. Participant list */}
@@ -432,6 +454,7 @@ export function ActivityContent({
             label={MODE_COPY[selection.mode].cta}
             icon="add"
             accent={accent}
+            loading={joining}
             onPress={onJoin}
           />
         )}

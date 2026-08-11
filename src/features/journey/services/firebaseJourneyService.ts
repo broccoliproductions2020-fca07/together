@@ -51,7 +51,7 @@ export const firebaseJourneyService: JourneyService = {
     await ensureMember({ activityId });
   },
 
-  subscribeActivityJourney(_actor, activity, cb) {
+  subscribeActivityJourney(_actor, activity, cb, onError) {
     const unsubscribe = onValue(locationsRef(activity.id), (snapshot) => {
       const value = snapshot.val() as Record<string, Omit<JourneyLocationDoc, 'uid'>> | null;
       const locations = Object.entries(value ?? {}).map(([uid, data]) => ({
@@ -59,7 +59,7 @@ export const firebaseJourneyService: JourneyService = {
         uid,
       }));
       cb(locations);
-    });
+    }, onError);
 
     return () => {
       unsubscribe();
@@ -89,10 +89,11 @@ export const firebaseJourneyService: JourneyService = {
 
   async stopJourney(actor, activityId) {
     const ownRef = ownLocationRef(activityId, actor.uid);
-    // Cancel the pending onDisconnect first so it can't fire after we've cleanly
-    // removed the node ourselves.
-    await onDisconnect(ownRef).cancel();
-    await syncJourneyLiveStatus(activityId, false);
+    // Remove first. If the network drops before this succeeds, the already
+    // registered onDisconnect cleanup remains armed instead of leaving a last
+    // coordinate behind until the activity expiry.
     await remove(ownRef);
+    await onDisconnect(ownRef).cancel().catch(() => {});
+    await syncJourneyLiveStatus(activityId, false);
   },
 };

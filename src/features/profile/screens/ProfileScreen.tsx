@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import * as Location from 'expo-location';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Alert, Image, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 
 import { ProfileEditSheet, useAuth, type SignInProvider } from '@/features/auth';
@@ -99,7 +99,13 @@ function GroupLabel({ children }: { children: ReactNode }) {
   );
 }
 
-function GroupCard({ children, tone = 'normal' }: { children: ReactNode; tone?: 'normal' | 'danger' }) {
+function GroupCard({
+  children,
+  tone = 'normal',
+}: {
+  children: ReactNode;
+  tone?: 'normal' | 'danger';
+}) {
   const colors = useThemeColors();
   return (
     <View
@@ -144,7 +150,11 @@ function SettingRow({
       accessibilityLabel={value ? `${title}, ${value}` : title}
       disabled={!onPress}
       className="min-h-[56px] flex-row items-center gap-3 px-3.5 py-2.5 active:opacity-70"
-      style={first ? undefined : { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }}
+      style={
+        first
+          ? undefined
+          : { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border }
+      }
       onPress={onPress}
     >
       <View
@@ -156,7 +166,11 @@ function SettingRow({
       <View className="flex-1">
         <Text
           {...TEXT_FLEXIBLE}
-          style={{ ...TYPE.label, fontFamily: FONT.semibold, color: titleColor ?? colors.foreground }}
+          style={{
+            ...TYPE.label,
+            fontFamily: FONT.semibold,
+            color: titleColor ?? colors.foreground,
+          }}
         >
           {title}
         </Text>
@@ -297,7 +311,9 @@ export function ProfileScreen() {
   const [privacyInfoVisible, setPrivacyInfoVisible] = useState(false);
   const [requestPolicyOpen, setRequestPolicyOpen] = useState(false);
   const [codeVisible, setCodeVisible] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
   const [journeyBusy, setJourneyBusy] = useState(false);
+  const pushToggleInFlightRef = useRef(false);
   const colors = useThemeColors();
   const { preference: themePreference, setPreference: setThemePreference } = useThemePreference();
   const { preference: mapStyle, setPreference: setMapStyle } = useMapStyle();
@@ -327,16 +343,29 @@ export function ProfileScreen() {
   }
 
   async function handlePushToggle() {
-    if (pushEnabled) {
-      await disablePush();
-      return;
-    }
-    const enabled = await enablePush();
-    if (!enabled) {
+    if (pushToggleInFlightRef.current) return;
+    pushToggleInFlightRef.current = true;
+    setPushBusy(true);
+    try {
+      if (pushEnabled) {
+        await disablePush();
+        return;
+      }
+      const enabled = await enablePush();
+      if (!enabled) {
+        Alert.alert(
+          'Benachrichtigungen nicht aktiviert',
+          'Erlaube Como Benachrichtigungen in den Systemeinstellungen deines Geräts.',
+        );
+      }
+    } catch {
       Alert.alert(
-        'Benachrichtigungen nicht aktiviert',
-        'Erlaube Together Benachrichtigungen in den Systemeinstellungen deines Geräts.',
+        'Einstellung nicht gespeichert',
+        'Bitte pr\u00fcfe deine Verbindung und versuche es erneut.',
       );
+    } finally {
+      pushToggleInFlightRef.current = false;
+      setPushBusy(false);
     }
   }
 
@@ -454,7 +483,7 @@ export function ProfileScreen() {
                     textTransform: 'uppercase',
                   }}
                 >
-                  Together · Mitglied
+                  Como · Mitglied
                 </Text>
                 {/* "Zeig mal deinen Code" — the most common real-life add-friends
                     moment. Hidden when the request policy blocks incoming requests. */}
@@ -590,7 +619,11 @@ export function ProfileScreen() {
                 accessibilityState={{ busy: verificationBusy }}
                 disabled={verificationBusy}
                 className="mt-2.5 min-h-[52px] flex-row items-center gap-2.5 rounded-[16px] px-3.5 py-2.5 active:opacity-70"
-                style={{ backgroundColor: `${WARNING}1F`, borderWidth: 1, borderColor: `${WARNING}66` }}
+                style={{
+                  backgroundColor: `${WARNING}1F`,
+                  borderWidth: 1,
+                  borderColor: `${WARNING}66`,
+                }}
                 onPress={() => void handleVerification()}
               >
                 <Ionicons name="mail-unread-outline" size={17} color={WARNING} />
@@ -734,7 +767,7 @@ export function ProfileScreen() {
           <SettingRow
             icon="shield-checkmark-outline"
             iconColor={SUCCESS}
-            title="So schützt dich Together"
+            title="So schützt dich Como"
             subtitle="Profil, Standort, Chats — was immer gilt"
             onPress={() => setPrivacyInfoVisible(true)}
           />
@@ -747,7 +780,7 @@ export function ProfileScreen() {
           <SettingRow
             icon="reader-outline"
             title="Nutzungsbedingungen"
-            subtitle="Regeln für die Nutzung von Together"
+            subtitle="Regeln für die Nutzung von Como"
             onPress={() => router.push('/nutzungsbedingungen')}
           />
           <SettingRow
@@ -790,31 +823,32 @@ export function ProfileScreen() {
                 ? 'Wichtige Updates zu Activities und Sicherheit sind aktiv.'
                 : 'Aktiviere Hinweise für relevante Updates.'
             }
-            onPress={() => void handlePushToggle()}
+            onPress={pushBusy ? undefined : () => void handlePushToggle()}
             trailing={
-              <Switch
-                value={pushEnabled}
-                onValueChange={() => void handlePushToggle()}
-                trackColor={{ false: colors.border, true: ACCENT }}
-                thumbColor="#ffffff"
-              />
+              <View pointerEvents="none">
+                <Switch
+                  value={pushEnabled}
+                  disabled={pushBusy}
+                  trackColor={{ false: colors.border, true: ACCENT }}
+                  thumbColor="#ffffff"
+                />
+              </View>
             }
           />
-          {/* The reminder only OFFERS to share; each activity's location
-              release is still confirmed individually (docs/safety-mode.md). */}
           <SettingRow
             icon="navigate-outline"
             title="Anreise-Erinnerungen"
             subtitle="Eine Stunde vor beigetretenen Aktivitäten fragen."
-            onPress={() => void handleJourneyRemindersToggle()}
+            onPress={journeyBusy ? undefined : () => void handleJourneyRemindersToggle()}
             trailing={
-              <Switch
-                value={journeyRemindersEnabled}
-                disabled={journeyBusy}
-                onValueChange={() => void handleJourneyRemindersToggle()}
-                trackColor={{ false: colors.border, true: ACCENT }}
-                thumbColor="#ffffff"
-              />
+              <View pointerEvents="none">
+                <Switch
+                  value={journeyRemindersEnabled}
+                  disabled={journeyBusy}
+                  trackColor={{ false: colors.border, true: ACCENT }}
+                  thumbColor="#ffffff"
+                />
+              </View>
             }
           />
         </GroupCard>

@@ -303,9 +303,7 @@ function MitteilungenRow({
       ) : null}
       <PressableScale
         accessibilityRole="button"
-        accessibilityLabel={
-          hasNews ? `Mitteilungen, ${count} neu` : 'Mitteilungen, alles gelesen'
-        }
+        accessibilityLabel={hasNews ? `Mitteilungen, ${count} neu` : 'Mitteilungen, alles gelesen'}
         haptic={false}
         style={[
           styles.stackFront,
@@ -439,10 +437,7 @@ function FriendRequestCard({ request }: { request: FriendRequest }) {
               className="h-full w-full"
             />
           ) : (
-            <Text
-              {...TEXT_CAPPED}
-              style={{ ...TYPE.label, fontFamily: FONT.bold, color: ACCENT }}
-            >
+            <Text {...TEXT_CAPPED} style={{ ...TYPE.label, fontFamily: FONT.bold, color: ACCENT }}>
               {request.friend.initials}
             </Text>
           )}
@@ -531,9 +526,7 @@ function GroupInviteCard({
       haptics.warning();
       Alert.alert(
         'Einladung nicht mehr verfügbar',
-        error instanceof Error
-          ? error.message
-          : 'Vielleicht ist die Planung abgelaufen oder voll.',
+        error instanceof Error ? error.message : 'Vielleicht ist die Planung abgelaufen oder voll.',
       );
       setResponse(null);
     }
@@ -853,7 +846,7 @@ function NotificationCard({
   isNew,
   onOpenActivity,
   onOpenSafety,
-  onAcceptSpontaneousRound,
+  onOpenSpontaneousRoundInvite,
   safetyAvailable,
 }: {
   group: NotificationGroup;
@@ -861,7 +854,7 @@ function NotificationCard({
   isNew: boolean;
   onOpenActivity: (activityId: string) => void;
   onOpenSafety: (ownerUid?: string) => void;
-  onAcceptSpontaneousRound: (roundId: string) => Promise<void>;
+  onOpenSpontaneousRoundInvite: (roundId: string) => void;
   safetyAvailable: boolean;
 }) {
   const colors = useThemeColors();
@@ -874,27 +867,16 @@ function NotificationCard({
   const safety = notification.kind.startsWith('safety_');
   const spontaneousRoundInvite =
     notification.kind === 'spontaneous_round_invite' && Boolean(notification.roomId);
-  const [acceptingRound, setAcceptingRound] = useState(false);
-  const acceptRound = async () => {
-    if (!notification.roomId || acceptingRound) return;
-    setAcceptingRound(true);
-    try {
-      await onAcceptSpontaneousRound(notification.roomId);
-    } catch {
-      Alert.alert(
-        'Runde nicht mehr verfügbar',
-        'Vielleicht hast du bereits eine andere Runde angenommen oder die Einladung ist abgelaufen.',
-      );
-    } finally {
-      setAcceptingRound(false);
-    }
-  };
   const onPress = activityAvailable
     ? () => onOpenActivity(notification.activityId!)
     : safety && safetyAvailable
       ? () => onOpenSafety(notification.safetyOwnerUid)
       : spontaneousRoundInvite
-        ? acceptRound
+        ? // Opens the confirmation sheet — it does NOT join. Tapping used to
+          // accept outright, which put you in a room with people you had not
+          // seen yet. The preview callable fires from there, on this deliberate
+          // tap only, never for every card in the list.
+          () => onOpenSpontaneousRoundInvite(notification.roomId!)
         : undefined;
   const isGroupedJoin = notification.kind === 'activity_joined' && group.count > 1;
   const isGroupedUpdate = notification.kind === 'activity_updated' && group.count > 1;
@@ -907,11 +889,16 @@ function NotificationCard({
     ? `${group.count} Personen sind deiner Activity beigetreten.`
     : isGroupedUpdate
       ? `Neueste Änderung: ${notification.body}`
-      : notification.body;
+      : // The reminder's body is written by the server at send time and says
+        // "Anreise teilen? Zum Aktivieren tippen." Once the activity is gone
+        // the card is already not tappable — so that sentence instructs you to
+        // do something the card cannot do. Say what is true instead.
+        notification.kind === 'journey_reminder' && !activityAvailable
+        ? 'Diese Activity ist vorbei.'
+        : notification.body;
   const actionLabel = spontaneousRoundInvite
-    ? acceptingRound
-      ? 'Wird angenommen …'
-      : 'Zurückwinken'
+    ? // The card no longer joins, so it must not promise that it does.
+      'Einladung ansehen'
     : safety
       ? 'Heimweg öffnen'
       : 'Activity ansehen';
@@ -921,7 +908,7 @@ function NotificationCard({
       <PressableScale
         accessibilityRole={onPress ? 'button' : undefined}
         accessibilityLabel={onPress ? `${title} öffnen` : undefined}
-        disabled={!onPress || acceptingRound}
+        disabled={!onPress}
         haptic={Boolean(onPress)}
         style={[
           styles.messageCard,
@@ -994,7 +981,7 @@ export interface PostfachSheetProps {
   onEditActivity?: (activity: ActivityInfo) => void;
   onOpenActivity: (activityId: string) => void;
   onOpenSafety: (ownerUid?: string) => void;
-  onAcceptSpontaneousRound: (roundId: string) => Promise<void>;
+  onOpenSpontaneousRoundInvite: (roundId: string) => void;
 }
 
 export function PostfachSheet({
@@ -1005,7 +992,7 @@ export function PostfachSheet({
   onEditActivity,
   onOpenActivity,
   onOpenSafety,
-  onAcceptSpontaneousRound,
+  onOpenSpontaneousRoundInvite,
 }: PostfachSheetProps) {
   const insets = useSafeAreaInsets();
   const colors = useThemeColors();
@@ -1094,6 +1081,12 @@ export function PostfachSheet({
   };
   const rooms: PostfachRoom[] = joinedIds
     .map((id): PostfachRoom | null => {
+      const room = getRoom(id);
+      // An activity or group gets a room at creation/join time so anyone can
+      // start a conversation from its detail. It belongs in the Postfach only
+      // once there is an actual conversation to return to.
+      if (!room || (room.messageCount ?? 0) < 1) return null;
+
       const activity = findActivityById(id);
       if (activity) {
         const includesCurrentUser = activity.participants.some(
@@ -1246,9 +1239,7 @@ export function PostfachSheet({
     ],
   }));
 
-  const hasLiveItems = Boolean(
-    friendSessions.length || incomingRequests.length || activeJourney,
-  );
+  const hasLiveItems = Boolean(friendSessions.length || incomingRequests.length || activeJourney);
   const notificationsEmpty = !hasLiveItems && !notificationGroups.length;
 
   return (
@@ -1463,11 +1454,11 @@ export function PostfachSheet({
                               isNew={isGroupNew(group)}
                               onOpenActivity={onOpenActivity}
                               onOpenSafety={onOpenSafety}
-                              onAcceptSpontaneousRound={onAcceptSpontaneousRound}
+                              onOpenSpontaneousRoundInvite={onOpenSpontaneousRoundInvite}
                               safetyAvailable={Boolean(
                                 group.primary.safetyOwnerUid &&
-                                  (activeSafetyOwnerUids.has(group.primary.safetyOwnerUid) ||
-                                    ownSafetySession?.uid === group.primary.safetyOwnerUid),
+                                (activeSafetyOwnerUids.has(group.primary.safetyOwnerUid) ||
+                                  ownSafetySession?.uid === group.primary.safetyOwnerUid),
                               )}
                             />
                           ),
@@ -1572,8 +1563,7 @@ export function PostfachSheet({
                           color: colors.mutedForeground,
                         }}
                       >
-                        Hier erscheinen nur Dinge, die für dich wichtig oder handlungsrelevant
-                        sind.
+                        Hier erscheinen nur Dinge, die für dich wichtig oder handlungsrelevant sind.
                       </Text>
                     </View>
                   ) : null}

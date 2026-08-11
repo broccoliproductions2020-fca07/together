@@ -21,7 +21,12 @@ import type {
   PresenceDoc,
 } from './services/presenceService.types';
 
-const STORAGE_KEY = 'together.open.status.v1';
+const STORAGE_KEY_PREFIX = 'together.open.status.v2.';
+const LEGACY_STORAGE_KEY = 'together.open.status.v1';
+
+function storageKeyFor(accountUid: string) {
+  return `${STORAGE_KEY_PREFIX}${accountUid}`;
+}
 
 /** How long "open" lasts before it auto-expires, so the pool never rots. */
 export const OPEN_DURATION_MS = 3 * 60 * 60 * 1000;
@@ -100,6 +105,12 @@ export interface OpenStatusValue {
    * or no fix). The card surfaces this — a toggle that silently does nothing
    * is worse than one that admits it cannot work. */
   shareLocationBlocked: boolean;
+  /** A local presence change is waiting for its backend acknowledgement. */
+  syncing: boolean;
+  /** The last presence write was not accepted; the local state was rolled back. */
+  syncError: string | null;
+  /** Retries the exact open-status change that was rolled back. */
+  retrySync: () => void;
   /** Turn open off. */
   close: () => void;
 }
@@ -142,18 +153,75 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
   const [shareLocationBlocked, setShareLocationBlocked] = useState(false);
   const [openFriends, setOpenFriends] = useState<PresenceDoc[]>([]);
   const [friendPresenceListening, setFriendPresenceListening] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
   const remotePresenceRef = useRef(false);
+  const activeAccountUidRef = useRef(actor.uid);
+  activeAccountUidRef.current = actor.uid;
+  const statusRef = useRef<PersistedStatus>(CLOSED);
+  statusRef.current = status;
+  const hydrationRevisionRef = useRef(0);
+  const storageWriteChainRef = useRef<Promise<void>>(Promise.resolve());
+  const presenceWriteChainRef = useRef<Promise<void>>(Promise.resolve());
+  const statusRevisionRef = useRef(0);
+  const confirmedStatusRef = useRef<PersistedStatus>(CLOSED);
+  const suppressedWriteRevisionRef = useRef<number | null>(null);
+  const failedTargetRef = useRef<PersistedStatus | null>(null);
+  const hasIssuedOpenWriteRef = useRef(false);
   // Gate the write-through until we've loaded the persisted status, so we don't
-  // momentarily delete-then-recreate the presence doc on every app start.
-  const [hydrated, setHydrated] = useState(false);
+  // momentarily delete-then-recreate the presence doc on every app start. The
+  // uid makes a previous account's status ineligible during an account switch.
+  const [hydratedAccountUid, setHydratedAccountUid] = useState<string | null>(null);
+
+  const queueStorageWrite = useCallback((accountUid: string, next: PersistedStatus) => {
+    const key = storageKeyFor(accountUid);
+    const write = async () => {
+      if (next.isOpen) await AsyncStorage.setItem(key, JSON.stringify(next));
+      else await AsyncStorage.removeItem(key);
+    };
+    storageWriteChainRef.current = storageWriteChainRef.current
+      .catch(() => {})
+      .then(write)
+      .catch(() => {});
+  }, []);
+
+  const queuePresenceWrite = useCallback((write: () => Promise<void> | void) => {
+    const next = presenceWriteChainRef.current.catch(() => {}).then(write);
+    presenceWriteChainRef.current = next.catch(() => {});
+    return next;
+  }, []);
 
   // Restore a still-valid open status across reloads; drop it if already expired.
   useEffect(() => {
-    AsyncStorage.getItem(STORAGE_KEY)
+    const accountUid = actor.uid;
+    const revision = ++hydrationRevisionRef.current;
+    let cancelled = false;
+    remotePresenceRef.current = false;
+    hasIssuedOpenWriteRef.current = false;
+    confirmedStatusRef.current = CLOSED;
+    failedTargetRef.current = null;
+    statusRef.current = CLOSED;
+    setStatus(CLOSED);
+    setSyncError(null);
+    setSyncing(false);
+    setCoarse(null);
+    setShareLocationBlocked(false);
+    setHydratedAccountUid(null);
+    // The old global key carries no account id, so importing it could announce
+    // one person's status as another person's. Discard it instead of guessing.
+    void AsyncStorage.removeItem(LEGACY_STORAGE_KEY).catch(() => {});
+
+    AsyncStorage.getItem(storageKeyFor(accountUid))
       .then((stored) => {
+        if (
+          cancelled ||
+          activeAccountUidRef.current !== accountUid ||
+          revision !== hydrationRevisionRef.current
+        ) {
+          return;
+        }
         if (stored) {
           const parsed = JSON.parse(stored) as PersistedStatus;
-          remotePresenceRef.current = parsed.isOpen;
           if (
             parsed.isOpen &&
             parsed.expiresAt &&
@@ -162,27 +230,46 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
           ) {
             // A status persisted before openedAt existed still has to draw a
             // sensible ring: assume it started one default window before it ends.
-            setStatus({
+            const next = {
               ...parsed,
               openedAt: parsed.openedAt ?? parsed.expiresAt - OPEN_DURATION_MS,
-            });
+            };
+            remotePresenceRef.current = true;
+            confirmedStatusRef.current = next;
+            statusRef.current = next;
+            setStatus(next);
           } else {
-            AsyncStorage.removeItem(STORAGE_KEY).catch(() => {});
+            void AsyncStorage.removeItem(storageKeyFor(accountUid)).catch(() => {});
           }
         }
       })
       .catch(() => {})
-      .finally(() => setHydrated(true));
-  }, []);
+      .finally(() => {
+        if (
+          !cancelled &&
+          activeAccountUidRef.current === accountUid &&
+          revision <= hydrationRevisionRef.current
+        ) {
+          setHydratedAccountUid(accountUid);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [actor.uid]);
 
-  const persist = useCallback((next: PersistedStatus) => {
-    setStatus(next);
-    if (next.isOpen) {
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
-    } else {
-      AsyncStorage.removeItem(STORAGE_KEY).catch(() => {});
-    }
-  }, []);
+  const persist = useCallback(
+    (next: PersistedStatus) => {
+      hydrationRevisionRef.current += 1;
+      statusRevisionRef.current += 1;
+      statusRef.current = next;
+      setStatus(next);
+      queueStorageWrite(actor.uid, next);
+      failedTargetRef.current = null;
+      setSyncError(null);
+    },
+    [actor.uid, queueStorageWrite],
+  );
 
   // Auto-expire: schedule a close exactly when the window ends.
   useEffect(() => {
@@ -237,16 +324,52 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
   // cancels the previous pending write via the effect cleanup, so a burst of
   // changes (typing, quick chip taps) collapses into a single `setDoc`.
   useEffect(() => {
-    if (!hydrated) return;
-    if (!status.isOpen) {
-      if (remotePresenceRef.current) {
-        remotePresenceRef.current = false;
-        presenceService.clearPresence(actor);
-      }
+    if (hydratedAccountUid !== actor.uid) return;
+    const revision = statusRevisionRef.current;
+    const target = status;
+    if (suppressedWriteRevisionRef.current === revision) {
+      suppressedWriteRevisionRef.current = null;
       return;
     }
 
-    remotePresenceRef.current = true;
+    const fail = () => {
+      if (revision !== statusRevisionRef.current) return;
+      const rollback = confirmedStatusRef.current;
+      failedTargetRef.current = target;
+      const rollbackRevision = ++statusRevisionRef.current;
+      suppressedWriteRevisionRef.current = rollbackRevision;
+      statusRef.current = rollback;
+      setStatus(rollback);
+      queueStorageWrite(actor.uid, rollback);
+      setSyncing(false);
+      setSyncError(
+        target.isOpen
+          ? 'Dein Offen-Status konnte nicht veröffentlicht werden.'
+          : 'Dein Offen-Status konnte noch nicht beendet werden.',
+      );
+    };
+
+    const complete = () => {
+      confirmedStatusRef.current = target;
+      remotePresenceRef.current = target.isOpen;
+      if (!target.isOpen) hasIssuedOpenWriteRef.current = false;
+      if (revision !== statusRevisionRef.current) return;
+      failedTargetRef.current = null;
+      setSyncError(null);
+      setSyncing(false);
+    };
+
+    const submit = (write: () => Promise<void> | void) => {
+      setSyncing(true);
+      void queuePresenceWrite(write).then(complete, fail);
+    };
+
+    if (!status.isOpen) {
+      if (remotePresenceRef.current || hasIssuedOpenWriteRef.current) {
+        submit(() => presenceService.clearPresence(actor));
+      }
+      return;
+    }
 
     const timer = setTimeout(() => {
       // No `audienceUids` here on purpose: the `publishPresence` callable
@@ -254,35 +377,43 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
       // and ignores anything the client sends. Sending it would imply the
       // client decides who may see it, which is not true and must not look
       // true to the next reader.
-      presenceService.setPresence(actor, {
-        vibe: status.vibe,
-        expiresAt: status.expiresAt ?? Date.now() + OPEN_DURATION_MS,
-        shareLocation: status.shareLocation,
-        coarseLocation: status.shareLocation ? coarse : null,
-      });
+      hasIssuedOpenWriteRef.current = true;
+      submit(() =>
+        presenceService.setPresence(actor, {
+          vibe: status.vibe,
+          expiresAt: status.expiresAt ?? Date.now() + OPEN_DURATION_MS,
+          shareLocation: status.shareLocation,
+          coarseLocation: status.shareLocation ? coarse : null,
+        }),
+      );
     }, PRESENCE_WRITE_DEBOUNCE_MS);
 
     return () => clearTimeout(timer);
-  }, [hydrated, actor, status, coarse]);
+  }, [hydratedAccountUid, actor, status, coarse, queuePresenceWrite, queueStorageWrite]);
 
   // Friend presence is only map chrome. Keep the own open-status write-through
   // above alive everywhere, but do not keep paying for friend updates while the
   // permanently-mounted map layer is hidden behind Calendar or Socialize.
   useEffect(() => {
+    const accountUid = actor.uid;
     setOpenFriends([]);
     if (!friendPresenceListening) return;
-    return presenceService.subscribeOpenFriends(actor, setOpenFriends);
+    return presenceService.subscribeOpenFriends(actor, (friends) => {
+      if (activeAccountUidRef.current !== accountUid) return;
+      setOpenFriends(friends);
+    });
   }, [actor, friendPresenceListening]);
 
   // Patch fields while open (no-op if closed), persisting the result.
-  const patch = useCallback((partial: Partial<PersistedStatus>) => {
-    setStatus((current) => {
-      if (!current.isOpen) return current;
+  const patch = useCallback(
+    (partial: Partial<PersistedStatus>) => {
+      const current = statusRef.current;
+      if (!current.isOpen) return;
       const next = { ...current, ...partial };
-      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
-      return next;
-    });
-  }, []);
+      persist(next);
+    },
+    [persist],
+  );
 
   const goOpen = useCallback(
     (input?: GoOpenInput) => {
@@ -308,6 +439,10 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
     [patch],
   );
   const close = useCallback(() => persist(CLOSED), [persist]);
+  const retrySync = useCallback(() => {
+    const target = failedTargetRef.current;
+    if (target) persist(target);
+  }, [persist]);
 
   const value = useMemo<OpenStatusValue>(
     () => ({
@@ -324,6 +459,9 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
       shareLocation: status.shareLocation,
       setShareLocation,
       shareLocationBlocked,
+      syncing,
+      syncError,
+      retrySync,
       close,
     }),
     [
@@ -335,6 +473,9 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
       setExpiresAt,
       setShareLocation,
       shareLocationBlocked,
+      syncing,
+      syncError,
+      retrySync,
       close,
     ],
   );

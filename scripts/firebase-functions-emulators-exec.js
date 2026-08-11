@@ -17,6 +17,7 @@ process.exit(
       FIREBASE_STORAGE_BUCKET: 'demo-together.appspot.com',
       FIREBASE_DATABASE_EMULATOR_HOST: '127.0.0.1:8281',
       FIREBASE_DATABASE_URL: 'https://demo-together-default-rtdb.firebaseio.com',
+      CLOUD_TASKS_EMULATOR_HOST: '127.0.0.1:9499',
     },
   }),
 );

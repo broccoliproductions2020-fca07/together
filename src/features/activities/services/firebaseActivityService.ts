@@ -12,6 +12,11 @@ import {
 import { httpsCallable } from '@react-native-firebase/functions';
 
 import { getFirebaseDb, getFirebaseFunctions } from '@/shared/services/firebase';
+import {
+  registerSyncOperationHandler,
+  runOrEnqueueSyncOperation,
+  type ActivityCreateSyncPayload,
+} from '@/features/sync';
 
 import type { ActivityDoc, ActivityDocUpdate, ActivityService } from './activityService.types';
 
@@ -37,7 +42,9 @@ function toMillis(value: unknown): number {
  * whole authenticated map down. Rules still validate every newly written doc;
  * this is deliberately a read-side compatibility guard. */
 function stringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
 }
 
 function activityParticipants(value: unknown): ActivityDoc['participants'] {
@@ -45,7 +52,8 @@ function activityParticipants(value: unknown): ActivityDoc['participants'] {
   return value.flatMap((item) => {
     if (!item || typeof item !== 'object') return [];
     const participant = item as Record<string, unknown>;
-    if (typeof participant.uid !== 'string' || typeof participant.displayName !== 'string') return [];
+    if (typeof participant.uid !== 'string' || typeof participant.displayName !== 'string')
+      return [];
     return [
       {
         uid: participant.uid,
@@ -63,6 +71,30 @@ function stripUndefined<T extends Record<string, unknown>>(obj: T): T {
   return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined)) as T;
 }
 
+async function submitActivityCreate(payload: ActivityCreateSyncPayload) {
+  const create = httpsCallable(getFirebaseFunctions(), 'createActivity');
+  await create({
+    activityId: payload.activityId,
+    activity: stripUndefined({
+      mode: payload.activity.mode,
+      title: payload.activity.title,
+      note: payload.activity.note,
+      audienceContext: payload.activity.audienceContext,
+      startsAt: payload.activity.startsAt,
+      endsAt: payload.activity.endsAt,
+      place: payload.activity.place ? stripUndefined(payload.activity.place) : undefined,
+      maxParticipants: payload.activity.maxParticipants,
+      category: payload.activity.category,
+      guestInvitesEnabled: payload.activity.guestInvitesEnabled,
+    }),
+  });
+}
+
+registerSyncOperationHandler('activity.create', async (operation) => {
+  if (operation.kind !== 'activity.create') return;
+  await submitActivityCreate(operation.payload);
+});
+
 function mapDoc(id: string, data: DocumentData): ActivityDoc {
   const participants = activityParticipants(data.participants);
   const participantUids = stringArray(data.participantUids);
@@ -74,7 +106,9 @@ function mapDoc(id: string, data: DocumentData): ActivityDoc {
     note: data.note,
     audienceUids: stringArray(data.audienceUids),
     participantUids:
-      participantUids.length > 0 ? participantUids : participants.map((participant) => participant.uid),
+      participantUids.length > 0
+        ? participantUids
+        : participants.map((participant) => participant.uid),
     startsAt: data.startsAt,
     endsAt: data.endsAt,
     place: data.place,
@@ -113,24 +147,21 @@ export const firebaseActivityService: ActivityService = {
     );
   },
 
-  createActivity(_actor, data, preferredId) {
+  createActivity(actor, data, preferredId) {
     const ref = preferredId ? doc(activitiesRef(), preferredId) : doc(activitiesRef());
-    const create = httpsCallable(getFirebaseFunctions(), 'createActivity');
-    const ready = create({
-      activityId: ref.id,
-      activity: stripUndefined({
-        mode: data.mode,
-        title: data.title,
-        note: data.note,
-        audienceContext: data.audienceContext,
-        startsAt: data.startsAt,
-        endsAt: data.endsAt,
-        place: data.place ? stripUndefined(data.place) : undefined,
-        maxParticipants: data.maxParticipants,
-        category: data.category,
-        guestInvitesEnabled: data.guestInvitesEnabled,
-      }),
-    }).then(() => undefined);
+    const payload: ActivityCreateSyncPayload = { activityId: ref.id, activity: data };
+    const ready = runOrEnqueueSyncOperation(
+      {
+        id: `activity.create:${ref.id}`,
+        accountId: actor.uid,
+        kind: 'activity.create',
+        payload,
+        createdAt: Date.now(),
+        attempts: 0,
+        status: 'queued',
+      },
+      () => submitActivityCreate(payload),
+    );
     return { id: ref.id, ready };
   },
 
@@ -178,7 +209,10 @@ export const firebaseActivityService: ActivityService = {
     const result = await httpsCallable<
       { activityId: string; targetUid: string },
       { ok: true; state: 'invited' | 'already_invited' }
-    >(getFirebaseFunctions(), 'inviteFriendToActivity')({ activityId: id, targetUid });
+    >(
+      getFirebaseFunctions(),
+      'inviteFriendToActivity',
+    )({ activityId: id, targetUid });
     return result.data.state;
   },
 };

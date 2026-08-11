@@ -16,6 +16,30 @@ export interface NotificationGroup {
   ids: string[];
 }
 
+/**
+ * How long a `journey_reminder` can possibly still mean something.
+ *
+ * It is an OFFER ("Anreise teilen? Zum Aktivieren tippen"), sent up to
+ * `JOURNEY_REMINDER_LEAD_MS` (1 h) before the activity starts, and it dies with
+ * the activity. The longest an activity can run is the composer's 12 h maximum,
+ * plus `JOURNEY_BUFFER_MS` (30 min) of grace — so 14 h after the reminder was
+ * written it is provably dead, whatever else is or is not loaded.
+ *
+ * Derived from the notification alone on purpose: no activity lookup, no extra
+ * read, and no dependency on whether the activity feed has arrived yet — a
+ * feed-based test would hide fresh reminders during the first frames after a
+ * cold start, which is worse than showing a stale one.
+ */
+const JOURNEY_REMINDER_USEFUL_MS = 14 * 60 * 60 * 1000;
+
+/** A time-bound offer whose moment has demonstrably passed. */
+function isDeadJourneyOffer(notification: NotificationDoc, now: number) {
+  return (
+    notification.kind === 'journey_reminder' &&
+    now - notification.createdAt > JOURNEY_REMINDER_USEFUL_MS
+  );
+}
+
 export function isCurrentSafetyNotification(notification: NotificationDoc) {
   return (
     notification.kind === 'safety_request' ||
@@ -40,8 +64,14 @@ export function groupMailboxNotifications(
       .map((notification) => notification.activityId!),
   );
 
+  const now = Date.now();
+
   notifications.forEach((notification) => {
     if (notification.kind === 'chat_message') return;
+    // An expired offer is not history worth keeping — it is an instruction that
+    // can no longer be followed. Everything else stays: a join or a cancellation
+    // remains true after the fact, an offer does not.
+    if (isDeadJourneyOffer(notification, now)) return;
     if (
       notification.activityId &&
       cancelledActivityIds.has(notification.activityId) &&

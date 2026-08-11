@@ -6,7 +6,7 @@ import { useThemeColors } from '@/features/theme';
 import { AnimatedToggleIcon } from '@/shared/components/AnimatedToggleIcon';
 import { FONT, TEXT_CAPPED, TEXT_FLEXIBLE, TYPE } from '@/shared/theme';
 
-import type { ChatMessage } from '../types';
+import { isRetryableFailure, SEND_FAILURE_TEXT, type ChatMessage } from '../types';
 
 /** "Plan steht" is a state change, not a room colour — it keeps the now-green. */
 const PLANNED_COLOR = '#41C08D';
@@ -22,6 +22,7 @@ export function ProposalCard({
   accent: roomAccent,
   onToggleConfirm,
   onCreateActivity,
+  onRetry,
 }: {
   message: ChatMessage;
   showAuthor?: boolean;
@@ -29,6 +30,7 @@ export function ProposalCard({
   accent: string;
   onToggleConfirm?: () => void;
   onCreateActivity?: () => void;
+  onRetry?: () => void;
 }) {
   const { user } = useAuth();
   const colors = useThemeColors();
@@ -112,6 +114,53 @@ export function ProposalCard({
           {proposal.confirmedBy.length} dabei
         </Text>
 
+        {message.pending ? (
+          <View className="flex-row items-center gap-1.5">
+            <Ionicons name="cloud-upload-outline" size={15} color={colors.mutedForeground} />
+            <Text
+              {...TEXT_FLEXIBLE}
+              style={{ ...TYPE.caption, fontFamily: FONT.medium, color: colors.mutedForeground }}
+            >
+              Wird gesendet …
+            </Text>
+          </View>
+        ) : null}
+
+        {message.failed ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Vorschlag erneut senden"
+            disabled={!isRetryableFailure(message.failureReason)}
+            onPress={onRetry}
+            className="flex-row items-center gap-1.5 self-start active:opacity-70"
+          >
+            <Ionicons name="alert-circle-outline" size={15} color="#D9534F" />
+            <Text
+              {...TEXT_FLEXIBLE}
+              style={{ ...TYPE.caption, fontFamily: FONT.semibold, color: '#D9534F' }}
+            >
+              {SEND_FAILURE_TEXT[message.failureReason ?? 'unknown']}
+            </Text>
+          </Pressable>
+        ) : null}
+
+        {message.proposalError ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Vorschlagsänderung erneut versuchen"
+            onPress={onRetry}
+            className="flex-row items-center gap-1.5 self-start active:opacity-70"
+          >
+            <Ionicons name="alert-circle-outline" size={15} color="#D9534F" />
+            <Text
+              {...TEXT_FLEXIBLE}
+              style={{ ...TYPE.caption, fontFamily: FONT.semibold, color: '#D9534F' }}
+            >
+              {message.proposalError} Erneut versuchen
+            </Text>
+          </Pressable>
+        ) : null}
+
         {planned ? (
           <View className="flex-row items-center gap-1.5 pt-1">
             <Ionicons name="checkmark-circle" size={16} color={PLANNED_COLOR} />
@@ -128,6 +177,7 @@ export function ProposalCard({
               accessibilityRole="button"
               accessibilityLabel={confirmed ? 'Zusage zurückziehen' : 'Zusagen'}
               onPress={onToggleConfirm}
+              disabled={message.pending || message.proposalPending === 'confirm'}
               className="min-h-11 flex-1 flex-row items-center justify-center gap-1.5 rounded-xl border py-2 active:opacity-80"
               style={{
                 borderColor: accent,
@@ -150,13 +200,18 @@ export function ProposalCard({
                   color: confirmed ? '#fff' : accent,
                 }}
               >
-                {confirmed ? 'Dabei' : 'Bin dabei'}
+                {message.proposalPending === 'confirm'
+                  ? 'Speichert …'
+                  : confirmed
+                    ? 'Dabei'
+                    : 'Bin dabei'}
               </Text>
             </Pressable>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Aktivität aus diesem Vorschlag erstellen"
               onPress={onCreateActivity}
+              disabled={message.pending || message.proposalPending === 'plan'}
               className="min-h-11 flex-1 flex-row items-center justify-center gap-1.5 rounded-xl py-2 active:opacity-80"
               style={{ backgroundColor: PLANNED_COLOR }}
             >
@@ -165,7 +220,7 @@ export function ProposalCard({
                 {...TEXT_CAPPED}
                 style={{ ...TYPE.label, fontFamily: FONT.bold, color: '#ffffff' }}
               >
-                Aktivität
+                {message.proposalPending === 'plan' ? 'Speichert …' : 'Aktivität'}
               </Text>
             </Pressable>
           </View>

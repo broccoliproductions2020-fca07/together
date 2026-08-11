@@ -1,7 +1,11 @@
 import type { GeoCoordinate } from '@/domain/geo';
-import type { NearbyFriend } from '@/features/map/types/map.types';
+import type { MapMarker, NearbyFriend } from '@/features/map/types/map.types';
 
 import type { PresenceDoc } from './services/presenceService.types';
+
+/** Prefix that keeps an open-presence marker id from ever colliding with an
+ * activity id, and makes the marker's kind obvious in a log line. */
+const OPEN_PRESENCE_MARKER_PREFIX = 'open-presence:';
 
 const EARTH_RADIUS_KM = 6371;
 
@@ -63,4 +67,43 @@ export function presenceToNearby(
       vibeLabel: doc.vibe?.label,
     };
   });
+}
+
+export function isOpenPresenceMarkerId(id: string): boolean {
+  return id.startsWith(OPEN_PRESENCE_MARKER_PREFIX);
+}
+
+export function openPresenceMarkerId(uid: string): string {
+  return `${OPEN_PRESENCE_MARKER_PREFIX}${uid}`;
+}
+
+/**
+ * Open friends who may appear ON the map, as plain marker records.
+ *
+ * The privacy rule is this filter and nothing else: a presence doc only carries
+ * `coarseLocation` while the person has deliberately switched sharing on, and
+ * the backend removes the field the moment they switch it off. So "no marker
+ * without consent" is structural — when sharing ends, or the window expires,
+ * the doc stops qualifying here and the marker is gone on the next snapshot.
+ * There is no separate visibility flag to keep in sync, and none should be added.
+ *
+ * `mode: 'open'` + `friendId` is what marks these as presence rather than a
+ * plan; MapCanvas keys its round-avatar rendering off exactly that pair.
+ */
+export function presenceToMapMarkers(docs: PresenceDoc[], now = Date.now()): MapMarker[] {
+  return docs
+    .filter((doc) => doc.shareLocation && doc.coarseLocation && doc.expiresAt > now)
+    .map((doc) => ({
+      id: openPresenceMarkerId(doc.uid),
+      userId: doc.uid,
+      displayName: doc.displayName,
+      initials: doc.initials,
+      avatarUrl: doc.avatarUrl,
+      mode: 'open' as const,
+      friendId: doc.uid,
+      coordinate: {
+        latitude: doc.coarseLocation!.lat,
+        longitude: doc.coarseLocation!.lng,
+      },
+    }));
 }

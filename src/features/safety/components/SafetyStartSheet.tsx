@@ -137,8 +137,8 @@ function IntroStep({ onNext, onClose }: { onNext: () => void; onClose: () => voi
       <View className="mt-3 flex-row items-start gap-2 rounded-2xl bg-white/[0.04] px-3.5 py-3">
         <Ionicons name="call-outline" size={16} color={STATUS_COLOR.red} />
         <Text className="flex-1 text-xs leading-4 text-white/55">
-          Together ist kein Notrufdienst. Die Zustellung von Benachrichtigungen und eine Reaktion
-          deiner Begleiter können nicht garantiert werden. Bei Gefahr rufe direkt 112.
+          Como ist kein Notrufdienst. Die Zustellung von Benachrichtigungen und eine Reaktion deiner
+          Begleiter können nicht garantiert werden. Bei Gefahr rufe direkt 112.
         </Text>
       </View>
 
@@ -549,9 +549,9 @@ export function SafetyStartSheet({ visible, onClose, onStartRequested }: SafetyS
                 <Ionicons name="notifications-outline" size={16} color={SAFETY_COLOR} />
                 <Text className="flex-1 text-xs leading-4 text-white/55">
                   Ausgewählte Personen erhalten eine Anfrage. Erst ihre Bestätigung zeigt dir, wer
-                  erreichbar ist. Together ist kein Notrufdienst. Die Zustellung von
-                  Benachrichtigungen und eine Reaktion deiner Begleiter können nicht garantiert
-                  werden. Bei Gefahr rufe direkt 112.
+                  erreichbar ist. Como ist kein Notrufdienst. Die Zustellung von Benachrichtigungen
+                  und eine Reaktion deiner Begleiter können nicht garantiert werden. Bei Gefahr rufe
+                  direkt 112.
                 </Text>
               </View>
 

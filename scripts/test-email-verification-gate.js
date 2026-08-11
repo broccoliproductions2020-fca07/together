@@ -84,7 +84,8 @@ async function main() {
     'unverified caller cannot use place autocomplete while the gate is on',
     'FAILED_PRECONDITION',
     () =>
-      callFunction(anonymous.token, 'autocompletePlaces', {
+      callFunction(anonymous.token, 'places', {
+        action: 'autocomplete',
         query: 'Kino',
         sessionToken: 'email-gate-session-token-1234',
       }),
@@ -120,7 +121,8 @@ async function main() {
   );
 
   await expectOk('verified caller can use place autocomplete while the gate is on', () =>
-    callFunction(verified.token, 'autocompletePlaces', {
+    callFunction(verified.token, 'places', {
+      action: 'autocomplete',
       query: 'Kino',
       sessionToken: 'email-gate-session-token-5678',
     }),

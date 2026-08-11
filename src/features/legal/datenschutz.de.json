@@ -7,7 +7,7 @@
       "blocks": [
         {
           "type": "p",
-          "text": "Verantwortlich für die Datenverarbeitung in der Together-App ist:"
+          "text": "Verantwortlich für die Datenverarbeitung in der Como-App ist:"
         },
         {
           "type": "list",
@@ -30,7 +30,7 @@
         {
           "type": "list",
           "items": [
-            "Together ist privat: kein öffentlicher Feed, keine öffentliche Profilsuche, keine Sichtbarkeit für Fremde. Deine Inhalte sehen nur bestätigte Freundinnen und Freunde, die du selbst auswählst.",
+            "Como ist privat: kein öffentlicher Feed, keine öffentliche Profilsuche, keine Sichtbarkeit für Fremde. Deine Inhalte sehen nur bestätigte Freundinnen und Freunde, die du selbst auswählst.",
             "Dein Standort wird nie automatisch geteilt. Jede Standortfreigabe ist eine bewusste Entscheidung, zeitlich begrenzt und endet automatisch.",
             "Chats und Aktivitäten löschen sich von selbst. Es entsteht kein dauerhaftes Archiv über dich.",
             "Wir zeigen keine Werbung, erstellen keine Werbeprofile und verkaufen keine Daten.",
@@ -161,7 +161,7 @@
       "blocks": [
         {
           "type": "p",
-          "text": "Zum Schutz vor Missbrauch prüft Firebase App Check (Google Play Integrity bzw. Apple App Attest), dass Anfragen aus der echten Together-App stammen. Serverseitige Ratenbegrenzungen speichern dafür kurzzeitig Zähler zu deinem Konto."
+          "text": "Zum Schutz vor Missbrauch prüft Firebase App Check (Google Play Integrity bzw. Apple App Attest), dass Anfragen aus der echten Como-App stammen. Serverseitige Ratenbegrenzungen speichern dafür kurzzeitig Zähler zu deinem Konto."
         },
         {
           "type": "p",
@@ -191,7 +191,7 @@
       "blocks": [
         {
           "type": "p",
-          "text": "Together ist so gebaut, dass Daten sich von selbst löschen:"
+          "text": "Como ist so gebaut, dass Daten sich von selbst löschen:"
         },
         {
           "type": "list",
@@ -282,7 +282,7 @@
       "blocks": [
         {
           "type": "p",
-          "text": "Together richtet sich an Personen ab 16 Jahren. Wenn du jünger als 16 Jahre bist, darfst du die App nicht nutzen."
+          "text": "Como richtet sich an Personen ab 16 Jahren. Wenn du jünger als 16 Jahre bist, darfst du die App nicht nutzen."
         }
       ]
     },

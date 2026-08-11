@@ -1,6 +1,6 @@
-# Together product overview
+# Como product overview
 
-Together helps confirmed friends meet more spontaneously. A person can be open,
+Como helps confirmed friends meet more spontaneously. A person can be open,
 plan something soon or be doing something now; the app helps the right people
 notice and coordinate a real meeting without becoming a public social feed.
 

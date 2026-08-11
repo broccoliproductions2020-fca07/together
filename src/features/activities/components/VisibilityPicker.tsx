@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Modal, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 
 import { useCircles, type CircleDoc } from '@/features/circles';
@@ -123,6 +123,10 @@ export function VisibilityPicker({ draft, onChange }: VisibilityPickerProps) {
   const [memberIds, setMemberIds] = useState<Set<string>>(() => new Set());
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
+  const [saveError, setSaveError] = useState<string>();
+  const saveInFlightRef = useRef(false);
+  const sheetRevisionRef = useRef(0);
+  const saveRevisionRef = useRef(0);
   const selectedGroupId = draft.visibility.kind === 'group' ? draft.visibility.groupId : undefined;
 
   const selectedGroup = useMemo(
@@ -144,22 +148,29 @@ export function VisibilityPicker({ draft, onChange }: VisibilityPickerProps) {
   }
 
   function closeSheet() {
-    if (busy) return;
+    sheetRevisionRef.current += 1;
+    saveInFlightRef.current = false;
+    setBusy(false);
     setSheetOpen(false);
     setSheetView('choose');
     setEditingGroup(null);
     setGroupName('');
     setMemberIds(new Set());
     setQuery('');
+    setSaveError(undefined);
   }
 
   function openGroupChooser() {
+    sheetRevisionRef.current += 1;
+    saveInFlightRef.current = false;
+    setBusy(false);
     void refreshCircles();
     setSheetView('choose');
     setEditingGroup(null);
     setGroupName('');
     setMemberIds(new Set());
     setQuery('');
+    setSaveError(undefined);
     setSheetOpen(true);
   }
 
@@ -168,14 +179,19 @@ export function VisibilityPicker({ draft, onChange }: VisibilityPickerProps) {
     setGroupName('');
     setMemberIds(new Set());
     setQuery('');
+    setSaveError(undefined);
     setSheetView('create');
   }
 
   function openEditGroup(group: CircleDoc) {
+    sheetRevisionRef.current += 1;
+    saveInFlightRef.current = false;
+    setBusy(false);
     setEditingGroup(group);
     setGroupName(group.name);
     setMemberIds(new Set(group.friendUids));
     setQuery('');
+    setSaveError(undefined);
     setSheetView('edit');
     setSheetOpen(true);
   }
@@ -191,21 +207,47 @@ export function VisibilityPicker({ draft, onChange }: VisibilityPickerProps) {
 
   async function saveGroup() {
     const name = groupName.trim();
-    if (busy || memberIds.size === 0 || (sheetView === 'create' && !name)) return;
+    if (
+      busy ||
+      saveInFlightRef.current ||
+      memberIds.size === 0 ||
+      (sheetView === 'create' && !name)
+    ) {
+      return;
+    }
+    const sheetRevision = sheetRevisionRef.current;
+    const saveRevision = ++saveRevisionRef.current;
+    const memberUids = [...memberIds];
+    const editingGroupId = editingGroup?.id;
+    const view = sheetView;
+    saveInFlightRef.current = true;
     setBusy(true);
+    setSaveError(undefined);
     try {
-      if (sheetView === 'edit' && editingGroup) {
-        await setCircleFriends(editingGroup.id, [...memberIds]);
+      if (view === 'edit' && editingGroupId) {
+        await setCircleFriends(editingGroupId, memberUids);
+        if (sheetRevision !== sheetRevisionRef.current) return;
         closeSheet();
         return;
       }
 
       const groupId = await createCircle(name);
-      await setCircleFriends(groupId, [...memberIds]);
+      await setCircleFriends(groupId, memberUids);
+      if (sheetRevision !== sheetRevisionRef.current) return;
       selectContext({ kind: 'group', groupId });
       closeSheet();
+    } catch (error) {
+      if (sheetRevision !== sheetRevisionRef.current) return;
+      setSaveError(
+        error instanceof Error && error.message
+          ? error.message
+          : 'Die Gruppe konnte nicht gespeichert werden. Bitte versuche es erneut.',
+      );
     } finally {
-      setBusy(false);
+      if (saveRevision === saveRevisionRef.current) {
+        saveInFlightRef.current = false;
+        if (sheetRevision === sheetRevisionRef.current) setBusy(false);
+      }
     }
   }
 
@@ -406,6 +448,11 @@ export function VisibilityPicker({ draft, onChange }: VisibilityPickerProps) {
                     </Text>
                   ) : null}
                 </ScrollView>
+                {saveError ? (
+                  <Text className="mt-3 rounded-2xl bg-red-500/10 px-3 py-2.5 text-sm font-semibold text-red-300">
+                    {saveError}
+                  </Text>
+                ) : null}
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel={

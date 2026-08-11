@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Image,
@@ -160,15 +160,24 @@ export function ChatRoomInfoSheet({
   const [titleDraft, setTitleDraft] = useState<string | null>(null);
   const [selectedInvitees, setSelectedInvitees] = useState<string[]>([]);
   const [safetyTargetUid, setSafetyTargetUid] = useState<string | null>(null);
+  const busyRef = useRef(false);
+  const membersRequestRevisionRef = useRef(0);
 
   const memberIdsKey = room?.memberIds.join(',') ?? '';
   const reloadMembers = useCallback(() => {
     if (!visible) return;
+    const requestRevision = ++membersRequestRevisionRef.current;
     setLoading(true);
     getRoomMembers(roomId)
-      .then((list) => setMembers(list))
-      .catch(() => setMembers([]))
-      .finally(() => setLoading(false));
+      .then((list) => {
+        if (requestRevision === membersRequestRevisionRef.current) setMembers(list);
+      })
+      .catch(() => {
+        if (requestRevision === membersRequestRevisionRef.current) setMembers([]);
+      })
+      .finally(() => {
+        if (requestRevision === membersRequestRevisionRef.current) setLoading(false);
+      });
     // memberIdsKey re-triggers after a change once the rooms listener catches up.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, roomId, memberIdsKey, getRoomMembers]);
@@ -176,7 +185,10 @@ export function ChatRoomInfoSheet({
   useEffect(reloadMembers, [reloadMembers]);
 
   useEffect(() => {
-    if (!visible) return;
+    if (!visible) {
+      membersRequestRevisionRef.current += 1;
+      return;
+    }
     setView({ kind: 'members' });
     setTitleDraft(null);
     setSelectedInvitees([]);
@@ -184,6 +196,8 @@ export function ChatRoomInfoSheet({
   }, [visible, roomId]);
 
   const run = (action: string, promise: Promise<void>, after?: () => void) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     promise
       .then(() => {
@@ -193,7 +207,10 @@ export function ChatRoomInfoSheet({
       .catch((error) => {
         Alert.alert(action, error?.message ?? 'Bitte versuche es gleich noch einmal.');
       })
-      .finally(() => setBusy(false));
+      .finally(() => {
+        busyRef.current = false;
+        setBusy(false);
+      });
   };
 
   const selectedProfile =
@@ -208,7 +225,8 @@ export function ChatRoomInfoSheet({
   );
 
   function sendInvites() {
-    if (!selectedInvitees.length) return;
+    if (!selectedInvitees.length || busyRef.current) return;
+    busyRef.current = true;
     setBusy(true);
     inviteToGroup(roomId, selectedInvitees)
       .then((result) => {
@@ -224,7 +242,10 @@ export function ChatRoomInfoSheet({
       .catch((error) =>
         Alert.alert('Einladen nicht möglich', error?.message ?? 'Bitte versuche es noch einmal.'),
       )
-      .finally(() => setBusy(false));
+      .finally(() => {
+        busyRef.current = false;
+        setBusy(false);
+      });
   }
 
   const headingStyle = { ...TYPE.body, fontFamily: FONT.bold, color: colors.foreground };
@@ -439,15 +460,14 @@ export function ChatRoomInfoSheet({
                             : 'Die Runde ist nur für Beteiligte sichtbar'}
                         </Text>
                       </View>
-                      <Switch
-                        value={room?.joinable === true}
-                        onValueChange={(next) =>
-                          run('Offen für Dazustoßer', setGroupOpen(roomId, next))
-                        }
-                        trackColor={{ false: colors.border, true: accent }}
-                        thumbColor="#ffffff"
-                        disabled={busy}
-                      />
+                      <View pointerEvents="none">
+                        <Switch
+                          value={room?.joinable === true}
+                          trackColor={{ false: colors.border, true: accent }}
+                          thumbColor="#ffffff"
+                          disabled={busy}
+                        />
+                      </View>
                     </Pressable>
                   ) : null}
 

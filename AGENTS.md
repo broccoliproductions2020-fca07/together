@@ -8,6 +8,15 @@ The core loop: set a mode (Open / Soon / Now) → friends nearby see it → some
 
 ---
 
+## Code Comments
+
+- Keep comments short and only for non-obvious rationale, security/privacy/cost constraints, or hard invariants.
+- Do not comment code that already explains itself; remove redundant comments during related edits.
+- Update or remove a comment as soon as its statement is no longer true.
+- Put longer product or architectural context in the relevant focused documentation, not inline in implementation files.
+
+---
+
 ## Backend Strategy & Hard Constraints
 
 **Target backend: Firebase** (Auth + Firestore + Storage + minimal Cloud Functions). The full architecture, data model, security concept, and build order live in **[docs/backend-plan.md](docs/backend-plan.md)** — read it before any backend work.
@@ -63,6 +72,24 @@ Rules that govern all backend work:
 **Tailwind note:** No `tailwind.config.js` — theme tokens are defined in `src/global.css`. Class-order conflicts (e.g. `bg-primary` always beats `bg-open`) are resolved by using `style={{ backgroundColor: accent }}` directly.
 
 ### Shipping an OTA
+
+**The whole procedure, in order. Do not reconstruct it — copy it.**
+
+1. Bump `extra.internalVersion` in `app.json` (see format rule below). Skip only if someone already bumped it since the last publish — check the value against the last published one first.
+2. `npm run typecheck` and `npx eslint src --quiet` (both must be clean).
+3. Run exactly this — one line, staging, iOS only:
+
+```bash
+APP_VARIANT=staging EXPO_PUBLIC_FIREBASE_EMULATORS=false EXPO_PUBLIC_FIREBASE_APP_CHECK_ENABLED=true EXPO_PUBLIC_CRASH_REPORTING_ENABLED=true EXPO_PUBLIC_STAGING_DIAGNOSTICS=true npx eas update --channel staging --environment preview --platform ios --non-interactive --message "<internalVersion> <was sich geändert hat>"
+```
+
+Why each part, so nobody "simplifies" it back into a break:
+
+- **The inline env vars are mandatory.** `eas update` sets `EXPO_NO_DOTENV`, so `.env` is not read and `app.config.js`'s local-dev guard throws before the project id resolves — the real error is swallowed (`expo config --json exited with non-zero code: 1`; use `EXPO_DEBUG=1` to see it). The values mirror the `staging` profile in `eas.json`.
+- **`--platform ios`, never `all`.** Android is not shipped this way.
+- **`--message` is mandatory** in non-interactive mode. Start it with the internalVersion so the dashboard list is readable. Avoid umlauts — the shell mangles them.
+- **Do not use `npm run update:staging`.** It still carries the missing-env bug AND hardcodes `--platform all`.
+- No EAS build, no Firebase deploy: `functions/index.js` and `firestore.rules` changes ship via `firebase deploy`, never via an OTA. If the diff touches them, say so explicitly rather than letting the client run against an older backend.
 
 - **Format is `x.y.zz` — the patch part is TWO digits, zero-padded** (`0.3.07`, then `0.3.08` … `0.3.99`). Fixed width so the number a human reads off a device sorts and compares at a glance; `0.3.6` was the last single-digit one and equals `0.3.06`.
 - **Bump `extra.internalVersion` in `app.json` by hand on EVERY OTA push — before publishing, not after.** It is the number a human reads off a test device to answer "am I running the update I just pushed?" (`buildInfo.ts` → `BuildInfo.line`). The EAS update id is the machine truth and is always unique, but two bundles published from the same `internalVersion` are indistinguishable to the person holding the phone, which defeats the field's only purpose. Patch-bump per push.
@@ -204,10 +231,10 @@ Receives `friends: NearbyFriend[]` (pin in radius, pre-sorted) and `friendsWitho
      "Ohne Näheangabe" section below explains itself. Never show radius advice to someone whose
      real problem is an empty friend list.
    - A denied foreground location permission renders an amber hint row under the RadiusSlider
-     ("Standort ist aus …", tap → `openLocationSettings()`); `MapScreen` requests the permission
-     on mount (`requestForegroundLocationPermission`, `shared/utils/locationPermission.ts`) — a
-     denial must never be swallowed silently anywhere (same rule for the composer's "Aktuellen
-     Standort verwenden" alert and the `shareLocationBlocked` hint in `OpenStatusCard`).
+     ("Standort ist aus …", tap → `openLocationSettings()`). The first request happens only from
+     the explicit boot introduction; later explicit location actions may request again. A denial
+     must never be swallowed silently anywhere (same rule for the composer's "Aktuellen Standort
+     verwenden" alert and the `shareLocationBlocked` hint in `OpenStatusCard`).
 2. **"Ohne Standort"** — `friendsWithoutLocation`, no distance, not navigable. Only rendered if non-empty.
 
 - **Header:** "N Freunde offen in deiner Nähe" (N = `friends.length`), plus a secondary "+ M offen ohne Standort" line when there are `none` friends. The no-location friends are surfaced but never inflate the headline nearby number.
@@ -234,8 +261,15 @@ Receives `friends: NearbyFriend[]` (pin in radius, pre-sorted) and `friendsWitho
 - `MapOverlay` floats absolutely over the map with all controls (SpeedDial, search bar, recenter, nearby pill). All copy is German ("Orte suchen", "Profil öffnen" — never English placeholders). It renders a soft SVG top scrim (dark → transparent, `insets.top + 64`) so the status bar stays readable over the bright map.
 - **Mode switching animates.** `MainSurface` wraps each mode in a `ModeLayer` that cross-fades (240 ms ease-out + scale 0.985→1) instead of hard opacity 0/1 swaps; inactive layers stay mounted and non-interactive (same semantics as before). `MarkerDetailSheet` renders a subtle mode-tinted top wash as an SVG **gradient fading to transparent** (accent 0.1 → 0 over 110px) — never a hard-edged color block that cuts across content.
 - **`WelcomeIntro`** (features/main): one-time welcome hero shown after the first sign-in (AsyncStorage `together:welcomeSeen:v2`), mounted in `MainSurface`. It uses the custom initial-`t` `TogetherMark` (never the retired circle/ring motif) and three value rows (Freunde/Karte/Kalender). The PRIMARY CTA is "Freunde hinzufügen" (→ `/friends`) — a friendless account gets zero value from map or calendar, so the first action a new user is offered must be building the graph; "Erst mal umsehen" dismisses as the quiet secondary. Modal is `statusBarTranslucent` + `navigationBarTranslucent` so it truly covers the whole screen. Never blocks returning users; storage errors → skip the intro.
+- **The map rotates (two fingers), flat AND pitched.** `rotateEnabled` + `showsCompass` on the `MapView`. The compass is not decoration: Google draws it only while heading ≠ 0 and hides it on reset, and it is the ONLY way back to north — without it a turned map is somewhere users get stuck. `pitchEnabled` stays **false**: tilt is a deliberate view choice owned by the perspective button (`props.pitched` → `PERSPECTIVE_PITCH`), not something to fall into mid-pan.
+  - **A rotation must survive every programmatic camera move.** `animateToRegion` and `fitToCoordinates` describe a flat, north-up viewport, so the renderer levels the tilt *and* turns back to north. `restoreCameraAfter(delay)` re-applies both after recenter/focus/fit; it runs whenever there is a pitch OR a heading to restore (it used to bail unless pitched, which is exactly why a rotated flat map snapped north the moment anything focused a marker). The perspective toggle likewise passes the current heading instead of `0` — that was free when the map could not turn and silently destroys the rotation now that it can.
+  - **Only gesture-driven region changes record the heading** (`userHeadingRef`, guarded by `details.isGesture`). Reading it back after a programmatic move would capture the north-up side effect and erase the very rotation the restore exists to re-apply.
 - `MapLocationPickerOverlay` takes over when picking a location for an activity.
 - `focusCoordinate` prop: during picker → `mapPickerFocusCoordinate`; otherwise → `mapFocusCoordinate` (set when navigating from NearbySheet). `selectionFocus` is a separate one-shot camera request: opening a place/activity detail keeps its coordinate centered in the visible upper map above the sheet while preserving the user's zoom.
+- **A requested delta on `selectionFocus` is a FLOOR ("come at least this close"), never a target.** Only POI taps request one (`POI_RESULT_FOCUS`), so the tapped label is legible; everything else passes none and keeps the zoom. Taken literally it pulled the camera back OUT from under someone already closer than 0.0025 — so `MapCanvas` clamps with `Math.min(requested, region.delta)`. Never zoom a user out to satisfy a legibility floor they already exceed.
+- **`onHeightChange` is not reported in chat mode** (`MarkerDetailSheet`). The chat sheet animates `height` — a LAYOUT property — so every frame of a drag or spring fires `onLayout`; since `props.bottomSheetHeight` sits in the deps of the `selectionFocus` camera effect, each frame answered with its own 300 ms `focusCamera`, turning a handle drag into a stream of camera moves (plus a `markCameraBusy` re-render each time). Chat mode also covers 60–92%, past the 80% cap where no map strip is left to centre in, so the number carries no information there. If you ever add another animated-height sheet, it must be excluded the same way.
+- **`focusKeepZoom` decides whether a focus may change the zoom, and the test is whose zoom it is.** A focus that jumps somewhere the user was NOT looking (own location on the first fix, leaving the Berlin-wide `DEFAULT_MAP_REGION`; "auf Karte zeigen" from a list; a journey participant, who can be anywhere) lands on the prescribed `PLACE_FOCUS_*_DELTA`, because the zoom they were at says nothing about the new place. A focus that recentres on something already in the user's own view keeps `regionRef.current`'s deltas exactly: **publishing an activity** (they chose that zoom while placing the pin), **the "Zentrieren" button** (it answers WHERE, not HOW CLOSE — you are already looking at this area, and panning away and tapping back says nothing about how far in you want to be), and restoring a marker after a failed cancel. Animating out to a fixed level in those cases reads as the map jumping away from the user.
+- **`PLACE_FOCUS_*_DELTA` is the ONLY prescribed jump zoom.** The single-coordinate branch of a fit request used to carry its own 0.012/0.01, so a Safety focus on one friend arrived at a different zoom than "auf Karte zeigen" on the same person; it now goes through `focusCamera` like everything else (which also gives it the heading/pitch preservation and the covered-height offset the multi-coordinate branch gets from its `edgePadding`). Two numbers for one job is how a map starts feeling arbitrary — do not add a third. Both halves of the request are set through **one** `focusMapOn(coordinate, { keepZoom })` in `MapScreen`, never as two separate `setState` calls — a stale `keepZoom` left over from an earlier focus silently changes how the next one behaves. **Every camera request must go through `focusMapOn`;** `setMapFocusCoordinate` has no other call site, and reintroducing one means the next focus inherits the previous request's zoom rule. (The old comment on `PLACE_FOCUS_*` justified the value with place *search*; search has long gone through `selectionFocus` + `POI_RESULT_FOCUS` instead.)
 - **"Centred" means centred in the VISIBLE map.** Both focus paths shift the camera south by `focusCenterOffset(coveredHeight, viewportHeight)` = half the covered share of the screen, where `coveredHeight` is the live height of whatever hides the map's bottom (`bottomSheetHeight` — the detail sheet reports its own measured height via `onHeightChange` — or the Safety split deck's `bottomOverlayHeight`). This replaced a hard-coded `DETAIL_SHEET_CENTER_OFFSET = 0.28`, which was calibrated for one sheet and put the pin too high for every other sheet size and too low for none at all. The formula is self-calibrating: no obstruction → dead centre, a sheet covering 56% → exactly the old 0.28. Capped at 80% covered, past which no meaningful map strip remains to centre in.
 - `onRegionChange` fires on every `onRegionChangeComplete` (native) or `focusCoordinate` change (`PreviewMapCanvas`). It passes a full `MapRegion` (center + both deltas). Its ONLY consumer is `updateMapPickerCenter` for the location picker — it does NOT feed the nearby count (which is viewport-independent by design).
 - `pin`-visibility friends have a matching map marker with a `friendId` field linking marker ↔ friend. Keep positions and the friend's `coordinate` in sync (the emulator seed owns both).
@@ -249,6 +283,7 @@ Receives `friends: NearbyFriend[]` (pin in radius, pre-sorted) and `friendsWitho
 **Surfaces that mean different things must LOOK different — audited with CIEDE2000, not contrast ratio.** Contrast ratio only measures lightness, so it scores a dark-green park on dark-grey ground as identical while missing nothing, and misses the real trap (same hue *and* lightness) entirely. Semantically distinct neighbours must clear ΔE00 ≈ 2 (below that they are indistinguishable in practice) and should clear ≈ 4; the ceiling is taste, not a number — these are meant to read as one family, so most sit in the 4–8 band. The audit caught 18 such collisions after the buildings fix: all four POI category rules rendering within ΔE00 1.1 of each other and of plain built-up (five rules producing one mush), minor vs main roads at ΔE00 1.0 in daylight, and forest vs park at 1.04 at night — the last directly contradicting the comment claiming they differ "at a glance". POI categories now carry a faint HUE identity (medical→red, school→amber, attraction→violet, business→warm neutral), stronger in the dark phases where luminance cannot carry it. **Road hierarchy legitimately lives in the CASING on light palettes** — main and minor roads are both white and Google separates them by width, which the style spec cannot set — so that pair passes on fill *or* casing. **`landscape.natural` is deliberately identical to the base ground in `dusk` and `night`**: unbuilt, unlit ground is one surface, the dark palettes have no luminance headroom to spend on a distinction carrying no information, and Google's dark map merges them too. That is asserted as an equality, so drifting to "nearly identical" fails.
 
 **Every palette owes the city a silhouette.** Buildings once sat within 1.03–1.06:1 of the ground in day, golden and night, so the map read as streets floating in a void. `landscape.man_made` must clear ~1.15:1 on the fill (massing) and ~1.5:1 on the stroke (the outline is what actually draws the block) — darker than the ground on light palettes, lighter on dark ones — while staying ≥3:1 below the lit roadway so the city never competes with the street network. Measured: lit road vs ground 11.24:1 at night, 7.72:1 at dusk; lit road vs building 9.48:1 / 6.41:1; every label ≥4:1 across all four static palettes and all 12 blends at 21 steps each. The sky blends on ONE shared curve — the old per-feature lead/lag that ran roads ahead of the ground was faking street lighting and is gone now that lighting is modelled for real. **Structural contract:** `blendSunMapStyles` pairs entries BY ARRAY INDEX, so all four palettes must keep the identical 30 entries in identical order — adding a rule to one means adding it to all four, in place, or a transition will blend roads into water.
+- **The live pulse (`MapLiveAuraOverlay`) is the marker's OWN squircle, not a circle behind it.** Height, corner radius and the width maths live in `activityMarkerLayout.ts` and are imported by both `ActivityMarkerChrome` and the aura, so the two cannot drift into "circle behind a squircle" — do not re-declare those numbers anywhere. Waves scale from the shell's centre but start at **scale 1.0**, i.e. exactly on the outline: the overlay draws ABOVE the native map (and therefore above the markers), so anything starting below 1.0 would crawl across the avatars' faces. The steady halo is sized `shell + 2×HALO_WIDTH` with radius `+ HALO_WIDTH` because RN draws borders inside the box — that is what puts the stroke fully outside the marker. **`ACTIVITY_MARKER_AURA_OFFSET_Y` is DERIVED from the anchor and the canvas height, never typed in** — it was hard-coded to `-40`, which is the centre of the whole marker block (bubble *plus* the name pill below it) rather than the centre of the bubble, so the pulse sat ~10.6 px too low. The soft oversized circle hid that for as long as it existed; a squircle hugging the outline shows it instantly. Waves get the settled shell width from `activityMarkerShellWidth(...)`; sampling the settled morph progress is correct because the aura only renders while the map is still. All wave arithmetic stays **inlined in the worklets**: a helper declared in the component body is a plain JS function and calling it on the UI thread throws.
 - **Cluster marker (`ClusterMarker`)** shows the first 4 avatars as a 2×2 quad (cells ≈half the inner circle so two fit per row; `slice(0,4)`). Count badge shows `N/MAX` when the cluster's `maxParticipants` is set (mirrors `AvatarMarker`), else the raw count. `MarkerCluster.maxParticipants` flows from the backing activity and is part of the cluster `captureKey`.
 - **`MarkerDetailSheet` participant navigation.** The activity detail shows only a compact avatar stack with the participant count (more than 4 → 3 avatars + a "+N" chip). Tapping it keeps the same sheet container mounted and drills into a **content-sized** participant view (rows in a card, capped at ~60% screen height with inner scroll — never a fixed tall sheet with dead space below a handful of names) with back + close controls; it must not stack a second modal or push the chat down. Returning preserves the detail/chat state. Chat mode keeps its own fixed-height layout + inner scroll.
 
@@ -304,7 +339,7 @@ The bridge is a **participant-vouched guest invite**, host opt-in per activity:
 - Synergy: the guest and host can befriend each other afterwards via the existing
   `shared_activity` friend-request path.
 
-**Editing an existing activity (host-only, fix-a-mistake flow):** `MarkerDetailSheet` shows a small "Bearbeiten" pencil next to the mode line when `canEdit` is true (the current user is the activity's host — `selection.hostId === currentUid`). It reopens `ActivityComposerSheet` with `editing` + `initialDraft` (built by `useActivityEntities().getEditableDraft(id)`), and submits via `updateActivityFromDraft(id, draft)` instead of creating a new activity. The Sichtbarkeit/audience picker is hidden in edit mode and must stay hidden: `ActivityDocUpdate` has no `audienceUids` field on purpose, so a title/time typo fix must never silently change who can see the activity. `getEditableDraft` returns `null` for expired activities and other people's activities — no edit affordance shows for those.
+**Editing an existing activity (host-only, fix-a-mistake flow):** `MarkerDetailSheet` shows a small "Bearbeiten" pencil next to the mode line when `canEdit` is true (the current user is the activity's host — `selection.hostId === currentUid`). It reopens `ActivityComposerSheet` with `editing` + `initialDraft` (built by `useActivityEntities().getEditableDraft(id)`), and submits via `updateActivityFromDraft(id, draft)` instead of creating a new activity. The Sichtbarkeit/audience picker is hidden in edit mode and must stay hidden: `ActivityDocUpdate` has no `audienceUids` field on purpose, so a title/time typo fix must never silently change who can see the activity. `getEditableDraft` returns `null` for expired activities and other people's activities — no edit affordance shows for those. **The draft is seeded with the STORED `doc.mode`, never the resolved one** — `updateActivityFromDraft` writes `mode` back whenever it differs from the document, so seeding it with the display mode turned every typo fix on a started `soon` activity into a permanent conversion to `now`. Since `now` activities have no Anreise (see Journey section), that silently stripped a running Anreise off a plan. The resolved mode still drives how the form reads the time fields (`expiresInMinutes`); it must never drive what gets written.
 
 **Leaving vs. cancelling — hosting is a ROLE, cancelling is a decision about the Activity.** The host has BOTH actions, and they must never be collapsed into one:
 
@@ -317,9 +352,9 @@ The bridge is a **participant-vouched guest invite**, host opt-in per activity:
 **`MarkerDetailSheet`** — opens when an avatar marker or activity group is tapped. Fixed info order (top → bottom):
 
 1. **Activity name** (`selection.title`) — bold, top.
-2. **Mode line** — colored dot + concise context label (`Offen`/`Startet in 38 Min.`/`Jetzt`) + "· N dabei" (+ "· Du bist dabei" once joined).
+2. **Mode line** — colored dot + concise context label (`Offen`/`Startet in 38 Min.`/`Jetzt`) + "· N dabei". **No "Du bist dabei" suffix:** the joined sheet already says so with its whole layout (chat preview, Anreise row, "Activity verlassen"), so the label was restating what the surface around it makes obvious.
 3. **Time** (`selection.timeLabel`) — clock icon row, e.g. "Heute 18:00–21:00".
-4. **Place** (`selection.placeLabel`) — location icon row, e.g. "Prater Garten".
+4. **Place** (`selection.placeLabel`) — location icon row, e.g. "Prater Garten". **The place row IS the navigation control** when the activity has a `targetCoordinate`: the whole row is a 44 px button with a trailing `navigate-outline` chip → `openNativeMapsAt(coordinate, placeLabel, 'route')`, the same OS hand-off `PlaceContent` uses. Deliberately not a separate button next to the join CTA — "wo ist das?" and "wie komme ich hin?" are one question, and the row already names the place. An activity without a pin keeps the plain, non-tappable row; no placeholder row is invented just to host the button.
 5. **Participant list** — vertical rows, each avatar + name (`ParticipantListRow`).
 6. **Join button** — "Beitreten"/"Mitplanen"/"Dazustoßen" (per mode), white text on `accent`.
 
@@ -327,13 +362,40 @@ Time/place rows only render when the field is present. No placeholder copy, no f
 
 ### Journey / Anreise Focus
 
+**Anreise gibt es NUR für geplante Aktivitäten (August 2026).** Eine als `now` erstellte
+Activity hat überhaupt keinen Anreise-Modus — keine Zeile im Sheet, kein Prompt nach dem
+Erstellen oder Beitreten, keine Erinnerungs-Push, kein RTDB-Journey-Listener und damit auch
+kein Hintergrund-Task. Begründung: `now` heißt „ich bin gerade hier"; es gibt keine Vorlaufzeit,
+in der man anreisen könnte, und Hintergrundortung ist der teuerste und sensibelste Pfad der App
+— den für den Fall mit dem geringsten Nutzen zu öffnen, ist ein schlechter Tausch.
+
+Die Entscheidung fällt auf dem **gespeicherten** Modus (`plannedMode`, roh aus dem Dokument),
+NIE auf dem aufgelösten: `resolveActivityMode` zeigt jede gestartete `soon`-Activity als `now`,
+kann also „spontan hier erstellt" nicht von „geplant, läuft jetzt" unterscheiden — und die
+zweite braucht ihre Anreise weiterhin, denn zu spät dran zu sein ist genau der Moment, in dem
+Leute sehen wollen, dass du kommst. Eine Regel, eine Funktion: `activitySupportsJourney(plannedMode)`
+in `src/features/activities/utils/activityMode.ts`, benutzt vom Sheet UND von beiden Prompts;
+serverseitig spiegelt `sendJourneyReminders` sie mit `activity.mode === 'now' → continue`.
+Unbekannter `plannedMode` heißt „keine Anreise" — der teure Pfad fällt zu, nicht auf.
+
+**Die sofortige Nachfrage („Anreise teilen?") kommt nur beim BEITRETEN, nie beim Erstellen.**
+Wer eine Activity anlegt, hat den Ort gerade selbst ausgesucht — die Frage, ob man dorthin
+unterwegs ist, hat er mit dem Erstellen schon beantwortet; sie direkt nach dem Tap zu stellen
+ist eine Unterbrechung ohne Informationsgewinn. `offerJourneyShareNow` hat deshalb genau EINE
+Aufrufstelle: `joinSelectedActivity`. Dem Host geht nichts verloren — die `JourneyShareRow` im
+Sheet und die Erinnerungs-Push bleiben. Damit entfiel auch die ganze
+`journeyPromptAfterLaunchRef`-Mechanik, die den Prompt bis zum Ende der Wurf-Animation
+aufhob, samt `createdDraftJourneyContext`.
+
 **Aktualisierte Produktentscheidung (Juli 2026; ersetzt die folgenden älteren
 Foreground-only-Hinweise):** Die explizite Aktion „Anreise teilen“ ist reine
 Zustimmung/Registrierung — genau wie beim Antippen der Reminder-Push. Der native
 Hintergrunddienst (Akku-/Foreground-Notification-Fußabdruck) startet NICHT sofort,
 sondern erst bei T−30, egal ob der Tap 6 h oder 1 h vorher passiert. Ausnahme: Beitritt
-zu einer bereits laufenden `now`-Aktivität — dort ist T−30 schon verstrichen, also wird
-sofort scharfgeschaltet (`armBackgroundJourney`, `journeyBackground.ts`). Der T−30-Start
+zu einer bereits **gestarteten `soon`-Aktivität** — dort ist T−30 schon verstrichen, also wird
+sofort scharfgeschaltet (`armBackgroundJourney`, `journeyBackground.ts`). (Früher stand hier
+„laufende `now`-Aktivität"; als `now` erstellte Activities haben seit August 2026 gar keine
+Anreise mehr, gemeint war immer der gestartete Plan.) Der T−30-Start
 läuft zweigleisig: ein data-only lokaler Notification-Trigger (`scheduleArmTrigger`,
 best-effort — vom OS im Hintergrund drosselbar) plus ein zuverlässiger Vordergrund-Poll
 (`ensureBackgroundWatcherArmed`, alle 15 s + bei App-Aktivierung) als Backstop. Bis T−30
@@ -362,15 +424,27 @@ the current constraints; the RTDB service stores last-point-only coordinates.
 - `MarkerDetailSheet` is the control center, but the Anreise entry is a **compact `JourneyShareRow`**
   (not the old full `JourneyPanel` card). The idle "Anreise teilen" row is a single plain, tappable
   action — deliberately no accept/decline framing: it's just there while relevant, gone when not.
-  Visible only from **T-6 h until `startsAt`**, disappearing once the activity has begun (Anreise
-  stops making sense once you're there). The Heimweg has NO activity-sheet entry anymore — its home
+  **The row is not rendered at all for an activity created as `now`** (see the rule at the top of
+  this section) — and that activity gets no `watchActivityJourney` listener either, because a
+  feature that is absent has to be absent in the running cost too.
+  For everything else it is visible from **T-6 h until the Anreise could no longer run at all** —
+  `endsAt + 30 min`, or `startsAt + 2 h` without an `endsAt`, mirroring `journeyExpiry` in
+  `journeyBackground.ts` so the offer and the auto-stop share one boundary. It used to close at
+  `startsAt` ("Anreise stops making sense once you're there"), which was wrong twice: you are
+  demonstrably still on your way to a `soon` activity that has already started, and after the focus
+  X ends a journey (see below) this row is the ONLY way back in — an action you can end must stay
+  one you can restart. The Heimweg has NO activity-sheet entry anymore — its home
   is the profile card + global status pill (see Safety section). An armed/underway/arrived Anreise
-  status remains visible with stop/arrival controls regardless of that window. Joining an
-  already-running (`now`) activity shows the same row once, only when `journeyRemindersEnabled` is on;
+  status remains visible with stop/arrival controls regardless of that window. Joining a `soon`
+  activity that has already started shows the same row once, only when `journeyRemindersEnabled` is on;
   it self-clears on a successful start or when the sheet closes/switches activity — no separate dismiss
   control needed. The small map icon focuses journey participants.
 - Activity Focus Mode shows only the selected activity and its journey avatars. The overlay shows a
-  focus pill with the activity/person state and an explicit close control.
+  focus pill with the activity/person state and an explicit close control. **That X ends the
+  Anreise** (`stopJourney` → `stopBackgroundJourney`, then clear the focus) — it used to clear only
+  the map focus, so the sharing ran on invisibly while the gesture plainly meant "Schluss damit".
+  Restarting happens in the activity sheet's `JourneyShareRow`, which is why its window now stays
+  open while the activity runs.
 - Entering/leaving Heimweg Focus is one coordinated spatial transition, not a set of independent
   fades: the shield stays at exactly the same position as a fixed anchor, top controls retract,
   bottom controls clear toward their nearest edge, and Safety controls follow with restrained timing.
@@ -474,9 +548,9 @@ The product turns a loose "I'm open" into a concrete plan through a lightweight 
 
 ### Navigation to a friend (NearbySheet → Map)
 
-Flow: `FriendRow.onPress` → `handleNavigate(coord)` → `onClose()` + `onNavigateTo(coord)` → `MapScreen.setMapFocusCoordinate(coord)` → `MapCanvas` receives new `focusCoordinate` prop.
+Flow: `FriendRow.onPress` → `handleNavigate(coord)` → `onClose()` + `onNavigateTo(coord)` → `MapScreen.focusMapOn(coord)` → `MapCanvas` receives new `focusCoordinate` prop.
 
-- **Native (`react-native-maps`):** `useEffect` on `focusCoordinate` calls `mapRef.current?.animateToRegion(...)` at zoom `latitudeDelta: 0.012`.
+- **Native (`react-native-maps`):** `useEffect` on `focusCoordinate` calls `mapRef.current?.animateToRegion(...)` at `PLACE_FOCUS_LATITUDE_DELTA` (0.006) — unless the request set `focusKeepZoom`, see the Map Screen section.
 - **Browser preview (`PreviewMapCanvas`):** no `MapView` renders. It reacts to `focusCoordinate` changes by rendering a pulsing ring at the projected real coordinate. Coordinates outside its fixed decorative viewport stay outside rather than being clamped to a misleading location.
 - **Rule:** Never attempt to call `mapRef.current?.animateToRegion` from outside `MapCanvas`. Navigation always goes through the `focusCoordinate` prop.
 
@@ -696,7 +770,7 @@ nebenbei wieder in `MainSurface` oder eine Release-Konfiguration eingehängt wer
   - **Handles are siblings of the span, never children.** Nested `GestureDetector`s can both activate, which moves and resizes at once. They also straddle the span's edges (centred on them) so both stay grabbable at the 15-minute minimum, where the span is only 16 px wide.
   - **Now-mode has no start handle AND no move gesture on the body.** The activity starts when it is created, so the left edge is a solid cap, not a grip — and sliding the whole span would move a start that cannot move. Only the end is draggable.
   - **Soon gets a `DayStrip`, Now does not.** The band owns hours, not dates. The strip is 14 day-chips plus a calendar button; the button is not decoration — it preserves the arbitrary-date capability the old datetime field had, and without it "plan anything" quietly becomes "plan within a fortnight". Changing the day shifts the whole span, never just its start.
-  - Snap 15 min, range 15 min – 12 h (mirrors `DurationPicker`). Rail length: Now 14 h from the current hour; Soon **36 h** from midnight, because a 23:45 start plus the 12 h maximum lands at 11:45 the next day.
+  - Snap 5 min, range 15 min – 12 h (mirrors `DurationPicker`). **Rail length is a minimum, not a fixed size** — Now 14 h from the current hour, Soon 36 h from midnight (a 23:45 start plus the 12 h maximum lands at 11:45 the next day), and `railMinutesFor` then grows it to contain whatever span it is handed, plus a 2 h tail. It must, because `endsAt` does not only come from this control: an edit, a prefill, or a mode switch that keeps a "Soon, tomorrow" end time produces "starts now, ends the next day". With a fixed rail that span sat past the maximum scroll offset — the band rendered as an empty grid with no segment anywhere and no way to reach it.
   - The section label, the resulting clock time and the duration share ONE line above the band. Standalone "WANN"/"WO" captions were removed on purpose: a row already reading `Start · Jetzt` does not need a heading announcing that it concerns time.
 - **Name (required):** The first field in the scroll content is the activity `title`, labelled "Aktivitätsname" — no asterisk (there is no required-field legend); placeholder is a generic instruction ("Name eingeben"), never a concrete example activity. It is mandatory — `validateActivityDraft` rejects an empty/whitespace title first ("Gib deiner Activity einen Namen."). This name is what shows at the top when the activity is opened (`MarkerDetailSheet` title / marker `label`).
 - **`title` vs `description`:** `title` = the short activity name (top of the sheet, preview-card headline). `description` = the optional note field. Never use `description` as the title. The composer's "Details (optional)" section (Kategorie chips + Hinweis/`description` input) was deliberately removed for now — `description` stays in the data model but is currently not editable in the composer.

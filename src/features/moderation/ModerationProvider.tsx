@@ -1,4 +1,12 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 
 import { useAuth } from '@/features/auth';
 
@@ -21,10 +29,16 @@ export function ModerationProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const actor = useMemo(() => ({ uid: user?.id ?? 'u_you' }), [user?.id]);
   const [blockedUids, setBlockedUids] = useState<string[]>([]);
+  const activeAccountUidRef = useRef(actor.uid);
+  activeAccountUidRef.current = actor.uid;
 
   useEffect(() => {
+    const accountUid = actor.uid;
     setBlockedUids([]);
-    return moderationService.subscribeBlockedUsers(actor, setBlockedUids);
+    return moderationService.subscribeBlockedUsers(actor, (uids) => {
+      if (activeAccountUidRef.current !== accountUid) return;
+      setBlockedUids(uids);
+    });
   }, [actor]);
 
   const value = useMemo<ModerationContextValue>(
@@ -32,11 +46,15 @@ export function ModerationProvider({ children }: { children: ReactNode }) {
       blockedUids,
       isBlocked: (uid) => blockedUids.includes(uid),
       blockUser: async (uid) => {
+        const accountUid = actor.uid;
         await moderationService.blockUser(actor, uid);
+        if (activeAccountUidRef.current !== accountUid) return;
         setBlockedUids((current) => (current.includes(uid) ? current : [...current, uid]));
       },
       unblockUser: async (uid) => {
+        const accountUid = actor.uid;
         await moderationService.unblockUser(actor, uid);
+        if (activeAccountUidRef.current !== accountUid) return;
         setBlockedUids((current) => current.filter((item) => item !== uid));
       },
       reportUser: (uid, reason) => moderationService.reportUser(actor, uid, reason),

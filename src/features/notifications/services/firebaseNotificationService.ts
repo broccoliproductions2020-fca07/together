@@ -43,6 +43,7 @@ const NOTIFICATION_LIMIT = 50;
 const EXPIRY_SAFETY_MARGIN_MS = 10 * 60 * 1000;
 let registeredToken: string | null = null;
 let lastUnregisteredToken: string | null = null;
+
 const JOURNEY_CHANNEL_ID = 'journey-status';
 const SAFETY_CHANNEL_ID = 'safety';
 const SAFETY_ALERT_CHANNEL_ID = 'safety-alerts';
@@ -83,7 +84,7 @@ function mapNotification(id: string, data: DocumentData): NotificationDoc {
     id,
     recipientUid: data.recipientUid,
     kind: data.kind,
-    title: data.title ?? 'Together',
+    title: data.title ?? 'Como',
     body: data.body ?? '',
     activityId: data.activityId,
     roomId: data.roomId,
@@ -91,7 +92,6 @@ function mapNotification(id: string, data: DocumentData): NotificationDoc {
     safetyAlertAt: typeof data.safetyAlertAt === 'number' ? data.safetyAlertAt : undefined,
     createdAt: toMillis(data.createdAt),
     expireAt: toMillis(data.expireAt),
-    readAt: data.readAt ? toMillis(data.readAt) : undefined,
   };
 }
 
@@ -102,10 +102,26 @@ export const firebaseNotificationService: NotificationService = {
       notificationsRef,
       where('recipientUid', '==', actor.uid),
       where('expireAt', '>', Timestamp.fromMillis(Date.now() + EXPIRY_SAFETY_MARGIN_MS)),
-      // Firestore requires the range field to lead the ordering. This also
-      // matches the deployed notifications composite index.
-      orderBy('expireAt', 'asc'),
-      orderBy('createdAt', 'desc'),
+      /**
+       * DESCENDING, and this is the whole ballgame.
+       *
+       * Firestore requires the range field to lead the ordering, so `expireAt`
+       * has to come first. But every notification is written with
+       * `expireAt = createdAt + 30 days` — a constant offset — which makes
+       * ordering by `expireAt` exactly ordering by `createdAt`. Ascending plus
+       * `limit(50)` therefore returned the fifty OLDEST surviving notifications
+       * and silently dropped every newer one: past fifty unexpired entries, a
+       * new notification could never reach the client at all.
+       *
+       * Descending takes the fifty newest. The deployed composite index
+       * (recipientUid ASC, expireAt ASC, createdAt DESC) still serves this — a
+       * query may use an index prefix, and an ascending index is scanned in
+       * reverse for a descending order. The `createdAt` ordering is dropped on
+       * purpose: it can never break a tie that `expireAt` has not already
+       * broken, and asking for a mixed direction is what would demand a new
+       * index. Display order is the client sort below.
+       */
+      orderBy('expireAt', 'desc'),
       limit(NOTIFICATION_LIMIT),
     );
     return onSnapshot(
@@ -131,7 +147,7 @@ export const firebaseNotificationService: NotificationService = {
   async registerDevice(_actor) {
     if (Device.osName === 'Android') {
       await Notifications.setNotificationChannelAsync('default', {
-        name: 'Together',
+        name: 'Como',
         importance: Notifications.AndroidImportance.DEFAULT,
       });
       await Notifications.setNotificationChannelAsync(JOURNEY_CHANNEL_ID, {
@@ -187,7 +203,7 @@ export const firebaseNotificationService: NotificationService = {
         title: started ? 'Du bist unterwegs' : 'Du bist angekommen',
         body: started
           ? `Dein Standort wird jetzt mit den Teilnehmern von „${input.title}“ geteilt.`
-          : `Die Anreise zu „${input.title}“ wurde beendet.`,
+          : 'Dein Live-Standort ist nicht mehr sichtbar.',
         data: { activityId: input.activityId, kind: 'journey_status', state: input.state },
         sound: started ? 'default' : false,
         ...(Device.osName === 'Android' ? { channelId: JOURNEY_CHANNEL_ID } : {}),

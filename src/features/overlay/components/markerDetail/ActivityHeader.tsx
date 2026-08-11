@@ -15,12 +15,15 @@ export function ActivityHeader({
   joined,
   canEdit,
   onEdit,
+  onStartRoute,
 }: {
   selection: ActivitySelection;
   accent: string;
   joined: boolean;
   canEdit?: boolean;
   onEdit?: () => void;
+  /** Only set when the activity has a target coordinate — hands the place to the OS maps app. */
+  onStartRoute?: () => void;
 }) {
   const { user } = useAuth();
   const currentUid = user?.id ?? 'u_you';
@@ -42,7 +45,6 @@ export function ActivityHeader({
         <Text className="flex-1 text-sm font-semibold text-muted-foreground">
           {activityPhaseLabel(selection.mode, selection.startsAt)} · {count}
           {selection.maxParticipants ? `/${selection.maxParticipants}` : ''} dabei
-          {joined ? ' · Du bist dabei' : ''}
         </Text>
         {canEdit ? (
           <Pressable
@@ -66,7 +68,28 @@ export function ActivityHeader({
           <InfoRow icon="time-outline" text={selection.timeLabel} accent={accent} />
         ) : null}
         {selection.placeLabel ? (
-          <InfoRow icon="location-outline" text={selection.placeLabel} accent={accent} />
+          // The place row IS the navigation affordance — the whole row is the
+          // target (44 px, no chip-sized tap area), so "wo ist das?" and "wie
+          // komme ich hin?" are one gesture instead of two controls.
+          onStartRoute ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Route zu ${selection.placeLabel} öffnen`}
+              className="min-h-11 flex-row items-center gap-2.5 active:opacity-70"
+              onPress={onStartRoute}
+            >
+              <Ionicons name="location-outline" size={17} color={accent} />
+              <Text className="flex-1 text-sm text-foreground">{selection.placeLabel}</Text>
+              <View
+                className="h-8 w-8 items-center justify-center rounded-full"
+                style={{ backgroundColor: colorWithAlpha(accent, 0.14) }}
+              >
+                <Ionicons name="navigate-outline" size={16} color={accent} />
+              </View>
+            </Pressable>
+          ) : (
+            <InfoRow icon="location-outline" text={selection.placeLabel} accent={accent} />
+          )
         ) : null}
       </View>
     </>

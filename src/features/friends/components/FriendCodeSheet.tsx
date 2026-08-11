@@ -12,11 +12,11 @@ interface FriendCodeSheetProps {
  * prefilled; the recipient still deliberately sends a normal request. */
 export function FriendCodeSheet({ visible, username, onClose }: FriendCodeSheetProps) {
   const cleanUsername = username.trim().replace(/^@/, '');
-  const link = `together://friends?add=${encodeURIComponent(cleanUsername)}`;
+  const link = `como://friends?add=${encodeURIComponent(cleanUsername)}`;
 
   async function share() {
     await Share.share({
-      message: `Füge mich bei Together hinzu: @${cleanUsername}\n${link}`,
+      message: `Füge mich bei Como hinzu: @${cleanUsername}\n${link}`,
     });
   }
 
@@ -44,8 +44,8 @@ export function FriendCodeSheet({ visible, username, onClose }: FriendCodeSheetP
             </View>
             <Text className="mt-4 text-xl font-extrabold text-white">Mein Freundescode</Text>
             <Text className="mt-2 max-w-[250px] text-center text-sm leading-5 text-white/55">
-              Der Code öffnet Together direkt mit deiner Freundschaftsanfrage. Du bestätigst sie
-              danach wie gewohnt.
+              Der Code öffnet Como direkt mit deiner Freundschaftsanfrage. Du bestätigst sie danach
+              wie gewohnt.
             </Text>
             <View className="mt-5 rounded-[24px] bg-white p-4">
               <QRCode value={link} size={196} color="#101923" backgroundColor="#FFFFFF" />

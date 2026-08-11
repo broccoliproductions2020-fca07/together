@@ -81,7 +81,11 @@ export function MessageBubble({
           </Text>
         ) : isGroupEnd || message.pending ? (
           <Text {...TEXT_FLEXIBLE} className="mr-1 mt-1" style={metaStyle}>
-            {message.pending ? 'Senden …' : formatTime(message.createdAt)}
+            {message.pending
+              ? message.queuedForSync
+                ? 'Wartet auf Verbindung'
+                : 'Senden …'
+              : formatTime(message.createdAt)}
           </Text>
         ) : null}
       </View>

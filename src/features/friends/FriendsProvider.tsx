@@ -24,6 +24,8 @@ import type {
 } from './services/friendService.types';
 
 interface FriendsContextValue {
+  /** Cached relationships were restored, so an empty list is now meaningful. */
+  hydrated: boolean;
   friends: FriendProfile[];
   friendUids: string[];
   incomingRequests: FriendRequest[];
@@ -85,6 +87,8 @@ export function FriendsProvider({ children }: { children: ReactNode }) {
   const [friendshipsHydrated, setFriendshipsHydrated] = useState(false);
   const cacheVersion = useRef<number | null>(null);
   const friendshipRequestVersion = useRef(0);
+  const activeAccountUidRef = useRef(actor.uid);
+  activeAccountUidRef.current = actor.uid;
 
   const saveAndSetRelationships = useCallback(
     (next: FriendshipDoc[], version: number) => {
@@ -97,10 +101,14 @@ export function FriendsProvider({ children }: { children: ReactNode }) {
 
   const refreshFriendships = useCallback(
     async (version = friendshipsVersion) => {
+      const accountUid = actor.uid;
       const requestVersion = ++friendshipRequestVersion.current;
       try {
         const next = await friendService.listFriendships(actor);
-        if (requestVersion === friendshipRequestVersion.current) {
+        if (
+          activeAccountUidRef.current === accountUid &&
+          requestVersion === friendshipRequestVersion.current
+        ) {
           saveAndSetRelationships(next, version);
         }
       } catch (error) {
@@ -117,23 +125,41 @@ export function FriendsProvider({ children }: { children: ReactNode }) {
     setRelationships([]);
     cacheVersion.current = null;
     setFriendshipsHydrated(false);
-    void loadCachedFriendships(actor.uid).then((cached) => {
-      if (requestVersion !== friendshipRequestVersion.current) return;
-      if (cached) {
-        setRelationships(cached.relationships);
-        cacheVersion.current = cached.version;
-      }
-      setFriendshipsHydrated(true);
-    });
-  }, [actor]);
+    void loadCachedFriendships(actor.uid)
+      .then((cached) => {
+        if (
+          activeAccountUidRef.current !== actor.uid ||
+          requestVersion !== friendshipRequestVersion.current
+        ) {
+          return;
+        }
+        if (cached) {
+          setRelationships(cached.relationships);
+          cacheVersion.current = cached.version;
+        }
+      })
+      .catch((error) => {
+        console.warn('[friends] Lokaler Cache konnte nicht geladen werden:', error);
+      })
+      .finally(() => {
+        if (
+          activeAccountUidRef.current === actor.uid &&
+          requestVersion === friendshipRequestVersion.current
+        ) {
+          setFriendshipsHydrated(true);
+        }
+      });
+  }, [actor.uid]);
 
   useEffect(() => {
+    const accountUid = actor.uid;
     setCloseFriendUids([]);
     setHeimwegGroupUids([]);
     setFriendRequestPolicyState('anyone');
     setJourneyRemindersEnabledState(true);
     setNotificationsSeenAt(0);
     return friendService.subscribeSettings(actor, (settings) => {
+      if (activeAccountUidRef.current !== accountUid) return;
       setCloseFriendUids(settings.closeFriendUids);
       setHeimwegGroupUids(settings.heimwegGroupUids);
       setFriendRequestPolicyState(settings.friendRequestPolicy);
@@ -228,12 +254,13 @@ export function FriendsProvider({ children }: { children: ReactNode }) {
   );
   const setHeimwegGroup = useCallback(
     async (uids: string[]) => {
+      const accountUid = actor.uid;
       const previous = heimwegGroupUids;
       setHeimwegGroupUids(uids); // optimistic — the listener confirms it
       try {
         await friendService.setHeimwegGroup(actor, uids);
       } catch (error) {
-        setHeimwegGroupUids(previous);
+        if (activeAccountUidRef.current === accountUid) setHeimwegGroupUids(previous);
         throw error;
       }
     },
@@ -241,12 +268,13 @@ export function FriendsProvider({ children }: { children: ReactNode }) {
   );
   const setFriendRequestPolicy = useCallback(
     async (policy: FriendRequestPolicy) => {
+      const accountUid = actor.uid;
       const previous = friendRequestPolicy;
       setFriendRequestPolicyState(policy);
       try {
         await friendService.setFriendRequestPolicy(actor, policy);
       } catch (error) {
-        setFriendRequestPolicyState(previous);
+        if (activeAccountUidRef.current === accountUid) setFriendRequestPolicyState(previous);
         throw error;
       }
     },
@@ -254,12 +282,15 @@ export function FriendsProvider({ children }: { children: ReactNode }) {
   );
   const setJourneyRemindersEnabled = useCallback(
     async (enabled: boolean) => {
+      const accountUid = actor.uid;
       const previous = journeyRemindersEnabled;
       setJourneyRemindersEnabledState(enabled);
       try {
         await friendService.setJourneyRemindersEnabled(actor, enabled);
       } catch (error) {
-        setJourneyRemindersEnabledState(previous);
+        if (activeAccountUidRef.current === accountUid) {
+          setJourneyRemindersEnabledState(previous);
+        }
         throw error;
       }
     },
@@ -268,6 +299,7 @@ export function FriendsProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<FriendsContextValue>(
     () => ({
+      hydrated: friendshipsHydrated,
       friends,
       friendUids,
       incomingRequests,
@@ -290,6 +322,7 @@ export function FriendsProvider({ children }: { children: ReactNode }) {
       setJourneyRemindersEnabled,
     }),
     [
+      friendshipsHydrated,
       friends,
       friendUids,
       incomingRequests,

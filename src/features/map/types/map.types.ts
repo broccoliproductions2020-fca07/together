@@ -118,6 +118,13 @@ export interface ActivitySelectionPreview {
   title: string;
   subtitle: string;
   mode: ActivityMode;
+  /**
+   * The mode the activity was CREATED with, unresolved — `mode` above is run
+   * through `resolveActivityMode` and reads `now` for every started `soon`
+   * activity. Only this field can tell the two apart, which is what decides
+   * whether Anreise exists at all (`activitySupportsJourney`).
+   */
+  plannedMode?: ActivityMode;
   participantCount: number;
   participants: MarkerAvatar[];
   /** Max participants incl. host; undefined = unbegrenzt. */

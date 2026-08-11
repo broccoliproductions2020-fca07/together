@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useEffect, useState, type ReactNode } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, {
   Easing,
   FadeIn,
@@ -37,13 +37,15 @@ function RoundButton({
   accessibilityLabel,
   children,
   onPress,
+  disabled = false,
 }: {
   accessibilityLabel: string;
   children: ReactNode;
   onPress?: () => void;
+  disabled?: boolean;
 }) {
   return (
-    <RoundControl accessibilityLabel={accessibilityLabel} onPress={onPress}>
+    <RoundControl accessibilityLabel={accessibilityLabel} disabled={disabled} onPress={onPress}>
       {children}
     </RoundControl>
   );
@@ -223,6 +225,7 @@ export interface MapOverlayProps {
   /** Tapping the create FAB opens the activity composer directly (no speed dial). */
   onCreatePress: () => void;
   onRecenter: () => void;
+  recentering?: boolean;
   isOpen: boolean;
   journeyFocusLabel?: string;
   journeyParticipants?: JourneyParticipant[];
@@ -237,6 +240,7 @@ export interface MapOverlayProps {
   spontaneousRound?: SpontaneousRound | null;
   spontaneousRoundUnreadCount?: number;
   onSpontaneousRoundPress?: () => void;
+  /** Perspective camera state — session only, never persisted. */
 }
 
 /**
@@ -247,6 +251,7 @@ export interface MapOverlayProps {
 export function MapOverlay({
   onCreatePress,
   onRecenter,
+  recentering = false,
   isOpen,
   journeyFocusLabel,
   journeyParticipants = [],
@@ -669,14 +674,25 @@ export function MapOverlay({
             }}
           />
         ) : null}
+        {/* Perspective. Deliberately a button and not a gesture: `pitchEnabled`
+            stays off on the MapView, so the camera can only ever be tilted
+            here, and never accidentally mid-pinch. */}
         <RoundButton
           accessibilityLabel="Kartenstil wählen"
           onPress={() => setStyleMenuOpen((open) => !open)}
         >
           <Ionicons name="layers-outline" size={20} color={colors.icon} />
         </RoundButton>
-        <RoundButton accessibilityLabel="Karte zentrieren" onPress={onRecenter}>
-          <Ionicons name="locate-outline" size={22} color={colors.icon} />
+        <RoundButton
+          accessibilityLabel={recentering ? 'Standort wird gesucht' : 'Karte zentrieren'}
+          onPress={onRecenter}
+          disabled={recentering}
+        >
+          {recentering ? (
+            <ActivityIndicator size="small" color={colors.icon} />
+          ) : (
+            <Ionicons name="locate-outline" size={22} color={colors.icon} />
+          )}
         </RoundButton>
       </Animated.View>
 
@@ -689,7 +705,7 @@ export function MapOverlay({
               position: 'absolute',
               left: 16,
               right: 16,
-              bottom: insets.bottom + 150,
+              bottom: insets.bottom + 84,
               alignItems: 'center',
               gap: 8,
             },
@@ -772,7 +788,7 @@ export function MapOverlay({
               position: 'absolute',
               left: 16,
               right: 16,
-              bottom: insets.bottom + 150,
+              bottom: insets.bottom + 84,
               alignItems: 'center',
             },
             normalBottomCenterTransitionStyle,

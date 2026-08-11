@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Modal, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 
 import { useFriends, type FriendProfile } from '@/features/friends';
@@ -42,11 +42,23 @@ function CircleEditor({
   const [selected, setSelected] = useState<string[]>([]);
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
+  const mutationInFlightRef = useRef(false);
+  const sessionRevisionRef = useRef(0);
+  const mutationRevisionRef = useRef(0);
 
   const open = () => {
+    sessionRevisionRef.current += 1;
+    mutationRevisionRef.current += 1;
+    mutationInFlightRef.current = false;
+    setBusy(false);
     setSelected(circle?.friendUids ?? []);
     setQuery('');
   };
+
+  function dismiss() {
+    sessionRevisionRef.current += 1;
+    onClose();
+  }
   const filteredFriends = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return friends;
@@ -64,18 +76,31 @@ function CircleEditor({
   }
 
   async function save() {
-    if (!circle || busy) return;
+    if (!circle || busy || mutationInFlightRef.current) return;
+    const sessionRevision = sessionRevisionRef.current;
+    const mutationRevision = ++mutationRevisionRef.current;
+    const selectedUids = [...selected];
+    mutationInFlightRef.current = true;
     setBusy(true);
     try {
-      await setCircleFriends(circle.id, selected);
-      onClose();
+      await setCircleFriends(circle.id, selectedUids);
+      if (sessionRevision !== sessionRevisionRef.current) return;
+      dismiss();
+    } catch (error) {
+      if (sessionRevision !== sessionRevisionRef.current) return;
+      Alert.alert(
+        'Gruppe konnte nicht gespeichert werden',
+        error instanceof Error ? error.message : 'Bitte versuche es erneut.',
+      );
     } finally {
-      setBusy(false);
+      if (mutationRevision !== mutationRevisionRef.current) return;
+      mutationInFlightRef.current = false;
+      if (sessionRevision === sessionRevisionRef.current) setBusy(false);
     }
   }
 
   function remove() {
-    if (!circle) return;
+    if (!circle || busy || mutationInFlightRef.current) return;
     Alert.alert(
       'Gruppe löschen?',
       `„${circle.name}“ wird nur aus deinen privaten Listen entfernt.`,
@@ -85,7 +110,27 @@ function CircleEditor({
           text: 'Löschen',
           style: 'destructive',
           onPress: () => {
-            void deleteCircle(circle.id).then(onClose);
+            if (mutationInFlightRef.current) return;
+            const sessionRevision = sessionRevisionRef.current;
+            const mutationRevision = ++mutationRevisionRef.current;
+            mutationInFlightRef.current = true;
+            setBusy(true);
+            void deleteCircle(circle.id)
+              .then(() => {
+                if (sessionRevision === sessionRevisionRef.current) dismiss();
+              })
+              .catch((error) => {
+                if (sessionRevision !== sessionRevisionRef.current) return;
+                Alert.alert(
+                  'Gruppe konnte nicht gel\u00f6scht werden',
+                  error instanceof Error ? error.message : 'Bitte versuche es erneut.',
+                );
+              })
+              .finally(() => {
+                if (mutationRevision !== mutationRevisionRef.current) return;
+                mutationInFlightRef.current = false;
+                if (sessionRevision === sessionRevisionRef.current) setBusy(false);
+              });
           },
         },
       ],
@@ -98,7 +143,7 @@ function CircleEditor({
       transparent
       animationType="slide"
       onShow={open}
-      onRequestClose={onClose}
+      onRequestClose={dismiss}
       statusBarTranslucent
     >
       <View className="flex-1 justify-end bg-black/45">
@@ -113,7 +158,7 @@ function CircleEditor({
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Gruppe schließen"
-              onPress={onClose}
+              onPress={dismiss}
               className="h-10 w-10 items-center justify-center rounded-full bg-white/10"
             >
               <Ionicons name="close" size={20} color="#fff" />
@@ -142,7 +187,8 @@ function CircleEditor({
                 <Pressable
                   key={friend.uid}
                   accessibilityRole="checkbox"
-                  accessibilityState={{ checked }}
+                  accessibilityState={{ checked, disabled: busy }}
+                  disabled={busy}
                   className="flex-row items-center gap-3 rounded-2xl border px-3 py-2.5 active:opacity-75"
                   style={{
                     backgroundColor: checked ? `${ACCENT}1D` : 'rgba(255,255,255,0.055)',
@@ -242,6 +288,7 @@ export function CirclesSection() {
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState<CircleDoc | null>(null);
+  const createInFlightRef = useRef(false);
 
   useEffect(() => {
     void refreshCircles();
@@ -249,7 +296,8 @@ export function CirclesSection() {
 
   async function handleCreate() {
     const value = name.trim();
-    if (!value || busy) return;
+    if (!value || busy || createInFlightRef.current) return;
+    createInFlightRef.current = true;
     setBusy(true);
     try {
       const id = await createCircle(value);
@@ -263,7 +311,13 @@ export function CirclesSection() {
           updatedAt: Date.now(),
         },
       );
+    } catch (error) {
+      Alert.alert(
+        'Gruppe konnte nicht erstellt werden',
+        error instanceof Error ? error.message : 'Bitte versuche es erneut.',
+      );
     } finally {
+      createInFlightRef.current = false;
       setBusy(false);
     }
   }

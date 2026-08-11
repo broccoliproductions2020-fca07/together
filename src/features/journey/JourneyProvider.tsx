@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -47,7 +48,7 @@ interface JourneyContextValue {
     activity: JourneyActivityContext,
     options?: { force?: boolean },
   ) => Promise<JourneyStartResult>;
-  stopJourney: (activityId: string) => void;
+  stopJourney: (activityId: string) => Promise<void>;
   markArrived: (activityId: string) => void;
 }
 
@@ -88,6 +89,12 @@ export function JourneyProvider({ children }: { children: ReactNode }) {
   );
   const [records, setRecords] = useState<Record<string, UserJourneyRecord>>({});
   const [remoteLocations, setRemoteLocations] = useState<Record<string, JourneyLocationDoc[]>>({});
+  const activeAccountUidRef = useRef(actor.uid);
+  activeAccountUidRef.current = actor.uid;
+  const journeyViewerAccessRef = useRef<{
+    uid: string;
+    requests: Map<string, Promise<void>>;
+  }>({ uid: '', requests: new Map() });
 
   const activeJourney = useMemo(
     () =>
@@ -98,7 +105,9 @@ export function JourneyProvider({ children }: { children: ReactNode }) {
   );
 
   const refreshBackgroundRecord = useCallback(async () => {
-    const stored = await getBackgroundJourneyRecord();
+    const accountUid = actor.uid;
+    const stored = await getBackgroundJourneyRecord(accountUid);
+    if (activeAccountUidRef.current !== accountUid) return;
     setRecords((current) => {
       // Identity-preserving fast paths: this runs on the 15s foreground poll,
       // and returning a fresh object every tick would re-render every journey
@@ -121,7 +130,7 @@ export function JourneyProvider({ children }: { children: ReactNode }) {
       );
       return stored ? { ...withoutBackground, [stored.activityId]: stored } : withoutBackground;
     });
-  }, []);
+  }, [actor.uid]);
 
   useEffect(() => {
     void prepareJourneyAutomation().catch((error) => {
@@ -195,20 +204,82 @@ export function JourneyProvider({ children }: { children: ReactNode }) {
     return () => subscription.remove();
   }, [armJourney]);
 
-  const watchActivityJourney = useCallback(
-    (activity: JourneyActivityContext) =>
-      journeyService.subscribeActivityJourney(actor, activity, (locations) => {
-        const now = Date.now();
-        setRemoteLocations((current) => ({
-          ...current,
-          [activity.id]: locations.filter((location) => location.expiresAt > now),
-        }));
-      }),
+  const ensureJourneyViewerAccess = useCallback(
+    (activityId: string): Promise<void> => {
+      const cache = journeyViewerAccessRef.current;
+      if (cache.uid !== actor.uid) {
+        cache.uid = actor.uid;
+        cache.requests.clear();
+      }
+      const existing = cache.requests.get(activityId);
+      if (existing) return existing;
+
+      const request = journeyService.ensureJourneyMember(actor, activityId).catch((error) => {
+        cache.requests.delete(activityId);
+        throw error;
+      });
+      cache.requests.set(activityId, request);
+      return request;
+    },
     [actor],
   );
 
+  const watchActivityJourney = useCallback(
+    (activity: JourneyActivityContext) => {
+      const accountUid = actor.uid;
+      let cancelled = false;
+      let unsubscribe: (() => void) | undefined;
+
+      void ensureJourneyViewerAccess(activity.id)
+        .then(() => {
+          if (cancelled || activeAccountUidRef.current !== accountUid) return;
+          unsubscribe = journeyService.subscribeActivityJourney(
+            actor,
+            activity,
+            (locations) => {
+              if (activeAccountUidRef.current !== accountUid) return;
+              const now = Date.now();
+              setRemoteLocations((current) => ({
+                ...current,
+                [activity.id]: locations.filter((location) => location.expiresAt > now),
+              }));
+            },
+            () => {
+              if (activeAccountUidRef.current !== accountUid) return;
+              journeyViewerAccessRef.current.requests.delete(activity.id);
+              setRemoteLocations((current) => {
+                if (!(activity.id in current)) return current;
+                const next = { ...current };
+                delete next[activity.id];
+                return next;
+              });
+            },
+          );
+        })
+        .catch(() => {
+          if (activeAccountUidRef.current !== accountUid) return;
+          setRemoteLocations((current) => {
+            if (!(activity.id in current)) return current;
+            const next = { ...current };
+            delete next[activity.id];
+            return next;
+          });
+        });
+
+      return () => {
+        cancelled = true;
+        unsubscribe?.();
+      };
+    },
+    [actor, ensureJourneyViewerAccess],
+  );
+
   const stopJourney = useCallback(
-    (activityId: string) => {
+    async (activityId: string) => {
+      // The remote node is the privacy boundary. Do not claim that sharing
+      // stopped until its deletion was acknowledged by RTDB.
+      await journeyService.stopJourney(actor, activityId);
+      await stopBackgroundJourney(actor, activityId, { skipRemoteStop: true });
       setRecords((current) => {
         const record = current[activityId];
         if (!record) return current;
@@ -217,28 +288,16 @@ export function JourneyProvider({ children }: { children: ReactNode }) {
           [activityId]: { ...record, status: 'stopped', updatedAt: new Date().toISOString() },
         };
       });
-      void stopBackgroundJourney(actor, activityId).then(() => void refreshBackgroundRecord());
+      await refreshBackgroundRecord();
     },
     [actor, refreshBackgroundRecord],
   );
 
   const markArrived = useCallback(
     (activityId: string) => {
-      setRecords((current) => {
-        const record = current[activityId];
-        if (!record) return current;
-        return {
-          ...current,
-          [activityId]: {
-            ...record,
-            status: 'arrived',
-            distanceKm: 0,
-            updatedAt: new Date().toISOString(),
-          },
-        };
-      });
       void markBackgroundJourneyArrived(actor, activityId).then(
         () => void refreshBackgroundRecord(),
+        (error) => console.warn('[journey] Ankunft konnte nicht beendet werden:', error),
       );
     },
     [actor, refreshBackgroundRecord],
@@ -284,10 +343,7 @@ export function JourneyProvider({ children }: { children: ReactNode }) {
           status: ownRecord.status,
           distanceKm: ownRecord.distanceKm,
           updatedAt: ownRecord.updatedAt,
-          coordinate:
-            ownRecord.status === 'arrived'
-              ? ownRecord.targetCoordinate
-              : ownRecord.currentCoordinate,
+          coordinate: ownRecord.status === 'underway' ? ownRecord.currentCoordinate : undefined,
           isCurrentUser: true,
         });
       }

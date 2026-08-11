@@ -17,4 +17,5 @@ export type {
   ProposalData,
   SendFailureReason,
   SpontaneousRound,
+  SpontaneousRoundInvitePreview,
 } from './types';

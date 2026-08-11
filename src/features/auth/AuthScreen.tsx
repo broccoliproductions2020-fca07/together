@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   BackHandler,
   Platform,
@@ -53,6 +53,9 @@ export function AuthScreen() {
   const [emailOpen, setEmailOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [socialProvider, setSocialProvider] = useState<'apple' | 'google' | null>(null);
+  // Covers the state-update gap between two quick taps, including the less
+  // obvious case of tapping a social provider and the e-mail submit together.
+  const authActionInFlightRef = useRef(false);
 
   const heroIn = useSharedValue(reducedMotion ? 1 : 0);
   const row0 = useSharedValue(reducedMotion ? 1 : 0);
@@ -131,6 +134,8 @@ export function AuthScreen() {
   };
 
   const handleEmail = async (input: SignInWithEmailInput) => {
+    if (authActionInFlightRef.current) return;
+    authActionInFlightRef.current = true;
     setSubmitting(true);
     try {
       await signInWithEmail(input);
@@ -140,6 +145,7 @@ export function AuthScreen() {
     } catch {
       // AuthProvider exposes the user-facing message through `error`.
     } finally {
+      authActionInFlightRef.current = false;
       setSubmitting(false);
     }
   };
@@ -150,7 +156,8 @@ export function AuthScreen() {
   };
 
   const handleSocialSignIn = async (provider: 'apple' | 'google') => {
-    if (socialProvider || submitting) return;
+    if (socialProvider || submitting || authActionInFlightRef.current) return;
+    authActionInFlightRef.current = true;
     setSocialProvider(provider);
     try {
       if (provider === 'apple') {
@@ -161,6 +168,7 @@ export function AuthScreen() {
     } catch {
       // AuthProvider exposes a localized error through `error`.
     } finally {
+      authActionInFlightRef.current = false;
       setSocialProvider(null);
     }
   };

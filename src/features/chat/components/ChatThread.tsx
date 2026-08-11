@@ -68,11 +68,13 @@ export function ChatThread({
     getMessages,
     markRead,
     toggleProposalConfirm,
+    retryProposal,
     retryMessage,
     openRoom,
     closeRoom,
     loadOlderMessages,
     isLoadingOlder,
+    getHistoryError,
     hasMoreHistory,
   } = useActivityChat();
   const listRef = useRef<FlatList<ChatListRow>>(null);
@@ -88,6 +90,7 @@ export function ChatThread({
   const [showNewMessages, setShowNewMessages] = useState(false);
 
   const loadingOlder = isLoadingOlder(activityId);
+  const historyError = getHistoryError(activityId);
   const canLoadOlder = hasMoreHistory(activityId) && messages.length > 0;
 
   // Stream this room's messages while the thread is on screen (members only —
@@ -171,6 +174,15 @@ export function ChatThread({
 
   return (
     <View className="flex-1">
+      {historyError ? (
+        <Text
+          {...TEXT_FLEXIBLE}
+          className="px-4 pb-1 text-center"
+          style={{ ...TYPE.caption, fontFamily: FONT.medium, color: colors.destructive }}
+        >
+          {historyError}
+        </Text>
+      ) : null}
       <FlatList
         ref={listRef}
         data={rows}
@@ -211,6 +223,7 @@ export function ChatThread({
               showAuthor={item.showAuthor}
               accent={accent}
               onToggleConfirm={() => toggleProposalConfirm(activityId, item.message.id)}
+              onRetry={() => retryProposal(activityId, item.message.id)}
               onCreateActivity={() =>
                 item.message.proposal &&
                 onCreateActivity?.(activityId, item.message.id, item.message.proposal)

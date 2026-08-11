@@ -32,6 +32,8 @@ export interface ChatMessage {
   proposal?: ProposalData;
   /** Local optimistic echo — shown immediately, replaced by the server copy. */
   pending?: boolean;
+  /** Persisted locally and waiting for the next usable internet connection. */
+  queuedForSync?: boolean;
   /** Delivery failed — the bubble stays visible instead of vanishing. */
   failed?: boolean;
   /**
@@ -40,6 +42,10 @@ export interface ChatMessage {
    * offer a retry that can only fail again.
    */
   failureReason?: SendFailureReason;
+  /** A confirmed/plan write is in flight; only proposal cards use this. */
+  proposalPending?: 'confirm' | 'plan';
+  /** A proposal mutation was rejected and has been rolled back locally. */
+  proposalError?: string;
 }
 
 /**
@@ -49,12 +55,7 @@ export interface ChatMessage {
  * all of them is what made a 2001-character message retry forever.
  */
 export type SendFailureReason =
-  | 'network'
-  | 'too_long'
-  | 'rate_limited'
-  | 'room_expired'
-  | 'not_member'
-  | 'unknown';
+  'network' | 'too_long' | 'rate_limited' | 'room_expired' | 'not_member' | 'unknown';
 
 export const SEND_FAILURE_TEXT: Record<SendFailureReason, string> = {
   network: 'Nicht gesendet · Tippen zum Wiederholen',
@@ -99,12 +100,30 @@ export interface GroupOpening {
   memberPreview: { displayName: string; initials: string }[];
 }
 
+/** The smallest identity disclosure needed to make an opt-in round intelligible. */
+export interface SpontaneousRoundMemberPreview {
+  uid: string;
+  displayName: string;
+  initials: string;
+  avatarUrl?: string;
+}
+
+/** One-off preview shown before a recipient decides whether to return a wink. */
+export interface SpontaneousRoundInvitePreview {
+  roundId: string;
+  host: SpontaneousRoundMemberPreview;
+  /** At most four people; the total stays separate to avoid unnecessary disclosure. */
+  memberPreview: SpontaneousRoundMemberPreview[];
+  memberCount: number;
+  expiresAt: number;
+}
+
 /** A short-lived, location-free group formed only after a wink is accepted. */
 export interface SpontaneousRound {
   id: string;
   hostUid: string;
   memberIds: string[];
-  memberPreview: { uid: string; displayName: string; initials: string; avatarUrl?: string }[];
+  memberPreview: SpontaneousRoundMemberPreview[];
   expiresAt: number;
 }
 

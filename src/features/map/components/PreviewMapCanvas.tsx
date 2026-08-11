@@ -57,10 +57,33 @@ export interface HeimwegMapMarker {
 }
 
 export interface PreviewMapCanvasProps {
+  /** Native map only: show the device's own-location dot and its heading cone.
+   * The browser preview deliberately has no device sensor layer. */
+  showsOwnLocation?: boolean;
+  /** First-party native location delivery, used to prepare the initial camera. */
+  onOwnLocationChange?: (coordinate: MapCoordinate) => void;
   pickingLocation?: boolean;
   focusCoordinate?: MapCoordinate;
+  /** The initial location may glide in after the boot curtain has lifted. */
+  focusDuration?: number;
+  /** Native renderer is mounted and can accept camera commands. */
+  onMapReady?: () => void;
+  /** A programmatic focus finished. Used only by the boot prewarm hand-off. */
+  onFocusComplete?: (coordinate: MapCoordinate) => void;
+  /**
+   * Recentre on `focusCoordinate` WITHOUT changing the zoom. Set when the user
+   * put the target there themselves (publishing an activity) — their current
+   * zoom is a deliberate choice and must survive the camera move. Off by
+   * default: a focus that jumps somewhere else needs a prescribed zoom.
+   */
+  focusKeepZoom?: boolean;
   /** One-shot camera focus that keeps a selected place above its detail sheet. */
-  selectionFocus?: { id: number; coordinate: MapCoordinate };
+  selectionFocus?: {
+    id: number;
+    coordinate: MapCoordinate;
+    latitudeDelta?: number;
+    longitudeDelta?: number;
+  };
   /** Explicit camera fit request; id changes only on entry/manual recenter. */
   fitRequest?: { id: number; coordinates: MapCoordinate[] };
   /** Fixed lower control deck in the split Safety mode. */
@@ -69,10 +92,19 @@ export interface PreviewMapCanvasProps {
    * a focused selection in the visible map strip rather than behind the sheet. */
   bottomSheetHeight?: number;
   onMarkerPress?: (marker: MapMarker) => void;
+  /**
+   * Friends who are open AND deliberately share their location. Kept separate
+   * from the activity feed on purpose: presence is a status, it is never part of
+   * `mapMarkers`, and it must be trivial to see at the call site that turning
+   * sharing off removes the marker.
+   */
+  openPresenceMarkers?: MapMarker[];
   onClusterPress?: (cluster: MarkerCluster) => void;
   onPlacePress?: (place: MapPlaceSelection) => void;
   onCanvasPress?: () => void;
   onRegionChange?: (region: MapRegion) => void;
+  /** A direct map gesture supersedes a pending device-location recenter. */
+  onUserMapGesture?: () => void;
   journeyFocus?: { activityId: string; participantId?: string };
   journeyTargetCoordinate?: MapCoordinate;
   journeyParticipants?: JourneyParticipant[];
@@ -97,6 +129,12 @@ export interface PreviewMapCanvasProps {
    * is dropped, so the canvas can still capture the node it has to animate. */
   dismissMarkerId?: string;
   onDismissComplete?: () => void;
+  /**
+   * Perspective (tilted) camera, driven only by the overlay button — never by a
+   * gesture, and never persisted. North stays locked; while it is on, the
+   * marker morph overlay is disabled because its flat lat/lng projection does
+   * not survive a tilted camera. Ignored by the browser preview.
+   */
 }
 
 type CanvasPoint = { x: number; y: number };
@@ -153,6 +191,7 @@ export function PreviewMapCanvas({
   onClusterPress,
   onCanvasPress,
   onRegionChange,
+  onMapReady,
   journeyFocus,
   journeyTargetCoordinate,
   journeyParticipants = [],
@@ -171,6 +210,8 @@ export function PreviewMapCanvas({
   const focusActivityId = journeyFocus?.activityId;
   const reducedMotion = useReducedMotion();
   const [size, setSize] = useState({ width: 0, height: 0 });
+
+  useEffect(() => onMapReady?.(), [onMapReady]);
 
   const handleLayout = (event: LayoutChangeEvent) => {
     const { width, height } = event.nativeEvent.layout;

@@ -13,7 +13,7 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import type { MapCoordinate } from '../types/map.types';
-import { colorWithAlpha } from '../utils/markerStyles';
+import { ACTIVITY_MARKER_SHELL_HEIGHT, ACTIVITY_MARKER_SHELL_RADIUS } from './activityMarkerLayout';
 
 export interface LiveAuraTarget {
   id: string;
@@ -23,6 +23,8 @@ export interface LiveAuraTarget {
   selected?: boolean;
   /** Coordinate points to the marker tail, while the aura belongs behind its bubble. */
   offsetY?: number;
+  /** Settled shell width, so the pulse is the marker's own squircle, not a circle. */
+  width?: number;
 }
 
 interface MapLiveAuraOverlayProps {
@@ -38,12 +40,33 @@ interface ProjectedAura extends LiveAuraTarget {
   y: number;
 }
 
-export const LIVE_AURA_SIZE = 96;
+/**
+ * How far a wave travels beyond the marker outline, as a share of the shell.
+ * The box has to hold the largest wave at its widest, or the ring gets clipped.
+ */
+const WAVE_MAX_SCALE = 1.62;
+
+/** Thickness of the steady halo hugging the marker outline. */
+const HALO_WIDTH = 7;
+
+/** Padding around the shell so a wave at WAVE_MAX_SCALE still fits in the box. */
+const auraBox = (width: number) => ({
+  width: width * WAVE_MAX_SCALE,
+  height: ACTIVITY_MARKER_SHELL_HEIGHT * WAVE_MAX_SCALE,
+});
+
+/** Legacy square box — the browser preview and journey pins still use it. */
+export const LIVE_AURA_SIZE = Math.round(ACTIVITY_MARKER_SHELL_HEIGHT * WAVE_MAX_SCALE);
 
 /**
- * Real, UI-thread animation above the native map â€” deliberately outside
- * `<Marker>`. The rings start outside the avatar so they read as behind it even
- * though Android draws the overlay above the native map surface.
+ * Real, UI-thread animation above the native map — deliberately outside
+ * `<Marker>`. The waves are the marker's OWN squircle: same height, same width,
+ * same corner radius, sharing one geometry source with `ActivityMarkerChrome`
+ * so the two can never drift into "circle behind a squircle".
+ *
+ * They grow from the shell's centre but are only ever drawn from its edge
+ * outwards — a wave starts at scale 1.0, i.e. exactly on the outline, so the
+ * marker never has a ring crawling across its own face.
  */
 export function MapLiveAuraOverlay({
   mapRef,
@@ -88,17 +111,18 @@ export function MapLiveAuraOverlay({
 
   return (
     <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-      {projected.map((target) => (
-        <LiveAura
-          key={target.id}
-          color={target.color}
-          selected={target.selected}
-          style={{
-            left: target.x - LIVE_AURA_SIZE / 2,
-            top: target.y - LIVE_AURA_SIZE / 2,
-          }}
-        />
-      ))}
+      {projected.map((target) => {
+        const box = auraBox(target.width ?? ACTIVITY_MARKER_SHELL_HEIGHT);
+        return (
+          <LiveAura
+            key={target.id}
+            color={target.color}
+            selected={target.selected}
+            width={target.width}
+            style={{ left: target.x - box.width / 2, top: target.y - box.height / 2 }}
+          />
+        );
+      })}
     </View>
   );
 }
@@ -107,10 +131,13 @@ export function MapLiveAuraOverlay({
 export function LiveAura({
   color,
   selected = false,
+  width = ACTIVITY_MARKER_SHELL_HEIGHT,
   style,
 }: {
   color: string;
   selected?: boolean;
+  /** Settled marker width. Defaults to the square (solo) shell. */
+  width?: number;
   style?: StyleProp<ViewStyle>;
 }) {
   const reducedMotion = useReducedMotion();
@@ -148,54 +175,63 @@ export function LiveAura({
     };
   }, [breathe, firstWave, reducedMotion, secondWave]);
 
-  const ambientStyle = useAnimatedStyle(() => ({
-    // Non-selected `now` markers breathe very gently; selection stays clearer.
-    opacity: selected ? 0.15 + breathe.value * 0.08 : 0.05 + breathe.value * 0.035,
-    transform: [{ scale: 0.95 + breathe.value * 0.05 }],
+  const box = auraBox(width);
+  const shellH = ACTIVITY_MARKER_SHELL_HEIGHT;
+  // The shell's own rectangle, centred in the box. Waves are exactly this and
+  // scale outwards from its centre, so "same shape, starts at the edge" holds
+  // at every marker width without a second set of numbers to keep in sync.
+  const shellRect = {
+    position: 'absolute' as const,
+    width,
+    height: shellH,
+    left: (box.width - width) / 2,
+    top: (box.height - shellH) / 2,
+    borderRadius: ACTIVITY_MARKER_SHELL_RADIUS,
+  };
+  // A halo whose INNER edge lands on the outline: RN draws borders inside the
+  // box, so the box is grown by 2×width and the radius by 1×, which puts the
+  // stroke entirely outside the marker instead of over its face.
+  const haloWidth = HALO_WIDTH;
+  const haloRect = {
+    position: 'absolute' as const,
+    width: width + haloWidth * 2,
+    height: shellH + haloWidth * 2,
+    left: (box.width - width) / 2 - haloWidth,
+    top: (box.height - shellH) / 2 - haloWidth,
+    borderRadius: ACTIVITY_MARKER_SHELL_RADIUS + haloWidth,
+    borderWidth: haloWidth,
+  };
+
+  const haloStyle = useAnimatedStyle(() => ({
+    opacity: selected ? 0.3 + breathe.value * 0.1 : 0.17 + breathe.value * 0.07,
   }));
+  // Scale starts at exactly 1 — the wave is born ON the outline and only ever
+  // travels outwards. Anything below 1 would draw a ring across the faces.
+  // The arithmetic is inlined on purpose: a helper defined in the component
+  // body is a plain JS function, and calling one inside a worklet throws on the
+  // UI thread rather than falling back to something that still renders.
   const firstWaveStyle = useAnimatedStyle(() => ({
-    opacity: (selected ? 0.4 : 0.16) * (1 - firstWave.value),
-    transform: [{ scale: 0.9 + firstWave.value * 0.48 }],
+    opacity: (selected ? 0.62 : 0.42) * (1 - firstWave.value),
+    transform: [{ scale: 1 + firstWave.value * (WAVE_MAX_SCALE - 1) }],
   }));
   const secondWaveStyle = useAnimatedStyle(() => ({
-    opacity: (selected ? 0.26 : 0.1) * (1 - secondWave.value),
-    transform: [{ scale: 0.92 + secondWave.value * 0.42 }],
+    opacity: (selected ? 0.44 : 0.28) * (1 - secondWave.value),
+    transform: [{ scale: 1 + secondWave.value * (WAVE_MAX_SCALE - 1.14) }],
   }));
 
   return (
-    <View pointerEvents="none" style={[styles.aura, style]}>
-      <Animated.View
-        style={[styles.ambient, { backgroundColor: colorWithAlpha(color, 1) }, ambientStyle]}
-      />
-      <Animated.View style={[styles.wave, { borderColor: color }, firstWaveStyle]} />
+    <View pointerEvents="none" style={[{ position: 'absolute', ...box }, style]}>
+      <Animated.View style={[haloRect, { borderColor: color }, haloStyle]} />
+      <Animated.View style={[shellRect, styles.wave, { borderColor: color }, firstWaveStyle]} />
       {!reducedMotion ? (
-        <Animated.View style={[styles.wave, { borderColor: color }, secondWaveStyle]} />
+        <Animated.View style={[shellRect, styles.wave, { borderColor: color }, secondWaveStyle]} />
       ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  ambient: {
-    borderRadius: 999,
-    height: 76,
-    left: 10,
-    position: 'absolute',
-    top: 10,
-    width: 76,
-  },
-  aura: {
-    height: LIVE_AURA_SIZE,
-    position: 'absolute',
-    width: LIVE_AURA_SIZE,
-  },
   wave: {
-    borderRadius: 999,
-    borderWidth: 1.5,
-    height: 84,
-    left: 6,
-    position: 'absolute',
-    top: 6,
-    width: 84,
+    borderWidth: 2,
   },
 });

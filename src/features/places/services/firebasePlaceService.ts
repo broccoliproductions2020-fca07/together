@@ -21,13 +21,22 @@ interface ResolvePlaceResponse {
   };
 }
 
+interface PlacesAutocompleteRequest extends PlaceSearchInput {
+  action: 'autocomplete';
+}
+
+interface PlacesResolveRequest extends PlaceResolveInput {
+  action: 'resolve';
+}
+
 export const firebasePlaceService: PlaceService = {
   async search(input: PlaceSearchInput) {
-    const autocomplete = httpsCallable<PlaceSearchInput, AutocompletePlacesResponse>(
+    const places = httpsCallable<PlacesAutocompleteRequest, AutocompletePlacesResponse>(
       getFirebaseFunctions(),
-      'autocompletePlaces',
+      'places',
     );
-    const result = await autocomplete({
+    const result = await places({
+      action: 'autocomplete',
       query: input.query.trim(),
       sessionToken: input.sessionToken,
       center: input.center,
@@ -37,11 +46,11 @@ export const firebasePlaceService: PlaceService = {
   },
 
   async resolve(input: PlaceResolveInput) {
-    const resolve = httpsCallable<PlaceResolveInput, ResolvePlaceResponse>(
+    const places = httpsCallable<PlacesResolveRequest, ResolvePlaceResponse>(
       getFirebaseFunctions(),
-      'resolvePlaceLocation',
+      'places',
     );
-    const result = await resolve(input);
+    const result = await places({ ...input, action: 'resolve' });
     const place = result.data.place;
     return {
       id: place.id,

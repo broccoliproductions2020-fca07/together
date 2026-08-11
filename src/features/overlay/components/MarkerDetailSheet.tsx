@@ -40,19 +40,21 @@ export interface MarkerDetailSheetProps {
   visible: boolean;
   selection: MapSelection | null;
   joined?: boolean;
+  joining?: boolean;
   /** True when the current user hosts this activity — shows the edit affordance. */
   canEdit?: boolean;
   onJoin?: () => void;
   onEdit?: () => void;
   onCreateAtSelection?: () => void;
   onOpenInMaps?: () => void;
+  /** Route to the shown target — a Place's coordinate or an Activity's pin. */
   onStartRoute?: () => void;
   onFocusJourney?: (participantId?: string) => void;
   onCreateActivity?: (roomId: string, messageId: string, proposal: ProposalData) => void;
   onLeave?: () => void;
   onCancel?: () => void;
-  journeyJoinPrompt?: boolean;
-  onDismissJourneyJoinPrompt?: () => void;
+  /** Skip the close transition when its marker must immediately play a pop-off. */
+  instantClose?: boolean;
   /** How much of the map this sheet currently covers, in px. The camera needs
    * it to centre a selection in the VISIBLE map, not behind the sheet. */
   onHeightChange?: (height: number) => void;
@@ -63,6 +65,7 @@ export function MarkerDetailSheet({
   visible,
   selection,
   joined = false,
+  joining = false,
   canEdit = false,
   onJoin,
   onEdit,
@@ -73,8 +76,7 @@ export function MarkerDetailSheet({
   onCreateActivity,
   onLeave,
   onCancel,
-  journeyJoinPrompt = false,
-  onDismissJourneyJoinPrompt,
+  instantClose = false,
   onHeightChange,
   onClose,
 }: MarkerDetailSheetProps) {
@@ -117,12 +119,18 @@ export function MarkerDetailSheet({
       return;
     }
 
+    if (instantClose) {
+      progress.value = 0;
+      setMounted(false);
+      return;
+    }
+
     progress.value = withTiming(0, { duration: reducedMotion ? 0 : 210 }, (finished) => {
       if (finished) {
         runOnJS(setMounted)(false);
       }
     });
-  }, [progress, reducedMotion, visible]);
+  }, [instantClose, progress, reducedMotion, visible]);
 
   const sheetStyle = useAnimatedStyle(() => ({
     transform: [{ translateY: interpolate(progress.value, [0, 1], [32, 0], Extrapolation.CLAMP) }],
@@ -223,7 +231,16 @@ export function MarkerDetailSheet({
             if (!chatMode) sheetHeight.value = event.nativeEvent.layout.height;
             // Same number, second consumer: the map camera centres a selection
             // in the strip of map this sheet leaves visible.
-            onHeightChange?.(event.nativeEvent.layout.height);
+            //
+            // Chat mode is deliberately excluded. Its height is an ANIMATED
+            // layout property (`chatHeightStyle` sets `height: %`), so every
+            // frame of a drag or spring fires onLayout — and the camera effect
+            // that depends on this value would answer each one with its own
+            // 300 ms animation. Dragging the chat handle turned into a stream
+            // of camera moves under the sheet. Chat mode also covers 60–92%,
+            // past the 80% cap where there is no map strip left to centre in,
+            // so the number carries no information there anyway.
+            if (!chatMode) onHeightChange?.(event.nativeEvent.layout.height);
           }}
           style={[
             sheetStyle,
@@ -353,10 +370,12 @@ export function MarkerDetailSheet({
                 <ActivityContent
                   selection={activitySelection}
                   joined={joined}
+                  joining={joining}
                   chatExpanded={chatExpanded}
                   canEdit={canEdit}
                   onJoin={onJoin}
                   onEdit={onEdit}
+                  onStartRoute={onStartRoute}
                   onExpandChat={expandChat}
                   onCollapseChat={collapseChat}
                   onOpenParticipants={() => setActivityView('participants')}
@@ -364,8 +383,6 @@ export function MarkerDetailSheet({
                   onCreateActivity={onCreateActivity}
                   onLeave={onLeave}
                   onCancel={onCancel}
-                  journeyJoinPrompt={journeyJoinPrompt}
-                  onDismissJourneyJoinPrompt={onDismissJourneyJoinPrompt}
                 />
               ) : shownSelection.type === 'Place' ? (
                 <PlaceContent

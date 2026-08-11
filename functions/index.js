@@ -1,4 +1,4 @@
-const { initializeApp } = require('firebase-admin/app');
+const { initializeApp, getApp } = require('firebase-admin/app');
 const { getAuth: getAdminAuth } = require('firebase-admin/auth');
 const { getDatabase } = require('firebase-admin/database');
 const { getFirestore, FieldValue, Timestamp } = require('firebase-admin/firestore');
@@ -7,8 +7,12 @@ const { getStorage } = require('firebase-admin/storage');
 const { createHash, randomUUID } = require('node:crypto');
 const { setGlobalOptions } = require('firebase-functions/v2/options');
 const { onCall, HttpsError } = require('firebase-functions/v2/https');
-const { onDocumentCreated, onDocumentUpdated } = require('firebase-functions/v2/firestore');
-const { onValueDeleted } = require('firebase-functions/v2/database');
+const {
+  onDocumentCreated,
+  onDocumentUpdated,
+  onDocumentWritten,
+} = require('firebase-functions/v2/firestore');
+const { onValueDeleted, onValueWritten } = require('firebase-functions/v2/database');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { onTaskDispatched } = require('firebase-functions/v2/tasks');
 const { defineSecret } = require('firebase-functions/params');
@@ -20,7 +24,8 @@ const { cleanupExpiredSurfaces } = require('./cleanup-expired-surfaces');
 // Firestore read the function performs. Set before the first deploy on
 // purpose: changing a function's region later means deleting and recreating
 // it, with a gap where clients call an endpoint that no longer exists.
-setGlobalOptions({ region: 'europe-west3' });
+const FUNCTIONS_REGION = 'europe-west3';
+setGlobalOptions({ region: FUNCTIONS_REGION });
 
 // Firebase CLI gives demo projects the legacy `demo-together` RTDB namespace,
 // while the app intentionally uses `demo-together-default-rtdb`. Pin the local
@@ -63,7 +68,7 @@ const SPONTANEOUS_ROUND_MAX_INVITEES = 20;
 const JOURNEY_BUFFER_MS = 30 * 60 * 1000;
 const JOURNEY_HARD_MAX_MS = 2 * 60 * 60 * 1000;
 const JOURNEY_REMINDER_LEAD_MS = 60 * 60 * 1000;
-const JOURNEY_REMINDER_LOOKBACK_MS = 10 * 60 * 1000;
+const JOURNEY_REMINDER_LOOKBACK_MS = 15 * 60 * 1000;
 const SAFETY_DEFAULT_DURATION_MS = 2 * 60 * 60 * 1000;
 const SAFETY_EXTENSION_MS = 60 * 60 * 1000;
 const SAFETY_EXTENSION_WINDOW_MS = 15 * 60 * 1000;
@@ -111,15 +116,18 @@ const CALLABLE_OPTS = {
   concurrency: 20,
 };
 // This is deliberately a Secret Manager reference, not a client configuration
-// value. It is injected only into the two server-side Places callables below.
+// value. It is injected only into the server-side Places callable below.
 const GOOGLE_PLACES_API_KEY = defineSecret('GOOGLE_PLACES_API_KEY');
-// Places is the only callable that performs a paid external request. Keep its
-// concurrency deliberately below the general callable ceiling as a second
-// cost-control boundary behind the per-account rate limit.
+// Places is the only callable that performs a paid external request. Its work
+// is overwhelmingly I/O (one guarded request to Google), not CPU-bound. Use
+// the smaller gen-1 CPU profile and serve one request at a time. It scales to
+// zero between requests, so Places has no reserved monthly CPU baseline.
 const PLACES_CALLABLE_OPTS = {
   ...CALLABLE_OPTS,
   maxInstances: 5,
-  concurrency: 4,
+  cpu: 'gcf_gen1',
+  concurrency: 1,
+  minInstances: 0,
   secrets: [GOOGLE_PLACES_API_KEY],
 };
 const EVENT_TRIGGER_OPTS = { maxInstances: 10, concurrency: 10 };
@@ -167,6 +175,30 @@ const CHAT_SUMMARY_TASK_OPTS = {
     minBackoffSeconds: 5,
     maxBackoffSeconds: 60,
     maxDoublings: 3,
+  },
+  rateLimits: { maxConcurrentDispatches: 20, maxDispatchesPerSecond: 20 },
+};
+const JOURNEY_REMINDER_TASK_OPTS = {
+  maxInstances: 5,
+  concurrency: 10,
+  timeoutSeconds: 60,
+  retryConfig: {
+    maxAttempts: 8,
+    minBackoffSeconds: 30,
+    maxBackoffSeconds: 15 * 60,
+    maxDoublings: 5,
+  },
+  rateLimits: { maxConcurrentDispatches: 20, maxDispatchesPerSecond: 20 },
+};
+const SAFETY_AUTO_EXTEND_TASK_OPTS = {
+  maxInstances: 5,
+  concurrency: 10,
+  timeoutSeconds: 30,
+  retryConfig: {
+    maxAttempts: 8,
+    minBackoffSeconds: 30,
+    maxBackoffSeconds: 15 * 60,
+    maxDoublings: 5,
   },
   rateLimits: { maxConcurrentDispatches: 20, maxDispatchesPerSecond: 20 },
 };
@@ -335,6 +367,86 @@ function journeyNotificationPayload(activityId, activity) {
     ...(typeof activity.endsAt === 'string' ? { endsAt: activity.endsAt } : {}),
     target: { latitude: target.latitude, longitude: target.longitude },
   };
+}
+
+function deterministicTaskId(prefix, ...parts) {
+  const digest = createHash('sha256').update(parts.join('\u0000')).digest('hex');
+  return `${prefix}-${digest}`;
+}
+
+function taskQueue(functionName) {
+  const projectId =
+    process.env.GCLOUD_PROJECT ??
+    firebaseConfig.projectId ??
+    (RUNNING_FUNCTIONS_EMULATOR ? 'demo-together' : null);
+  if (!projectId) throw new Error('Cloud Tasks braucht eine Firebase-Projekt-ID.');
+  return getFunctions().taskQueue(
+    `projects/${projectId}/locations/${FUNCTIONS_REGION}/functions/${functionName}`,
+  );
+}
+
+function taskAlreadyExists(error) {
+  return (
+    error?.code === 'task-already-exists' ||
+    error?.code === 'functions/task-already-exists' ||
+    error?.code === 'ALREADY_EXISTS' ||
+    error?.code === 6
+  );
+}
+
+function taskScheduleTime(dueAt) {
+  return new Date(Math.max(dueAt, Date.now() + 5_000));
+}
+
+function journeyReminderTaskInput(activityId, activity) {
+  const generation = activity?.journeyReminderGeneration;
+  const startsAtMs = Date.parse(activity?.startsAt ?? '');
+  if (
+    typeof generation !== 'string' ||
+    !generation ||
+    activity?.status !== 'active' ||
+    activity?.mode === 'now' ||
+    !Number.isFinite(startsAtMs) ||
+    !journeyNotificationPayload(activityId, activity)
+  ) {
+    return null;
+  }
+  return {
+    generation,
+    scheduleAt: startsAtMs - JOURNEY_REMINDER_LEAD_MS,
+  };
+}
+
+async function enqueueJourneyReminderTask(activityId, activity) {
+  const input = journeyReminderTaskInput(activityId, activity);
+  if (!input) return;
+  const id = deterministicTaskId('journey-reminder', activityId, input.generation);
+  try {
+    await taskQueue('dispatchJourneyReminder').enqueue(
+      { activityId, generation: input.generation },
+      { id, scheduleTime: taskScheduleTime(input.scheduleAt) },
+    );
+  } catch (error) {
+    if (taskAlreadyExists(error)) return;
+    throw error;
+  }
+}
+
+async function enqueueSafetyAutoExtendTask(uid, expiresAt) {
+  if (!validUid(uid) || !Number.isFinite(expiresAt)) return;
+  const id = deterministicTaskId('safety-auto-extend', uid, String(expiresAt));
+  try {
+    await taskQueue('dispatchSafetyAutoExtend').enqueue(
+      { uid, expiresAt },
+      {
+        id,
+        scheduleTime: taskScheduleTime(expiresAt - SAFETY_AUTO_EXTEND_LOOKAHEAD_MS),
+      },
+    );
+  } catch (error) {
+    if (taskAlreadyExists(error)) return;
+    throw error;
+  }
 }
 
 async function enforceRateLimit(
@@ -753,7 +865,7 @@ function bumpFriendshipsVersion(transaction, entries) {
 }
 
 function profileSnapshot(uid, profile) {
-  const displayName = cleanString(profile?.displayName ?? 'Together-Freund', 50, 'Name', true);
+  const displayName = cleanString(profile?.displayName ?? 'Como-Freund', 50, 'Name', true);
   const initials = cleanString(
     profile?.initials ?? displayName.slice(0, 2).toUpperCase(),
     8,
@@ -1019,6 +1131,7 @@ exports.createActivity = onCall(CALLABLE_OPTS, async (request) => {
 
   const activityRef = db.doc(`activities/${activityId}`);
   const roomRef = db.doc(`chats/${activityId}`);
+  const journeyReminderGeneration = randomUUID();
   const activeActivitiesByHost = db
     .collection('activities')
     .where('hostId', '==', uid)
@@ -1039,6 +1152,10 @@ exports.createActivity = onCall(CALLABLE_OPTS, async (request) => {
       transaction.get(activeActivitiesByHost),
     ]);
     if (activitySnapshot.exists) {
+      // A client can lose the callable response after this transaction already
+      // committed. The client-generated activity id is therefore an idempotency
+      // key: the original host may safely retry, nobody else may claim it.
+      if (activitySnapshot.data()?.hostId === uid) return;
       throw new HttpsError('already-exists', 'Diese Activity existiert bereits.');
     }
     if (activeActivitiesSnapshot.size >= MAX_ACTIVE_ACTIVITIES_PER_HOST) {
@@ -1106,6 +1223,7 @@ exports.createActivity = onCall(CALLABLE_OPTS, async (request) => {
       participants,
       participantUids,
       status: 'active',
+      journeyReminderGeneration,
       createdAt: Timestamp.now(),
       visibleUntil: Timestamp.fromMillis(visibleUntil),
       expireAt: Timestamp.fromMillis(expireAt),
@@ -1190,6 +1308,7 @@ exports.updateActivity = onCall(CALLABLE_OPTS, async (request) => {
   const db = getFirestore();
   const activityRef = db.doc(`activities/${activityId}`);
   const roomRef = db.doc(`chats/${activityId}`);
+  const journeyReminderGeneration = randomUUID();
 
   await db.runTransaction(async (transaction) => {
     const activitySnapshot = await transaction.get(activityRef);
@@ -1204,11 +1323,15 @@ exports.updateActivity = onCall(CALLABLE_OPTS, async (request) => {
     }
 
     const patch = {};
+    let journeyReminderScheduleChanged = false;
     const nextMode = has('mode') ? input.mode : activity.mode;
     if (nextMode !== 'soon' && nextMode !== 'now') {
       throw new HttpsError('invalid-argument', 'Ungültiger Aktivitätsmodus.');
     }
-    if (has('mode') && nextMode !== activity.mode) patch.mode = nextMode;
+    if (has('mode') && nextMode !== activity.mode) {
+      patch.mode = nextMode;
+      journeyReminderScheduleChanged = true;
+    }
 
     const nextTitle = has('title') ? cleanString(input.title, 60, 'Titel', true) : activity.title;
     const titleChanged = has('title') && nextTitle !== activity.title;
@@ -1268,6 +1391,8 @@ exports.updateActivity = onCall(CALLABLE_OPTS, async (request) => {
     if (startsAtChanged) {
       // A previous one-hour reminder belongs to the old start time.
       patch.journeyReminderSentAt = FieldValue.delete();
+      patch.journeyReminderSentGeneration = FieldValue.delete();
+      journeyReminderScheduleChanged = true;
     }
 
     if (has('maxParticipants')) {
@@ -1328,7 +1453,12 @@ exports.updateActivity = onCall(CALLABLE_OPTS, async (request) => {
       }
       if (!sameActivityPlace(activity.place, nextPlace)) {
         patch.place = nextPlace ?? FieldValue.delete();
+        journeyReminderScheduleChanged = true;
       }
+    }
+
+    if (journeyReminderScheduleChanged) {
+      patch.journeyReminderGeneration = journeyReminderGeneration;
     }
 
     if (!Object.keys(patch).length) return;
@@ -1367,7 +1497,7 @@ async function clearActivityJourneys(activityId) {
   ]);
 }
 
-/** Cancellation removes the plan immediately but keeps its chat for one day. */
+/** Cancellation removes the plan and its activity chat from members immediately. */
 exports.cancelActivity = onCall(CALLABLE_OPTS, async (request) => {
   const uid = requireVerifiedAuth(request);
   await enforceRateLimit(uid, 'activityMutations', 60, HOUR_MS);
@@ -1402,13 +1532,13 @@ exports.cancelActivity = onCall(CALLABLE_OPTS, async (request) => {
     });
     if (roomSnapshot.exists && roomSnapshot.data().type === 'activity') {
       transaction.update(roomRef, {
-        expireAt: Timestamp.fromMillis(now + ACTIVITY_CHAT_RETENTION_MS),
+        expireAt: Timestamp.fromMillis(now),
       });
     }
   });
 
-  // No Anreise position may outlive a cancellation, even during the chat's
-  // short retention window. Activity status already blocks any new writes.
+  // No Anreise position may outlive a cancellation. Activity status already
+  // blocks any new writes.
   await clearActivityJourneys(activityId).catch((error) =>
     console.error('[activity] journey cleanup after cancellation failed', error),
   );
@@ -1452,7 +1582,7 @@ function parsePlaceSearchArea(input) {
   return { center, radiusMeters };
 }
 
-exports.autocompletePlaces = onCall(PLACES_CALLABLE_OPTS, async (request) => {
+async function autocompletePlaces(request) {
   const uid = requireVerifiedAuth(request);
   const query = cleanString(request.data?.query, 120, 'Suchtext', true);
   if (query.length < 3) return { suggestions: [] };
@@ -1526,9 +1656,9 @@ exports.autocompletePlaces = onCall(PLACES_CALLABLE_OPTS, async (request) => {
           : {}),
       })),
   };
-});
+}
 
-exports.resolvePlaceLocation = onCall(PLACES_CALLABLE_OPTS, async (request) => {
+async function resolvePlaceLocation(request) {
   const uid = requireVerifiedAuth(request);
   const placeId = parseGooglePlaceId(request.data?.placeId);
   const sessionToken = parsePlaceSessionToken(request.data?.sessionToken);
@@ -1580,6 +1710,19 @@ exports.resolvePlaceLocation = onCall(PLACES_CALLABLE_OPTS, async (request) => {
     throw new HttpsError('failed-precondition', 'Der Ort hat keine Kartenkoordinate.');
   }
   return { place: { id: placeId, latitude, longitude } };
+}
+
+/**
+ * The current app uses one Places callable for both phases of a search.
+ * Keeping the dispatch here (rather than in the client) preserves identical
+ * authentication, App Check, per-account limits and project quota accounting
+ * for autocomplete and the selected place's coordinate resolution.
+ */
+exports.places = onCall(PLACES_CALLABLE_OPTS, async (request) => {
+  const action = request.data?.action;
+  if (action === 'autocomplete') return autocompletePlaces(request);
+  if (action === 'resolve') return resolvePlaceLocation(request);
+  throw new HttpsError('invalid-argument', 'Ungültige Ortssuche.');
 });
 
 exports.publishPresence = onCall(CALLABLE_OPTS, async (request) => {
@@ -1807,16 +1950,54 @@ exports.leaveActivity = onCall(CALLABLE_OPTS, async (request) => {
     ]);
     if (!snapshot.exists) return;
     const activity = snapshot.data();
-    if (activity.hostId === uid) {
-      throw new HttpsError('failed-precondition', 'Der Host muss die Activity absagen.');
-    }
     if (activity.status !== 'active') return;
     const participantUids = Array.isArray(activity.participantUids) ? activity.participantUids : [];
     if (!participantUids.includes(uid)) return;
+    const remainingParticipantUids = participantUids.filter(
+      (participantUid) => participantUid !== uid,
+    );
+    const leavingHost = activity.hostId === uid;
+    if (leavingHost && !remainingParticipantUids.length) {
+      throw new HttpsError(
+        'failed-precondition',
+        'Du bist der letzte Teilnehmer. Sage die Activity ab, um sie zu beenden.',
+      );
+    }
+
+    const participants = Array.isArray(activity.participants) ? activity.participants : [];
+    const remainingParticipants = participants.filter((participant) => participant?.uid !== uid);
+    let nextParticipantUids = remainingParticipantUids;
+    let nextParticipants = remainingParticipants;
+    let successorUid;
+    if (leavingHost) {
+      // Participant order is server-owned: the first remaining person is the
+      // longest-standing participant. Move that same person to index zero so
+      // the Activity document keeps its host/participant invariants intact.
+      successorUid = remainingParticipantUids[0];
+      const successor = remainingParticipants.find(
+        (participant) => participant?.uid === successorUid,
+      );
+      if (!successor) {
+        throw new HttpsError(
+          'failed-precondition',
+          'Die Teilnehmerdaten dieser Activity sind unvollständig.',
+        );
+      }
+      nextParticipantUids = [
+        successorUid,
+        ...remainingParticipantUids.filter((participantUid) => participantUid !== successorUid),
+      ];
+      nextParticipants = [
+        successor,
+        ...remainingParticipants.filter((participant) => participant?.uid !== successorUid),
+      ];
+    }
+
     left = true;
     transaction.update(activityRef, {
-      participantUids: participantUids.filter((participantUid) => participantUid !== uid),
-      participants: (activity.participants ?? []).filter((participant) => participant.uid !== uid),
+      ...(successorUid ? { hostId: successorUid } : {}),
+      participantUids: nextParticipantUids,
+      participants: nextParticipants,
       ...(journeyStateSnapshot.exists
         ? {
             journeyUnderwayCount: Math.max(
@@ -1835,6 +2016,16 @@ exports.leaveActivity = onCall(CALLABLE_OPTS, async (request) => {
       if (memberIds.includes(uid) && memberIds.length > 1) {
         transaction.update(roomRef, {
           memberIds: memberIds.filter((memberId) => memberId !== uid),
+          ...(successorUid && Array.isArray(room.adminUids)
+            ? {
+                adminUids: [
+                  successorUid,
+                  ...room.adminUids.filter(
+                    (adminUid) => adminUid !== uid && adminUid !== successorUid,
+                  ),
+                ],
+              }
+            : {}),
         });
       }
     }
@@ -2472,6 +2663,134 @@ exports.acceptSpontaneousRound = onCall(CALLABLE_OPTS, async (request) => {
   return { ok: true };
 });
 
+/**
+ * A one-off, recipient-authorized preview for the confirmation sheet.
+ * Pending invites deliberately remain server-only: this exposes only the
+ * current, compact member preview after proving that the caller owns the
+ * unexpired invitation. It is not a listener and cannot be used to enumerate
+ * rounds or their invitees.
+ */
+exports.getSpontaneousRoundInvitePreview = onCall(CALLABLE_OPTS, async (request) => {
+  const uid = requireVerifiedAuth(request);
+  await enforceRateLimit(uid, 'spontaneousRoundPreview', 30, 5 * 60 * 1000);
+  const roundId = request.data?.roundId;
+  if (!validActivityId(roundId)) {
+    throw new HttpsError('invalid-argument', 'Ungueltige Runde.');
+  }
+
+  const db = getFirestore();
+  const now = Date.now();
+  const [inviteSnapshot, openingSnapshot] = await Promise.all([
+    db.doc(`spontaneousRoundInvites/${roundId}_${uid}`).get(),
+    db.doc(`groupOpenings/${roundId}`).get(),
+  ]);
+  const invite = inviteSnapshot.data();
+  const opening = openingSnapshot.data();
+  const expiry = opening?.expireAt?.toMillis?.() ?? 0;
+  if (
+    !inviteSnapshot.exists ||
+    !openingSnapshot.exists ||
+    invite?.recipientUid !== uid ||
+    invite?.roundId !== roundId ||
+    (invite.expireAt?.toMillis?.() ?? 0) <= now ||
+    opening?.kind !== 'spontaneous' ||
+    opening?.status !== 'active' ||
+    expiry <= now
+  ) {
+    // Do not reveal whether a guessed id once referred to a real round.
+    return { state: 'unavailable' };
+  }
+
+  const hostUid = opening.hostUid;
+  if (!validUid(hostUid)) return { state: 'unavailable' };
+  const [friendshipSnapshot, outgoingBlock, incomingBlock] = await Promise.all([
+    db.doc(`friendships/${friendshipId(uid, hostUid)}`).get(),
+    db.doc(`blocks/${uid}_${hostUid}`).get(),
+    db.doc(`blocks/${hostUid}_${uid}`).get(),
+  ]);
+  if (
+    friendshipSnapshot.data()?.status !== 'accepted' ||
+    outgoingBlock.exists ||
+    incomingBlock.exists
+  ) {
+    return { state: 'unavailable' };
+  }
+
+  const memberIds = Array.isArray(opening.memberIds)
+    ? opening.memberIds.filter(validUid).slice(0, SPONTANEOUS_ROUND_MAX_INVITEES + 1)
+    : [];
+  const memberPreview = Array.isArray(opening.memberPreview)
+    ? opening.memberPreview
+        .flatMap((member) => {
+          if (
+            !member ||
+            !validUid(member.uid) ||
+            typeof member.displayName !== 'string' ||
+            typeof member.initials !== 'string'
+          ) {
+            return [];
+          }
+          return [
+            {
+              uid: member.uid,
+              displayName: member.displayName.slice(0, 50),
+              initials: member.initials.slice(0, 8),
+            },
+          ];
+        })
+        .slice(0, 4)
+    : [];
+  const host = memberPreview.find((member) => member.uid === hostUid);
+  if (!memberIds.includes(hostUid) || !host) return { state: 'unavailable' };
+
+  return {
+    state: 'available',
+    roundId,
+    host,
+    memberCount: memberIds.length,
+    memberPreview,
+    expiresAt: expiry,
+  };
+});
+
+/** A quiet decline removes only the caller's private invitation and card. */
+exports.declineSpontaneousRound = onCall(CALLABLE_OPTS, async (request) => {
+  const uid = requireVerifiedAuth(request);
+  await enforceRateLimit(uid, 'spontaneousRoundDecline', 12, 30 * 60 * 1000);
+  const roundId = request.data?.roundId;
+  if (!validActivityId(roundId)) {
+    throw new HttpsError('invalid-argument', 'Ungueltige Runde.');
+  }
+
+  const db = getFirestore();
+  const inviteRef = db.doc(`spontaneousRoundInvites/${roundId}_${uid}`);
+  const notificationRef = db.doc(`notifications/${roundId}_${uid}`);
+  let declined = false;
+  await db.runTransaction(async (transaction) => {
+    const [inviteSnapshot, notificationSnapshot] = await Promise.all([
+      transaction.get(inviteRef),
+      transaction.get(notificationRef),
+    ]);
+    if (inviteSnapshot.exists) {
+      const invite = inviteSnapshot.data();
+      if (invite.recipientUid !== uid || invite.roundId !== roundId) {
+        throw new HttpsError('permission-denied', 'Diese Einladung ist nicht verfuegbar.');
+      }
+      transaction.delete(inviteRef);
+      declined = true;
+    }
+    if (
+      notificationSnapshot.exists &&
+      notificationSnapshot.data().recipientUid === uid &&
+      notificationSnapshot.data().kind === 'spontaneous_round_invite' &&
+      notificationSnapshot.data().roomId === roundId
+    ) {
+      transaction.delete(notificationRef);
+    }
+  });
+  return { ok: true, state: declined ? 'declined' : 'unavailable' };
+});
+
 /** Host cancellation removes the entire round; another member can leave quietly. */
 exports.leaveSpontaneousRound = onCall(CALLABLE_OPTS, async (request) => {
   const uid = requireVerifiedAuth(request);
@@ -2889,15 +3208,18 @@ exports.inviteToGroupChat = onCall(CALLABLE_OPTS, async (request) => {
         createdAt: Timestamp.now(),
         expireAt,
       });
-      transaction.set(db.doc(`notifications/${groupChatInviteNotificationId(roomId, inviteeUid)}`), {
-        recipientUid: inviteeUid,
-        kind: 'group_chat_invite',
-        title: notificationItems[index].title,
-        body: notificationItems[index].body,
-        roomId,
-        createdAt: Timestamp.now(),
-        expireAt: Timestamp.fromMillis(now + NOTIFICATION_RETENTION_MS),
-      });
+      transaction.set(
+        db.doc(`notifications/${groupChatInviteNotificationId(roomId, inviteeUid)}`),
+        {
+          recipientUid: inviteeUid,
+          kind: 'group_chat_invite',
+          title: notificationItems[index].title,
+          body: notificationItems[index].body,
+          roomId,
+          createdAt: Timestamp.now(),
+          expireAt: Timestamp.fromMillis(now + NOTIFICATION_RETENTION_MS),
+        },
+      );
     });
     if (invited.length || expiredUnselected.length) {
       transaction.update(roomRef, {
@@ -3101,16 +3423,17 @@ exports.flushChatSummary = onTaskDispatched(CHAT_SUMMARY_TASK_OPTS, async (reque
 
 async function enqueueChatSummaryFlush(roomId) {
   if (RUNNING_FUNCTIONS_EMULATOR) {
-    // Cloud Tasks is not emulated. Keeping the summary synchronous here makes
-    // local development and integration tests deterministic without cloud calls.
+    // Keep chat summaries synchronous in the integration suite so those tests
+    // do not depend on queue timing; task queues are covered separately.
     await flushChatSummary(roomId);
     return;
   }
 
   try {
-    await getFunctions()
-      .taskQueue('flushChatSummary')
-      .enqueue({ roomId }, { scheduleDelaySeconds: CHAT_SUMMARY_COALESCE_SECONDS });
+    await taskQueue('flushChatSummary').enqueue(
+      { roomId },
+      { scheduleDelaySeconds: CHAT_SUMMARY_COALESCE_SECONDS },
+    );
   } catch (error) {
     // The message has already committed. Preserve correctness if queue setup is
     // incomplete or temporarily unavailable; this rare fallback costs one normal
@@ -3136,25 +3459,44 @@ async function createChatMessage(request, kind, proposal) {
   if (authorName.length > 50 || initials.length > 8) {
     throw new HttpsError('invalid-argument', 'Ungültige Absenderdaten.');
   }
+  const clientMessageId = request.data?.clientMessageId;
+  if (
+    clientMessageId != null &&
+    (typeof clientMessageId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(clientMessageId))
+  ) {
+    throw new HttpsError('invalid-argument', 'Ungültige Nachrichten-ID.');
+  }
 
   const db = getFirestore();
   const roomRef = db.doc(`chats/${roomId}`);
   const rateRef = db.doc(`rateLimits/${uid}`);
   const internalRef = chatInternalRef(roomRef);
   const profileRef = db.doc(`publicProfiles/${uid}`);
-  const messageRef = roomRef.collection('messages').doc();
+  // Stable client ids make a timed-out callable retry safe. Older clients keep
+  // their generated server ids, so this remains fully backwards-compatible.
+  const messageRef = clientMessageId
+    ? roomRef.collection('messages').doc(clientMessageId)
+    : roomRef.collection('messages').doc();
   const pushOutboxRef = db.collection('pushOutbox').doc();
   const now = Date.now();
   const windowStart = Math.floor(now / CHAT_RATE_WINDOW_MS) * CHAT_RATE_WINDOW_MS;
   const fingerprint = chatMessageFingerprint(text);
 
   const scheduleSummaryFlush = await db.runTransaction(async (transaction) => {
-    const [roomSnapshot, rateSnapshot, internalSnapshot, profileSnapshot] = await Promise.all([
-      transaction.get(roomRef),
-      transaction.get(rateRef),
-      transaction.get(internalRef),
-      transaction.get(profileRef),
-    ]);
+    const [roomSnapshot, rateSnapshot, internalSnapshot, profileSnapshot, messageSnapshot] =
+      await Promise.all([
+        transaction.get(roomRef),
+        transaction.get(rateRef),
+        transaction.get(internalRef),
+        transaction.get(profileRef),
+        transaction.get(messageRef),
+      ]);
+    if (messageSnapshot.exists) {
+      if (messageSnapshot.data()?.authorId !== uid) {
+        throw new HttpsError('permission-denied', 'Diese Nachrichten-ID ist bereits vergeben.');
+      }
+      return false;
+    }
     if (!roomSnapshot.exists) {
       throw new HttpsError('not-found', 'Chat nicht gefunden.');
     }
@@ -3298,7 +3640,7 @@ async function createChatMessage(request, kind, proposal) {
             actorUid: uid,
             kind: 'chat_message',
             title: 'Neue Nachricht',
-            body: 'Öffne Together, um sie zu lesen.',
+            body: 'Öffne Como, um sie zu lesen.',
             roomId,
             messageCount,
             ...(room.type === 'activity' ? { activityId: roomId } : {}),
@@ -4093,10 +4435,25 @@ exports.ensureJourneyMember = onCall(CALLABLE_OPTS, async (request) => {
  * location listener per marker. Per-user state stays in a server-only
  * subcollection solely to make start/stop idempotent.
  */
-async function updateJourneyUnderwayStatus(activityId, uid, underway) {
+async function updateJourneyUnderwayStatus(
+  activityId,
+  uid,
+  underway,
+  { removedLocationUpdatedAt } = {},
+) {
   const db = getFirestore();
   const activityRef = db.doc(`activities/${activityId}`);
   const stateRef = activityRef.collection('journeyStates').doc(uid);
+  let locationUpdatedAt;
+  if (underway) {
+    const locationSnapshot = await getDatabase()
+      .ref(`journeys/${activityId}/locations/${uid}`)
+      .get();
+    locationUpdatedAt = Number(locationSnapshot.val()?.updatedAt);
+    if (!Number.isFinite(locationUpdatedAt)) {
+      throw new HttpsError('failed-precondition', 'Deine Anreise ist nicht mehr aktiv.');
+    }
+  }
 
   return db.runTransaction(async (transaction) => {
     const [activitySnapshot, stateSnapshot] = await Promise.all([
@@ -4122,6 +4479,17 @@ async function updateJourneyUnderwayStatus(activityId, uid, underway) {
     }
 
     const wasUnderway = stateSnapshot.exists;
+    // A delayed onDisconnect deletion may arrive after the device has already
+    // published a newer location for the same activity. Its stale deletion must
+    // never clear the newer journey's location-free map summary.
+    if (
+      !underway &&
+      wasUnderway &&
+      Number.isFinite(removedLocationUpdatedAt) &&
+      Number(stateSnapshot.data()?.locationUpdatedAt) > removedLocationUpdatedAt
+    ) {
+      return false;
+    }
     if (wasUnderway === underway) return false;
 
     const currentCount = Number.isInteger(activity.journeyUnderwayCount)
@@ -4132,6 +4500,7 @@ async function updateJourneyUnderwayStatus(activityId, uid, underway) {
     if (underway) {
       transaction.set(stateRef, {
         startedAt: Timestamp.now(),
+        locationUpdatedAt,
         expireAt: Timestamp.fromMillis(activityExpiry(activity)),
       });
     } else {
@@ -4159,7 +4528,14 @@ exports.setJourneyLiveStatus = onCall(CALLABLE_OPTS, async (request) => {
 exports.clearJourneyStatusOnLocationRemoved = onValueDeleted(
   { ref: 'journeys/{activityId}/locations/{uid}', ...RTDB_TRIGGER_OPTS },
   async (event) => {
-    await updateJourneyUnderwayStatus(event.params.activityId, event.params.uid, false);
+    const removedLocationUpdatedAt = Number(event.data?.val()?.updatedAt);
+    const currentLocation = await getDatabase()
+      .ref(`journeys/${event.params.activityId}/locations/${event.params.uid}`)
+      .get();
+    if (currentLocation.exists()) return;
+    await updateJourneyUnderwayStatus(event.params.activityId, event.params.uid, false, {
+      removedLocationUpdatedAt,
+    });
   },
 );
 
@@ -4432,7 +4808,7 @@ exports.claimUsername = onCall(CALLABLE_OPTS, async (request) => {
   const initialDisplayName =
     typeof authRecord.displayName === 'string' && authRecord.displayName.trim()
       ? authRecord.displayName.trim().slice(0, 50)
-      : 'Together-Freund';
+      : 'Como-Freund';
   const initialProfile = {
     displayName: initialDisplayName,
     username,
@@ -4596,7 +4972,7 @@ exports.sendFriendRequest = onCall(CALLABLE_OPTS, async (request) => {
         actorUid: uid,
         kind: 'friend_request',
         title: 'Neue Freundschaftsanfrage',
-        body: `${requesterDisplayName} möchte mit dir bei Together befreundet sein.`,
+        body: `${requesterDisplayName} möchte mit dir bei Como befreundet sein.`,
       },
     ]);
   }
@@ -4664,7 +5040,7 @@ exports.respondToFriendRequest = onCall(CALLABLE_OPTS, async (request) => {
         actorUid: uid,
         kind: 'system',
         title: 'Freundschaft bestätigt',
-        body: `${responderName} ist jetzt dein Freund bei Together.`,
+        body: `${responderName} ist jetzt dein Freund bei Como.`,
       },
     ]).catch((error) => console.error('[friends] acceptance notification failed', error));
   }
@@ -4935,10 +5311,7 @@ async function revokeGroupChatInvitesBetween(db, firstUid, secondUid) {
         });
         if (roomSnapshot.exists && released) {
           transaction.update(roomRef, {
-            pendingInviteCount: Math.max(
-              0,
-              roomPendingInviteCount(roomSnapshot.data()) - released,
-            ),
+            pendingInviteCount: Math.max(0, roomPendingInviteCount(roomSnapshot.data()) - released),
           });
         }
       });
@@ -5676,6 +6049,31 @@ exports.onActivityUpdate = onDocumentUpdated(
       });
     });
 
+    if (
+      before.status === 'active' &&
+      after.status === 'active' &&
+      validUid(before.hostId) &&
+      validUid(after.hostId) &&
+      before.hostId !== after.hostId
+    ) {
+      const nextHost = (after.participants ?? []).find((item) => item?.uid === after.hostId);
+      const nextHostName = nextHost?.displayName ?? 'Ein Teilnehmer';
+      afterParticipants.forEach((recipientUid) => {
+        notifications.push({
+          recipientUid,
+          actorUid: before.hostId,
+          kind: 'activity_host_changed',
+          title: recipientUid === after.hostId ? 'Du übernimmst die Activity' : 'Neuer Host',
+          body:
+            recipientUid === after.hostId
+              ? `Du bist jetzt Host von „${after.title ?? 'dieser Activity'}“.`
+              : `${nextHostName} übernimmt „${after.title ?? 'diese Activity'}“.`,
+          activityId,
+          roomId: activityId,
+        });
+      });
+    }
+
     if (before.status === 'active' && after.status === 'cancelled') {
       afterParticipants
         .filter((recipientUid) => recipientUid !== hostId)
@@ -5806,7 +6204,7 @@ exports.startSocialSession = onCall(CALLABLE_OPTS, async (request) => {
   const db = getFirestore();
   const profile = (await db.doc(`publicProfiles/${uid}`).get()).data() ?? {};
   const displayName = cleanString(
-    profile.displayName ?? request.auth.token.name ?? 'Together-Freund',
+    profile.displayName ?? request.auth.token.name ?? 'Como-Freund',
     50,
     'Name',
     true,
@@ -5880,7 +6278,7 @@ exports.discoverSocial = onCall(CALLABLE_OPTS, async (request) => {
       return {
         id: snapshot.id,
         kind: 'person',
-        displayName: matched ? (data.displayName ?? 'Together-Freund') : 'Person in deiner Nähe',
+        displayName: matched ? (data.displayName ?? 'Como-Freund') : 'Person in deiner Nähe',
         initials: matched ? (data.initials ?? 'TN') : 'TN',
         distanceLabel: 'in deiner Nähe',
         note: data.note ?? '',
@@ -5973,97 +6371,93 @@ exports.sendSocialMessage = onCall(CALLABLE_OPTS, async (request) => {
   };
 });
 
-exports.cleanupJourneys = onSchedule(
-  { schedule: 'every 15 minutes', ...SERIAL_SCHEDULE_OPTS },
-  async () => {
-    const now = Date.now();
-    const db = getFirestore();
-    await cleanupExpiredSurfaces(db, Timestamp.fromMillis(now));
+async function cleanupExpiredRuntime(now) {
+  const db = getFirestore();
+  await cleanupExpiredSurfaces(db, Timestamp.fromMillis(now));
 
-    const root = getDatabase().ref('journeys');
-    const snapshot = await root.orderByChild('expiresAt').endAt(now).limitToFirst(100).get();
-    if (snapshot.exists()) {
-      const removals = {};
-      const activityIds = [];
-      snapshot.forEach((child) => {
-        removals[child.key] = null;
-        activityIds.push(child.key);
-        return false;
-      });
-      await root.update(removals);
-
-      // The RTDB deletion trigger normally removes the private idempotency states.
-      // Resetting the compact summary here is a bounded fallback for expiry cleanup.
-      await Promise.all(
-        activityIds.map(async (activityId) => {
-          const activityRef = db.doc(`activities/${activityId}`);
-          const [activitySnapshot, statesSnapshot] = await Promise.all([
-            activityRef.get(),
-            activityRef.collection('journeyStates').limit(50).get(),
-          ]);
-          if (!activitySnapshot.exists) return;
-          const batch = db.batch();
-          batch.update(activityRef, { journeyUnderwayCount: 0 });
-          statesSnapshot.docs.forEach((state) => batch.delete(state.ref));
-          await batch.commit();
-        }),
-      );
-    }
-
-    // Reuse the same scheduler invocation for Safety timeout notification and
-    // retention cleanup instead of adding another paid timer. Client timers
-    // switch the UI exactly at expiresAt; this backend pass reaches locked
-    // companion devices and later removes the retained last point.
-    const safetyRoot = getDatabase().ref('heimwege');
-    const safetyTimeoutSnapshot = await safetyRoot
-      .orderByChild('expiresAt')
-      .endAt(now)
-      .limitToFirst(100)
-      .get();
-    if (safetyTimeoutSnapshot.exists()) {
-      const timeoutNotifications = [];
-      const timeoutMarkers = {};
-      safetyTimeoutSnapshot.forEach((child) => {
-        const session = child.val() ?? {};
-        if (session.timeoutNotifiedAt) return false;
-        const displayName = cleanString(session.displayName ?? 'Eine Person', 80, 'Name', true);
-        Object.keys(session.audienceUids ?? {}).forEach((recipientUid) => {
-          if (!validUid(recipientUid)) return;
-          timeoutNotifications.push({
-            recipientUid,
-            actorUid: child.key,
-            safetyOwnerUid: child.key,
-            kind: 'safety_timed_out',
-            title: `${displayName}s Heimweg wurde automatisch beendet`,
-            body: 'Die Ankunft wurde nicht bestätigt. Der letzte bekannte Standort bleibt vorübergehend sichtbar.',
-          });
-        });
-        timeoutMarkers[`heimwege/${child.key}/timeoutNotifiedAt`] = now;
-        return false;
-      });
-      await createNotifications(timeoutNotifications, { queuePush: true });
-      if (Object.keys(timeoutMarkers).length) await getDatabase().ref().update(timeoutMarkers);
-    }
-
-    const safetySnapshot = await safetyRoot
-      .orderByChild('retainUntil')
-      .endAt(now)
-      .limitToFirst(100)
-      .get();
-    if (!safetySnapshot.exists()) return;
-    const safetyRemovals = {};
-    safetySnapshot.forEach((child) => {
-      safetyRemovals[`heimwege/${child.key}`] = null;
-      Object.keys(child.val()?.audienceUids ?? {}).forEach((companionUid) => {
-        if (validUid(companionUid)) {
-          safetyRemovals[`heimwegeIndex/${companionUid}/${child.key}`] = null;
-        }
-      });
+  const root = getDatabase().ref('journeys');
+  const snapshot = await root.orderByChild('expiresAt').endAt(now).limitToFirst(100).get();
+  if (snapshot.exists()) {
+    const removals = {};
+    const activityIds = [];
+    snapshot.forEach((child) => {
+      removals[child.key] = null;
+      activityIds.push(child.key);
       return false;
     });
-    await getDatabase().ref().update(safetyRemovals);
-  },
-);
+    await root.update(removals);
+
+    // The RTDB deletion trigger normally removes the private idempotency states.
+    // Resetting the compact summary here is a bounded fallback for expiry cleanup.
+    await Promise.all(
+      activityIds.map(async (activityId) => {
+        const activityRef = db.doc(`activities/${activityId}`);
+        const [activitySnapshot, statesSnapshot] = await Promise.all([
+          activityRef.get(),
+          activityRef.collection('journeyStates').limit(50).get(),
+        ]);
+        if (!activitySnapshot.exists) return;
+        const batch = db.batch();
+        batch.update(activityRef, { journeyUnderwayCount: 0 });
+        statesSnapshot.docs.forEach((state) => batch.delete(state.ref));
+        await batch.commit();
+      }),
+    );
+  }
+
+  // Reuse the same scheduler invocation for Safety timeout notification and
+  // retention cleanup instead of adding another paid timer. Client timers
+  // switch the UI exactly at expiresAt; this backend pass reaches locked
+  // companion devices and later removes the retained last point.
+  const safetyRoot = getDatabase().ref('heimwege');
+  const safetyTimeoutSnapshot = await safetyRoot
+    .orderByChild('expiresAt')
+    .endAt(now)
+    .limitToFirst(100)
+    .get();
+  if (safetyTimeoutSnapshot.exists()) {
+    const timeoutNotifications = [];
+    const timeoutMarkers = {};
+    safetyTimeoutSnapshot.forEach((child) => {
+      const session = child.val() ?? {};
+      if (session.timeoutNotifiedAt) return false;
+      const displayName = cleanString(session.displayName ?? 'Eine Person', 80, 'Name', true);
+      Object.keys(session.audienceUids ?? {}).forEach((recipientUid) => {
+        if (!validUid(recipientUid)) return;
+        timeoutNotifications.push({
+          recipientUid,
+          actorUid: child.key,
+          safetyOwnerUid: child.key,
+          kind: 'safety_timed_out',
+          title: `${displayName}s Heimweg wurde automatisch beendet`,
+          body: 'Die Ankunft wurde nicht bestätigt. Der letzte bekannte Standort bleibt vorübergehend sichtbar.',
+        });
+      });
+      timeoutMarkers[`heimwege/${child.key}/timeoutNotifiedAt`] = now;
+      return false;
+    });
+    await createNotifications(timeoutNotifications, { queuePush: true });
+    if (Object.keys(timeoutMarkers).length) await getDatabase().ref().update(timeoutMarkers);
+  }
+
+  const safetySnapshot = await safetyRoot
+    .orderByChild('retainUntil')
+    .endAt(now)
+    .limitToFirst(100)
+    .get();
+  if (!safetySnapshot.exists()) return;
+  const safetyRemovals = {};
+  safetySnapshot.forEach((child) => {
+    safetyRemovals[`heimwege/${child.key}`] = null;
+    Object.keys(child.val()?.audienceUids ?? {}).forEach((companionUid) => {
+      if (validUid(companionUid)) {
+        safetyRemovals[`heimwegeIndex/${companionUid}/${child.key}`] = null;
+      }
+    });
+    return false;
+  });
+  await getDatabase().ref().update(safetyRemovals);
+}
 
 /**
  * Grace extension for Safety sessions whose owner missed the "Bist du schon
@@ -6073,40 +6467,122 @@ exports.cleanupJourneys = onSchedule(
  * Antwort seit …" would be pure alarmism at the routine end of a normal blue
  * walk). Client-scheduled warn/end notifications hang on expiresAt and move
  * along automatically. After both windows the session still ends honestly as
- * "Automatisch beendet · Ankunft nicht bestätigt" (see cleanupJourneys).
+ * "Automatisch beendet · Ankunft nicht bestätigt" (see maintainRuntime).
  */
-exports.autoExtendSafetySessions = onSchedule(
-  { schedule: 'every 5 minutes', ...SERIAL_SCHEDULE_OPTS },
-  async () => {
-    const now = Date.now();
-    const snapshot = await getDatabase()
-      .ref('heimwege')
-      .orderByChild('expiresAt')
-      .startAt(now)
-      .endAt(now + SAFETY_AUTO_EXTEND_LOOKAHEAD_MS)
-      .limitToFirst(100)
-      .get();
-    if (!snapshot.exists()) return;
-    const updates = {};
-    snapshot.forEach((child) => {
-      const session = child.val() ?? {};
-      const count = Number(session.autoExtendCount ?? 0);
-      if (count >= SAFETY_AUTO_EXTEND_MAX) return false;
-      const startedAt = Number(session.startedAt);
-      const currentExpiresAt = Number(session.expiresAt);
-      if (!Number.isFinite(startedAt) || !Number.isFinite(currentExpiresAt)) return false;
-      const nextExpiresAt = Math.min(
-        currentExpiresAt + SAFETY_AUTO_EXTEND_MS,
-        startedAt + SAFETY_MAX_TOTAL_MS,
-      );
-      if (nextExpiresAt <= currentExpiresAt) return false;
-      updates[`heimwege/${child.key}/expiresAt`] = nextExpiresAt;
-      updates[`heimwege/${child.key}/retainUntil`] =
-        nextExpiresAt + safetyRetentionMs(session.status);
-      updates[`heimwege/${child.key}/autoExtendCount`] = count + 1;
-      return false;
+async function reconcileSafetyAutoExtensions(now) {
+  const safetyRoot = getDatabase().ref('heimwege');
+  const snapshot = await safetyRoot
+    .orderByChild('expiresAt')
+    .startAt(now)
+    .endAt(now + SAFETY_AUTO_EXTEND_LOOKAHEAD_MS)
+    .limitToFirst(100)
+    .get();
+  if (!snapshot.exists()) return;
+
+  const candidates = [];
+  snapshot.forEach((child) => {
+    const expiresAt = Number(child.val()?.expiresAt);
+    if (typeof child.key === 'string' && Number.isFinite(expiresAt)) {
+      candidates.push({ uid: child.key, expiresAt });
+    }
+    return false;
+  });
+  await Promise.all(
+    candidates.map(({ uid, expiresAt }) => autoExtendSafetySessionFromTask(uid, expiresAt)),
+  );
+}
+
+function safetySessionRestUrl(uid) {
+  const databaseUrl = getDatabase().app.options.databaseURL;
+  if (typeof databaseUrl !== 'string' || !databaseUrl) {
+    throw new Error('Safety-Task findet keine RTDB-URL.');
+  }
+  const emulatorHost = process.env.FIREBASE_DATABASE_EMULATOR_HOST;
+  if (emulatorHost) {
+    const namespace = new URL(databaseUrl).hostname.split('.')[0];
+    return `http://${emulatorHost}/heimwege/${encodeURIComponent(uid)}.json?ns=${encodeURIComponent(namespace)}`;
+  }
+  return `${databaseUrl.replace(/\/$/, '')}/heimwege/${encodeURIComponent(uid)}.json`;
+}
+
+async function safetySessionRestHeaders(headers = {}) {
+  if (process.env.FIREBASE_DATABASE_EMULATOR_HOST) {
+    return { ...headers, Authorization: 'Bearer owner' };
+  }
+  const accessToken = await getApp().options.credential?.getAccessToken?.();
+  if (typeof accessToken?.access_token !== 'string' || !accessToken.access_token) {
+    throw new Error('Safety-Task konnte keinen RTDB-Zugriffstoken beziehen.');
+  }
+  return { ...headers, Authorization: `Bearer ${accessToken.access_token}` };
+}
+
+async function autoExtendSafetySessionFromTask(uid, expectedExpiresAt) {
+  const url = safetySessionRestUrl(uid);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const read = await fetch(url, {
+      headers: await safetySessionRestHeaders({ 'X-Firebase-ETag': 'true' }),
     });
-    if (Object.keys(updates).length) await getDatabase().ref().update(updates);
+    if (!read.ok) throw new Error(`Safety-Task konnte die Session nicht lesen (${read.status}).`);
+    const etag = read.headers.get('etag');
+    const current = await read.json();
+    const now = Date.now();
+    if (!current || typeof current !== 'object' || !etag) return false;
+    const count = Number(current.autoExtendCount ?? 0);
+    const startedAt = Number(current.startedAt);
+    const currentExpiresAt = Number(current.expiresAt);
+    if (
+      currentExpiresAt !== expectedExpiresAt ||
+      count >= SAFETY_AUTO_EXTEND_MAX ||
+      !Number.isFinite(startedAt) ||
+      currentExpiresAt < now ||
+      currentExpiresAt > now + SAFETY_AUTO_EXTEND_LOOKAHEAD_MS
+    ) {
+      return false;
+    }
+    const nextExpiresAt = Math.min(
+      currentExpiresAt + SAFETY_AUTO_EXTEND_MS,
+      startedAt + SAFETY_MAX_TOTAL_MS,
+    );
+    if (nextExpiresAt <= currentExpiresAt) return false;
+    const next = {
+      ...current,
+      expiresAt: nextExpiresAt,
+      retainUntil: nextExpiresAt + safetyRetentionMs(current.status),
+      autoExtendCount: count + 1,
+    };
+    const write = await fetch(url, {
+      method: 'PUT',
+      headers: await safetySessionRestHeaders({
+        'Content-Type': 'application/json',
+        'if-match': etag,
+      }),
+      body: JSON.stringify(next),
+    });
+    if (write.ok) return true;
+    if (write.status !== 412) {
+      throw new Error(`Safety-Task konnte die Session nicht sichern (${write.status}).`);
+    }
+  }
+  throw new Error('Safety-Task konnte die Session wegen paralleler Änderungen nicht sichern.');
+}
+
+exports.scheduleSafetyAutoExtend = onValueWritten(
+  { ref: 'heimwege/{uid}/expiresAt', ...RTDB_TRIGGER_OPTS, retry: true, maxInstances: 5 },
+  async (event) => {
+    const before = Number(event.data.before.val());
+    const expiresAt = Number(event.data.after.val());
+    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now() || expiresAt === before) return;
+    await enqueueSafetyAutoExtendTask(event.params.uid, expiresAt);
+  },
+);
+
+exports.dispatchSafetyAutoExtend = onTaskDispatched(
+  SAFETY_AUTO_EXTEND_TASK_OPTS,
+  async (request) => {
+    const uid = request.data?.uid;
+    const expiresAt = Number(request.data?.expiresAt);
+    if (!validUid(uid) || !Number.isFinite(expiresAt)) return;
+    return { extended: await autoExtendSafetySessionFromTask(uid, expiresAt) };
   },
 );
 
@@ -6148,59 +6624,161 @@ async function filterJourneyReminderRecipients(db, recipientUids, settingsCache 
   return uids.filter((uid) => !optedOut.has(uid));
 }
 
-exports.sendJourneyReminders = onSchedule(
-  { schedule: 'every 10 minutes', ...SERIAL_SCHEDULE_OPTS },
+async function claimJourneyReminder(activityId, generation) {
+  const db = getFirestore();
+  const activityRef = db.doc(`activities/${activityId}`);
+  return db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(activityRef);
+    if (!snapshot.exists) return null;
+    const activity = snapshot.data();
+    if (
+      activity.status !== 'active' ||
+      activity.mode === 'now' ||
+      activity.journeyReminderGeneration !== generation ||
+      !journeyNotificationPayload(activityId, activity)
+    ) {
+      return null;
+    }
+    if (activity.journeyReminderSentAt) {
+      return activity.journeyReminderSentGeneration === generation ? activity : null;
+    }
+    transaction.update(activityRef, {
+      journeyReminderSentAt: Timestamp.now(),
+      journeyReminderSentGeneration: generation,
+    });
+    return activity;
+  });
+}
+
+async function createIdempotentJourneyReminderNotifications(activityId, generation, items) {
+  const validItems = items.filter((item) => item.recipientUid);
+  if (!validItems.length) return;
+  const db = getFirestore();
+  const deliveryId = deterministicTaskId('journey-reminder-delivery', activityId, generation);
+  const outboxRef = db.doc(`pushOutbox/${deliveryId}`);
+  if ((await outboxRef.get()).exists) return;
+
+  const expireAt = Timestamp.fromMillis(Date.now() + NOTIFICATION_RETENTION_MS);
+  const batch = db.batch();
+  validItems.forEach((item) => {
+    batch.create(db.doc(`notifications/${deterministicTaskId(deliveryId, item.recipientUid)}`), {
+      recipientUid: item.recipientUid,
+      kind: item.kind,
+      title: item.title.slice(0, 100),
+      body: item.body.slice(0, 500),
+      activityId,
+      createdAt: Timestamp.now(),
+      expireAt,
+    });
+  });
+  batch.create(outboxRef, {
+    items: validItems.map(pushOutboxItem),
+    createdAt: Timestamp.now(),
+    expireAt,
+  });
+  try {
+    await batch.commit();
+  } catch (error) {
+    if (taskAlreadyExists(error) || (await outboxRef.get()).exists) return;
+    throw error;
+  }
+}
+
+async function dispatchJourneyReminder(activityId, generation) {
+  if (!validActivityId(activityId) || typeof generation !== 'string' || !generation) return;
+  const activity = await claimJourneyReminder(activityId, generation);
+  if (!activity) return;
+  const journey = journeyNotificationPayload(activityId, activity);
+  if (!journey) return;
+  const recipients = Array.isArray(activity.participantUids) ? activity.participantUids : [];
+  const eligible = await filterJourneyReminderRecipients(getFirestore(), recipients);
+  const startLabel = formatBerlinClock(activity.startsAt);
+  await createIdempotentJourneyReminderNotifications(
+    activityId,
+    generation,
+    eligible.map((recipientUid) => ({
+      recipientUid,
+      kind: 'journey_reminder',
+      title: startLabel
+        ? `${activity.title ?? 'Deine Activity'} beginnt um ${startLabel}`
+        : `${activity.title ?? 'Deine Activity'} beginnt bald`,
+      body: 'Anreise teilen? Zum Aktivieren tippen.',
+      activityId,
+      journey,
+    })),
+  );
+}
+
+exports.scheduleJourneyReminder = onDocumentWritten(
+  { document: 'activities/{activityId}', ...EVENT_TRIGGER_OPTS, retry: true, maxInstances: 5 },
+  async (event) => {
+    const before = event.data?.before.data();
+    const activity = event.data?.after.data();
+    if (!activity || before?.journeyReminderGeneration === activity.journeyReminderGeneration)
+      return;
+    await enqueueJourneyReminderTask(event.params.activityId, activity);
+  },
+);
+
+exports.dispatchJourneyReminder = onTaskDispatched(JOURNEY_REMINDER_TASK_OPTS, async (request) => {
+  await dispatchJourneyReminder(request.data?.activityId, request.data?.generation);
+});
+
+async function journeyReminderRecoveryGeneration(activityId) {
+  const db = getFirestore();
+  const activityRef = db.doc(`activities/${activityId}`);
+  return db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(activityRef);
+    if (!snapshot.exists) return null;
+    const activity = snapshot.data();
+    if (
+      activity.status !== 'active' ||
+      activity.mode === 'now' ||
+      !journeyNotificationPayload(activityId, activity)
+    ) {
+      return null;
+    }
+    const generation = activity.journeyReminderGeneration;
+    if (typeof generation === 'string' && generation) return generation;
+    // A pre-migration reminder without a generation may already have been sent.
+    if (activity.journeyReminderSentAt) return null;
+    const recoveryGeneration = randomUUID();
+    transaction.update(activityRef, { journeyReminderGeneration: recoveryGeneration });
+    return recoveryGeneration;
+  });
+}
+
+async function reconcileMissedJourneyReminders(now) {
+  const earliestStart = new Date(
+    now + JOURNEY_REMINDER_LEAD_MS - JOURNEY_REMINDER_LOOKBACK_MS,
+  ).toISOString();
+  const latestStart = new Date(now + JOURNEY_REMINDER_LEAD_MS).toISOString();
+  const snapshot = await getFirestore()
+    .collection('activities')
+    .where('status', '==', 'active')
+    .where('startsAt', '>=', earliestStart)
+    .where('startsAt', '<=', latestStart)
+    .orderBy('startsAt', 'asc')
+    .limit(100)
+    .get();
+
+  for (const activitySnapshot of snapshot.docs) {
+    const generation = await journeyReminderRecoveryGeneration(activitySnapshot.id);
+    if (!generation) continue;
+    await dispatchJourneyReminder(activitySnapshot.id, generation);
+  }
+}
+
+function shouldRunQuarterHourlyMaintenance(now) {
+  return new Date(now).getUTCMinutes() % 15 < 5;
+}
+
+exports.maintainRuntime = onSchedule(
+  { schedule: 'every 5 minutes', ...SERIAL_SCHEDULE_OPTS },
   async () => {
     const now = Date.now();
-    const earliestStart = new Date(
-      now + JOURNEY_REMINDER_LEAD_MS - JOURNEY_REMINDER_LOOKBACK_MS,
-    ).toISOString();
-    const latestStart = new Date(
-      now + JOURNEY_REMINDER_LEAD_MS + JOURNEY_REMINDER_LOOKBACK_MS,
-    ).toISOString();
-    const db = getFirestore();
-    const snapshot = await db
-      .collection('activities')
-      .where('status', '==', 'active')
-      .where('startsAt', '>=', earliestStart)
-      .where('startsAt', '<=', latestStart)
-      .orderBy('startsAt', 'asc')
-      .limit(100)
-      .get();
-    const notifications = [];
-    const reminderSettingsCache = new Map();
-
-    for (const activitySnapshot of snapshot.docs) {
-      const activity = activitySnapshot.data();
-      const journey = journeyNotificationPayload(activitySnapshot.id, activity);
-      // An automatic arrival check needs a real map destination. Do not consume
-      // the one-per-activity reminder flag for activities without one.
-      if (!journey) continue;
-      const recipients = await db.runTransaction(async (transaction) => {
-        const current = await transaction.get(activitySnapshot.ref);
-        if (!current.exists) return [];
-        const activity = current.data();
-        if (activity.status !== 'active' || activity.journeyReminderSentAt) return [];
-        transaction.update(activitySnapshot.ref, { journeyReminderSentAt: Timestamp.now() });
-        return Array.isArray(activity.participantUids) ? activity.participantUids : [];
-      });
-      const title = activity.title ?? 'Deine Activity';
-      const startLabel = formatBerlinClock(activity.startsAt);
-      // Only those who left the reminder ON. The reminder OFFERS; the actual
-      // location release stays a per-activity confirmation (docs/safety-mode.md).
-      const eligible = await filterJourneyReminderRecipients(db, recipients, reminderSettingsCache);
-      eligible.forEach((recipientUid) => {
-        notifications.push({
-          recipientUid,
-          kind: 'journey_reminder',
-          title: startLabel ? `${title} beginnt um ${startLabel}` : `${title} beginnt bald`,
-          body: 'Anreise teilen? Zum Aktivieren tippen.',
-          activityId: activitySnapshot.id,
-          journey,
-        });
-      });
-    }
-
-    await createNotifications(notifications);
+    await reconcileSafetyAutoExtensions(now);
+    if (!shouldRunQuarterHourlyMaintenance(now)) return;
+    await Promise.all([cleanupExpiredRuntime(now), reconcileMissedJourneyReminders(now)]);
   },
 );

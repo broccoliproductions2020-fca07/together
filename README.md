@@ -1,6 +1,6 @@
-# Together
+# Como
 
-Together is a native app for spontaneous meetups between confirmed friends. The
+Como is a native app for spontaneous meetups between confirmed friends. The
 client is built with Expo/React Native and uses Firebase Auth, Firestore,
 Realtime Database, Storage and Cloud Functions.
 
@@ -9,13 +9,13 @@ Realtime Database, Storage and Cloud Functions.
 The app has one backend implementation: Firebase. Development and releases run
 the same client code against different Firebase targets.
 
-| Environment | App identity | Firebase target | Purpose |
-| --- | --- | --- | --- |
-| Development | `com.broccolistudio.together.dev` | Local Emulator Suite | Daily development, no cloud cost |
-| Staging | `com.broccolistudio.together.staging` | Firebase development project | Internal device tests |
-| Production | `com.broccolistudio.together` | Firebase production project | Store release |
+| Environment | App identity                          | Firebase target              | Purpose                          |
+| ----------- | ------------------------------------- | ---------------------------- | -------------------------------- |
+| Development | `com.broccolistudio.together.dev`     | Local Emulator Suite         | Daily development, no cloud cost |
+| Staging     | `com.broccolistudio.together.staging` | Firebase development project | Internal device tests            |
+| Production  | `com.broccolistudio.together`         | Firebase production project  | Store release                    |
 
-Expo Go and the browser are not supported application targets: Together uses
+Expo Go and the browser are not supported application targets: Como uses
 native Firebase modules. Use the custom development client.
 
 ## Local start

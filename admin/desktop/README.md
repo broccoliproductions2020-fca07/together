@@ -1,7 +1,7 @@
-# Together Betrieb Desktop
+# Como Betrieb Desktop
 
 `npm run dashboard:desktop` opens a Windows-only desktop shell around the local
-Together operations dashboard. The shell starts its own loopback server on a
+Como operations dashboard. The shell starts its own loopback server on a
 random `127.0.0.1` port; it is not reachable from the LAN.
 
 ## Credential handling
@@ -24,7 +24,7 @@ new windows, and can navigate only to the app's own loopback origin.
 
 ## Required account access
 
-The Google account must have read access to both Together Cloud projects. The
+The Google account must have read access to both Como Cloud projects. The
 first sign-in requires the Google Cloud CLI. The application opens the official
 installer page if it is unavailable.
 

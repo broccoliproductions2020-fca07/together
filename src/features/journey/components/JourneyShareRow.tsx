@@ -1,11 +1,16 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 
 import { colorWithAlpha } from '@/features/map/utils/markerStyles';
 
 import { useJourney } from '../JourneyProvider';
-import type { JourneyActivityContext, JourneyParticipant, UserJourneyRecord } from '../types';
+import type {
+  JourneyActivityContext,
+  JourneyParticipant,
+  JourneyStartResult,
+  UserJourneyRecord,
+} from '../types';
 
 /** Fixed accent — deliberately NOT the activity's mode color (which shifts
  * orange/blue/green per soon/open/now): Anreise is always this green, the
@@ -20,8 +25,7 @@ interface JourneyShareRowProps {
   journeys: JourneyParticipant[];
   armedJourney?: UserJourneyRecord;
   /** Controls only the inactive entry. Active/arrived journeys always remain visible. */
-  idlePresentation: 'hidden' | 'action' | 'prompt';
-  onPromptDismiss?: () => void;
+  idlePresentation: 'hidden' | 'action';
   onFocusParticipant?: (participantId?: string) => void;
 }
 
@@ -43,13 +47,14 @@ export function JourneyShareRow({
   journeys,
   armedJourney,
   idlePresentation,
-  onPromptDismiss,
   onFocusParticipant,
 }: JourneyShareRowProps) {
   const { armJourney, stopJourney, markArrived } = useJourney();
   const [conflict, setConflict] = useState<UserJourneyRecord | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const stoppingRef = useRef(false);
 
   const ownJourney = journeys.find((journey) => journey.isCurrentUser);
   const state = armedJourney ? 'armed' : (ownJourney?.status ?? 'idle');
@@ -72,8 +77,15 @@ export function JourneyShareRow({
     if (busy) return;
     setBusy(true);
     setError(null);
-    const result = await armJourney(context, { force });
-    setBusy(false);
+    let result: JourneyStartResult;
+    try {
+      result = await armJourney(context, { force });
+    } catch {
+      setError('Die Anreise konnte nicht gestartet werden. Gleich nochmal versuchen.');
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!result.ok && result.conflict) {
       setConflict(result.conflict);
       return;
@@ -91,7 +103,21 @@ export function JourneyShareRow({
       return;
     }
     setConflict(null);
-    onPromptDismiss?.();
+  }
+
+  async function requestStop() {
+    if (stoppingRef.current) return;
+    stoppingRef.current = true;
+    setStopping(true);
+    setError(null);
+    try {
+      await stopJourney(activityId);
+    } catch {
+      setError('Das Teilen läuft weiter, weil dein Standort noch nicht sicher entfernt werden konnte.');
+    } finally {
+      stoppingRef.current = false;
+      setStopping(false);
+    }
   }
 
   const containerStyle = {
@@ -99,14 +125,10 @@ export function JourneyShareRow({
     backgroundColor: colorWithAlpha(JOURNEY_COLOR, 0.08),
   };
 
-  // Idle is deliberately contextual: visible either in the six-hour window
-  // before start, or once as a join-time nudge after joining an already-running
-  // activity — outside both, the sheet stays quiet. Both cases render as the
-  // SAME plain, tappable row (no accept/decline framing), matching "Heimweg
-  // teilen": the action is just there while relevant, gone when not. The
-  // one-off join nudge already clears itself via onPromptDismiss on a
-  // successful start, plus sheet-close/activity-switch upstream — no separate
-  // "Nicht jetzt" is needed to guarantee it only shows once.
+  // Idle is deliberately contextual: the row appears in the six-hour window
+  // before start. The immediate consent prompt after JOINING a near-term
+  // activity is owned by the map screen, not by this reusable row — creating
+  // one never prompts, because you picked the place yourself.
   if (state === 'idle') {
     if (idlePresentation === 'hidden') return null;
 
@@ -166,7 +188,7 @@ export function JourneyShareRow({
         <View className="flex-1">
           <Text className="text-[15px] font-bold text-foreground">Du bist angekommen</Text>
           <Text className="mt-0.5 text-xs text-muted-foreground">
-            Standortteilen wurde automatisch beendet.
+            Dein Live-Standort ist nicht mehr sichtbar.
           </Text>
         </View>
       </View>
@@ -219,14 +241,17 @@ export function JourneyShareRow({
         ) : null}
         <Pressable
           accessibilityRole="button"
+          accessibilityLabel={stopping ? 'Teilen wird gestoppt' : 'Anreise teilen stoppen'}
+          disabled={stopping}
           className="flex-1 rounded-xl bg-secondary px-3 py-2"
-          onPress={() => stopJourney(activityId)}
+          onPress={() => void requestStop()}
         >
           <Text className="text-center text-xs font-bold text-secondary-foreground">
-            Teilen stoppen
+            {stopping ? 'Wird gestoppt …' : 'Teilen stoppen'}
           </Text>
         </Pressable>
       </View>
+      {error ? <Text className="text-xs text-destructive">{error}</Text> : null}
     </View>
   );
 }

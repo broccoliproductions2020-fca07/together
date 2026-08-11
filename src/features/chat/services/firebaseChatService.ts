@@ -19,8 +19,19 @@ import {
 import { httpsCallable } from '@react-native-firebase/functions';
 
 import { getFirebaseDb, getFirebaseFunctions } from '@/shared/services/firebase';
+import {
+  registerSyncOperationHandler,
+  runOrEnqueueSyncOperation,
+  type ChatMessageSyncPayload,
+} from '@/features/sync';
 
-import type { ChatMessage, ChatRoom, GroupOpening, SpontaneousRound } from '../types';
+import type {
+  ChatMessage,
+  ChatRoom,
+  GroupOpening,
+  SpontaneousRound,
+  SpontaneousRoundInvitePreview,
+} from '../types';
 import type {
   ChatActor,
   ChatService,
@@ -120,6 +131,7 @@ async function writeMessage(
   roomId: string,
   text: string,
   extra: Record<string, unknown> = {},
+  clientMessageId?: string,
 ) {
   // One atomic batch instead of two sequential round-trips — also avoids the
   // room summary (lastMessage/messageCount) ever drifting out of sync with
@@ -143,8 +155,23 @@ async function writeMessage(
     text,
     authorName: actor.displayName,
     initials: actor.initials,
+    ...(clientMessageId ? { clientMessageId } : {}),
   });
 }
+
+async function submitTextMessage(payload: ChatMessageSyncPayload) {
+  const sendMessage = httpsCallable(getFirebaseFunctions(), 'sendChatMessage');
+  await sendMessage({
+    roomId: payload.roomId,
+    text: payload.text,
+    clientMessageId: payload.clientMessageId,
+  });
+}
+
+registerSyncOperationHandler('chat.message', async (operation) => {
+  if (operation.kind !== 'chat.message') return;
+  await submitTextMessage(operation.payload);
+});
 
 export const firebaseChatService: ChatService = {
   async getRooms(actor) {
@@ -198,9 +225,7 @@ export const firebaseChatService: ChatService = {
           // contiguous server window. ChatProvider merges it with explicitly
           // loaded older pages by id, so stale cache entries cannot create an
           // invisible hole between history and the current conversation.
-          known = snapshot.docs
-            .map((d) => mapMessage(actor, d.id, roomId, d.data()))
-            .reverse();
+          known = snapshot.docs.map((d) => mapMessage(actor, d.id, roomId, d.data())).reverse();
           cb([...known]);
           saveCachedMessages(roomId, known);
         },
@@ -234,9 +259,7 @@ export const firebaseChatService: ChatService = {
         limit(MESSAGE_LIMIT),
       ),
     );
-    const messages = snapshot.docs
-      .map((d) => mapMessage(actor, d.id, roomId, d.data()))
-      .reverse();
+    const messages = snapshot.docs.map((d) => mapMessage(actor, d.id, roomId, d.data())).reverse();
     return { messages, reachedStart: snapshot.size < MESSAGE_LIMIT };
   },
 
@@ -265,10 +288,23 @@ export const firebaseChatService: ChatService = {
     return result.data.id;
   },
 
-  async sendMessage(actor, roomId, text) {
+  async sendMessage(actor, roomId, text, clientMessageId) {
     const trimmed = text.trim();
-    if (!trimmed) return;
-    await writeMessage(actor, roomId, trimmed);
+    if (!trimmed) return 'sent';
+    const id = clientMessageId ?? `message_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const payload: ChatMessageSyncPayload = { roomId, text: trimmed, clientMessageId: id };
+    return runOrEnqueueSyncOperation(
+      {
+        id: `chat.message:${id}`,
+        accountId: actor.uid,
+        kind: 'chat.message',
+        payload,
+        createdAt: Date.now(),
+        attempts: 0,
+        status: 'queued',
+      },
+      () => submitTextMessage(payload),
+    );
   },
 
   async sendProposal(actor, roomId, data) {
@@ -383,6 +419,57 @@ export const firebaseChatService: ChatService = {
 
   async acceptSpontaneousRound(_actor, roundId) {
     await httpsCallable(getFirebaseFunctions(), 'acceptSpontaneousRound')({ roundId });
+  },
+
+  async getSpontaneousRoundInvitePreview(_actor, roundId) {
+    const result = await httpsCallable<
+      { roundId: string },
+      | { state: 'unavailable' }
+      | {
+          state: 'available';
+          roundId: string;
+          host: { uid: string; displayName: string; initials: string };
+          memberCount: number;
+          memberPreview: { uid: string; displayName: string; initials: string }[];
+          expiresAt: number;
+        }
+    >(
+      getFirebaseFunctions(),
+      'getSpontaneousRoundInvitePreview',
+    )({ roundId });
+    const data = result.data;
+    if (
+      data.state !== 'available' ||
+      typeof data.roundId !== 'string' ||
+      typeof data.expiresAt !== 'number' ||
+      typeof data.memberCount !== 'number' ||
+      !data.host ||
+      typeof data.host.uid !== 'string' ||
+      typeof data.host.displayName !== 'string' ||
+      typeof data.host.initials !== 'string' ||
+      !Array.isArray(data.memberPreview)
+    ) {
+      return null;
+    }
+    const memberPreview = data.memberPreview.flatMap((member) =>
+      member &&
+      typeof member.uid === 'string' &&
+      typeof member.displayName === 'string' &&
+      typeof member.initials === 'string'
+        ? [member]
+        : [],
+    );
+    return {
+      roundId: data.roundId,
+      host: data.host,
+      memberCount: data.memberCount,
+      memberPreview,
+      expiresAt: data.expiresAt,
+    } satisfies SpontaneousRoundInvitePreview;
+  },
+
+  async declineSpontaneousRound(_actor, roundId) {
+    await httpsCallable(getFirebaseFunctions(), 'declineSpontaneousRound')({ roundId });
   },
 
   async leaveSpontaneousRound(_actor, roundId) {

@@ -4,7 +4,9 @@ import type {
   GroupOpening,
   ProposalData,
   SpontaneousRound,
+  SpontaneousRoundInvitePreview,
 } from '../types';
+import type { SyncRunResult } from '@/features/sync';
 
 /** The authenticated person performing a chat action. */
 export interface ChatActor {
@@ -79,7 +81,12 @@ export interface ChatService {
   leaveRoom(actor: ChatActor, roomId: string): Promise<void>;
   /** Create an open group room; returns its id. */
   createGroup(actor: ChatActor, members: GroupMember[], vibe?: string): Promise<string>;
-  sendMessage(actor: ChatActor, roomId: string, text: string): Promise<void>;
+  sendMessage(
+    actor: ChatActor,
+    roomId: string,
+    text: string,
+    clientMessageId?: string,
+  ): Promise<SyncRunResult>;
   sendProposal(
     actor: ChatActor,
     roomId: string,
@@ -130,6 +137,13 @@ export interface ChatService {
   startSpontaneousRound(actor: ChatActor, members: GroupMember[]): Promise<string>;
   /** Accepts one private wink; the server prevents concurrent double-booking. */
   acceptSpontaneousRound(actor: ChatActor, roundId: string): Promise<void>;
+  /** One-off, server-authorized context for the recipient's accept/decline sheet. */
+  getSpontaneousRoundInvitePreview(
+    actor: ChatActor,
+    roundId: string,
+  ): Promise<SpontaneousRoundInvitePreview | null>;
+  /** Quietly removes only the current user's unaccepted wink and its inbox card. */
+  declineSpontaneousRound(actor: ChatActor, roundId: string): Promise<void>;
   /** Leaves a forming round; the host's leave cancels it for everyone. */
   leaveSpontaneousRound(actor: ChatActor, roundId: string): Promise<void>;
   /** Exactly one active round, listened to only while the map is visible. */

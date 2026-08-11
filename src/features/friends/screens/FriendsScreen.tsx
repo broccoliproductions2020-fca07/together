@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Image, Pressable, Share, Text, TextInput, View } from 'react-native';
 
 import { useAuth } from '@/features/auth';
@@ -14,6 +14,7 @@ import {
 import { AppScreen, AppStateView, AppText, ScreenHeader } from '@/shared/components';
 
 const ACCENT = '#6E8BF7';
+const USERNAME_RE = /^[a-z0-9][a-z0-9._-]{1,29}$/;
 
 function Avatar({ friend, size = 'h-11 w-11' }: { friend: FriendProfile; size?: string }) {
   return (
@@ -43,9 +44,11 @@ function matches(query: string, friend: FriendProfile) {
 
 function RequestRow({
   request,
+  busy,
   onRespond,
 }: {
   request: FriendRequest;
+  busy: boolean;
   onRespond: (accept: boolean) => void;
 }) {
   const incoming = request.direction === 'incoming';
@@ -71,6 +74,8 @@ function RequestRow({
         <View className="mt-4 flex-row gap-2">
           <Pressable
             accessibilityRole="button"
+            accessibilityState={{ disabled: busy, busy }}
+            disabled={busy}
             className="min-h-11 flex-1 items-center justify-center rounded-2xl bg-secondary active:opacity-70"
             onPress={() => onRespond(false)}
           >
@@ -78,6 +83,8 @@ function RequestRow({
           </Pressable>
           <Pressable
             accessibilityRole="button"
+            accessibilityState={{ disabled: busy, busy }}
+            disabled={busy}
             className="min-h-11 flex-1 items-center justify-center rounded-2xl active:opacity-85"
             style={{ backgroundColor: ACCENT }}
             onPress={() => onRespond(true)}
@@ -159,6 +166,9 @@ export function FriendsScreen() {
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [codeVisible, setCodeVisible] = useState(false);
+  const [respondingRequestId, setRespondingRequestId] = useState<string | null>(null);
+  const respondingRequestRef = useRef<string | null>(null);
+  const normalizedUsername = username.trim().replace(/^@/, '').toLocaleLowerCase('de-DE');
   const filteredFriends = useMemo(
     () => friends.filter((friend) => matches(query, friend)),
     [friends, query],
@@ -169,8 +179,12 @@ export function FriendsScreen() {
   }, [add]);
 
   async function addFriend() {
-    const value = username.trim().replace(/^@/, '');
+    const value = normalizedUsername;
     if (!value || busy) return;
+    if (!USERNAME_RE.test(value)) {
+      setFeedback('Nutzernamen haben 2–30 Zeichen und verwenden nur Buchstaben, Zahlen, Punkt, _ oder - .');
+      return;
+    }
     setBusy(true);
     setFeedback(null);
     try {
@@ -189,6 +203,23 @@ export function FriendsScreen() {
       );
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function respond(requestId: string, accept: boolean) {
+    if (respondingRequestRef.current) return;
+    respondingRequestRef.current = requestId;
+    setRespondingRequestId(requestId);
+    try {
+      await respondToFriendRequest(requestId, accept);
+    } catch (error) {
+      Alert.alert(
+        'Anfrage konnte nicht bearbeitet werden',
+        error instanceof Error ? error.message : 'Bitte versuche es erneut.',
+      );
+    } finally {
+      respondingRequestRef.current = null;
+      setRespondingRequestId(null);
     }
   }
 
@@ -216,7 +247,7 @@ export function FriendsScreen() {
 
   async function shareHandle() {
     const handle = user?.username?.trim();
-    if (handle) await Share.share({ message: `Füge mich bei Together hinzu: @${handle}` });
+    if (handle) await Share.share({ message: `Füge mich bei Como hinzu: @${handle}` });
   }
 
   return (
@@ -254,15 +285,16 @@ export function FriendsScreen() {
               placeholder="nutzername"
               placeholderTextColor="rgba(255,255,255,0.42)"
               value={username}
-              onChangeText={setUsername}
+              onChangeText={(next) => setUsername(next.replace(/^\s*@?/, '').toLocaleLowerCase('de-DE'))}
               onSubmitEditing={() => void addFriend()}
+              maxLength={30}
             />
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Freundschaftsanfrage senden"
-              disabled={busy || !username.trim()}
+              disabled={busy || !normalizedUsername}
               className="h-10 w-10 items-center justify-center rounded-[14px]"
-              style={{ backgroundColor: username.trim() ? '#fff' : 'rgba(255,255,255,0.22)' }}
+              style={{ backgroundColor: normalizedUsername ? '#fff' : 'rgba(255,255,255,0.22)' }}
               onPress={() => void addFriend()}
             >
               <Ionicons name="arrow-forward" size={19} color="#101923" />
@@ -307,7 +339,8 @@ export function FriendsScreen() {
               <RequestRow
                 key={request.id}
                 request={request}
-                onRespond={(accept) => void respondToFriendRequest(request.id, accept)}
+                busy={respondingRequestId === request.id}
+                onRespond={(accept) => void respond(request.id, accept)}
               />
             ))}
           </View>
@@ -316,7 +349,7 @@ export function FriendsScreen() {
           <View className="gap-2.5">
             <AppText variant="label">Gesendet</AppText>
             {outgoingRequests.map((request) => (
-              <RequestRow key={request.id} request={request} onRespond={() => {}} />
+              <RequestRow key={request.id} request={request} busy={false} onRespond={() => {}} />
             ))}
           </View>
         ) : null}

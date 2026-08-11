@@ -115,13 +115,20 @@ export function MapLocationPickerOverlay({
           <TextInput
             ref={searchInputRef}
             accessibilityLabel="Ort suchen"
-            className="flex-1 text-base font-semibold text-foreground"
+            // NOT `text-base`: NativeWind expands that to fontSize 16 PLUS
+            // lineHeight 24, and a lineHeight on a TextInput makes Android clip
+            // descenders — the tail of g, j, p, q and y is cut off. Setting the
+            // size without a line height lets the platform compute the box the
+            // font actually needs.
+            className="flex-1 font-semibold text-foreground"
+            style={{ fontSize: 16 }}
             placeholder="Ort suchen"
             placeholderTextColor="rgba(105,113,127,0.85)"
             returnKeyType="search"
             value={searchQuery}
             onChangeText={onSearchQueryChange}
             onSubmitEditing={onSearchSubmit}
+            maxLength={120}
           />
         </FloatingSurface>
       </View>
@@ -137,6 +144,12 @@ export function MapLocationPickerOverlay({
               <View className="flex-row items-center gap-3 px-3 py-3">
                 <ActivityIndicator color={accent} />
                 <Text className="text-sm font-semibold text-foreground">Orte werden gesucht …</Text>
+              </View>
+            ) : null}
+            {loading ? (
+              <View className="flex-row items-center gap-3 px-3 py-3">
+                <ActivityIndicator color={accent} />
+                <Text className="text-sm font-semibold text-foreground">Ort wird geladen …</Text>
               </View>
             ) : null}
             {searchError && !searchLoading ? (

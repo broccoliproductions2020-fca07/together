@@ -24,6 +24,7 @@ function parseArguments(argv) {
   let project;
   let only;
   let deploy = false;
+  let force = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -33,6 +34,8 @@ function parseArguments(argv) {
       only = argv[++index];
     } else if (argument === '--deploy') {
       deploy = true;
+    } else if (argument === '--force') {
+      force = true;
     } else {
       throw new Error(`Unbekannte Option: ${argument}`);
     }
@@ -46,9 +49,9 @@ function parseArguments(argv) {
         .filter(Boolean)
     : [];
   if (only && (!targetIds.length || targetIds.some((id) => !FUNCTION_ID_PATTERN.test(id)))) {
-    throw new Error('--only erwartet kommagetrennte Function-Namen, z. B. autocompletePlaces.');
+    throw new Error('--only erwartet kommagetrennte Function-Namen, z. B. places.');
   }
-  return { project, targetIds, deploy };
+  return { project, targetIds, deploy, force };
 }
 
 function localFunctionIds() {
@@ -122,12 +125,14 @@ function assertFullDeployIsSafe(project) {
   );
 }
 
-function runDeploy({ project, targetIds }) {
+function runDeploy({ project, targetIds, force }) {
   const only = targetIds.length ? targetIds.map((id) => `functions:${id}`).join(',') : 'functions';
   const scope = targetIds.length ? 'targeted' : 'checked-full';
+  const deployArgs = [FIREBASE_BIN, 'deploy', '--project', project, '--only', only, '--non-interactive'];
+  if (force) deployArgs.push('--force');
   const result = spawnSync(
     process.execPath,
-    [FIREBASE_BIN, 'deploy', '--project', project, '--only', only, '--non-interactive'],
+    deployArgs,
     {
       cwd: PROJECT_ROOT,
       env: { ...process.env, TOGETHER_FUNCTIONS_DEPLOY_SCOPE: scope },

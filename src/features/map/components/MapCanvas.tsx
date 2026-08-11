@@ -9,6 +9,7 @@ import MapView, {
   type MapPressEvent,
   type PoiClickEvent,
   type Region,
+  type UserLocationChangeEvent,
 } from 'react-native-maps';
 
 import {
@@ -33,11 +34,16 @@ import { DEFAULT_MAP_REGION } from '../utils/defaultRegion';
 import { AvatarMarker } from './AvatarMarker';
 import { ClusterMarker } from './ClusterMarker';
 import { JourneyAvatarMarker } from './JourneyAvatarMarker';
-import { ACTIVITY_MARKER_ANCHOR, ACTIVITY_MARKER_AURA_OFFSET_Y } from './activityMarkerLayout';
+import {
+  ACTIVITY_MARKER_ANCHOR,
+  ACTIVITY_MARKER_AURA_OFFSET_Y,
+  activityMarkerShellWidth,
+} from './activityMarkerLayout';
 import { MapLiveAuraOverlay, type LiveAuraTarget } from './MapLiveAuraOverlay';
 import { MapMarkerMorphOverlay, type MorphCameraValues } from './MapMarkerMorphOverlay';
 import { MarkerDismissOverlay, type MarkerDismissRequest } from './MarkerDismissOverlay';
 import { MarkerLaunchOverlay, type MarkerLaunchRequest } from './MarkerLaunchOverlay';
+import { OpenPresenceMarker } from './OpenPresenceMarker';
 import { useMarkerImages } from './markerCapture';
 import { PreviewMapCanvas, type PreviewMapCanvasProps } from './PreviewMapCanvas';
 
@@ -83,6 +89,12 @@ function focusCenterOffset(coveredHeight: number, viewportHeight: number) {
   return covered / (2 * viewportHeight);
 }
 
+function zoomForLongitudeDelta(longitudeDelta: number, viewportWidth: number) {
+  if (longitudeDelta <= 0 || viewportWidth <= 0) return undefined;
+  const zoom = Math.log2((360 * viewportWidth) / (longitudeDelta * 256));
+  return Math.max(3, Math.min(20, zoom));
+}
+
 function placeFromLongPress(event: LongPressEvent) {
   const { latitude, longitude } = event.nativeEvent.coordinate;
 
@@ -115,23 +127,89 @@ interface MarkerDescriptor {
   node: ReactNode;
   onPress?: () => void;
   morphable?: boolean;
+  /**
+   * Native marker stacking. A concrete activity must never be hidden behind a
+   * presence dot that happens to sit on the same corner — an activity is a plan,
+   * open is only a status. Selection wins over both so the thing you just tapped
+   * is the thing you can see.
+   */
+  zIndex?: number;
 }
+
+/** Marker layers, low to high. */
+const Z_OPEN_PRESENCE = 1;
+const Z_ACTIVITY = 2;
+const Z_SELECTED = 3;
 
 // Frame count for the captured avatar morph (2×2 quad → unfolded row when an
 // activity has several people). These captures ARE the animation: each step is
 // a distinct PNG rendered from the node at that `zoomProgress`. Lowering it
 // makes the reordering coarse — do not "optimise" this to cut native image
 // swaps while zooming, the swaps are the frames.
-const MORPH_CAPTURE_STEPS = 8;
 const ACTIVITY_MARKER_VISUAL_VERSION = 'avatar-squircle-160-v3';
 const ZOOM_FRAME_EPSILON = 0.0005;
 const MORPH_VIEWPORT_RADIUS = 2.5;
 const MORPH_SETTLE_POINTS = [0, 0.5, 1] as const;
 const MORPH_SETTLE_TRIGGER = 0.055;
 const MORPH_SETTLE_EPSILON = 0.008;
+/**
+ * How many markers may run as live overlays at once. Each one is a real view
+ * tree animating on the UI thread; the whole point of the raster markers is to
+ * keep that count small. The selected marker always makes the cut, then the
+ * ones nearest the centre of the map — the only ones the eye tracks during a
+ * pinch anyway.
+ */
+const MORPH_MAX_OVERLAYS = 4;
+/**
+ * Hard ceiling on how long the raster markers may stay hidden behind the
+ * overlay after a gesture ends. A stalled capture must degrade to "no
+ * animation", never to "no marker".
+ */
+const MORPH_HANDOFF_TIMEOUT_MS = 900;
 
-function morphCaptureStep(progress: number) {
-  return Math.round(Math.max(0, Math.min(1, progress)) * MORPH_CAPTURE_STEPS);
+/** Camera pitch for the perspective button. Enough to read building height
+ * without turning the map into a diorama. Independent of heading — the button
+ * only tilts; turning the map is the user's two-finger gesture. */
+/**
+ * The ONE zoom the camera uses whenever it jumps to a single place the user
+ * was not already looking at: `focusCoordinate` without `focusKeepZoom`, and
+ * the single-coordinate branch of a fit request. Do not add a second value —
+ * a Safety focus and "auf Karte zeigen" on the same friend arriving at
+ * different zooms is what makes a map feel arbitrary.
+ *
+ * Tighter than the previous 0.012/0.01 for one concrete reason: Google renders
+ * POI labels only above a zoom threshold, and the old value sat just under it —
+ * so a place sent to the camera arrived centred but unnamed.
+ */
+const PLACE_FOCUS_LATITUDE_DELTA = 0.006;
+const PLACE_FOCUS_LONGITUDE_DELTA = 0.005;
+
+const PERSPECTIVE_PITCH = 38;
+const PERSPECTIVE_DURATION = 420;
+
+/**
+ * The marker handoff between the raster PNG and the live morph overlay.
+ *
+ * Both representations must OVERLAP at every switch — the previous version
+ * flipped `markerMorphVisible` and the native `opacity` in one commit, so the
+ * JS overlay disappeared on the spot while the native marker was still loading
+ * its new bitmap. That one-frame gap is the blink.
+ *
+ *  idle    → nothing running, raster markers own the map
+ *  arming  → overlay mounted, raster STILL visible (waiting for real layout)
+ *  live    → overlay laid out and painting, raster hidden
+ *  handoff → new raster ready and shown again UNDER the overlay, which is
+ *            removed a couple of frames later
+ */
+type MorphPhase = 'idle' | 'arming' | 'live' | 'handoff';
+
+/** Squared degree distance — only ever used to rank, never to measure. */
+function centerRank(descriptor: MarkerDescriptor, region: Region) {
+  const dLat =
+    (descriptor.coordinate.latitude - region.latitude) / Math.max(region.latitudeDelta, 1e-6);
+  const dLng =
+    (descriptor.coordinate.longitude - region.longitude) / Math.max(region.longitudeDelta, 1e-6);
+  return dLat * dLat + dLng * dLng;
 }
 
 function isNearMorphViewport(descriptor: MarkerDescriptor, region: Region) {
@@ -189,11 +267,14 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
   const [mapReady, setMapReady] = useState(false);
   const [mapMoving, setMapMoving] = useState(false);
   const [mapZooming, setMapZooming] = useState(false);
-  const [markerMorphVisible, setMarkerMorphVisible] = useState(false);
+  const [morphPhase, setMorphPhase] = useState<MorphPhase>('idle');
   const [activeMorphIds, setActiveMorphIds] = useState<string[]>([]);
-  const [settledMorphStep, setSettledMorphStep] = useState(() =>
-    morphCaptureStep(zoomProgressForDelta(DEFAULT_MAP_REGION.latitudeDelta)),
-  );
+  // True only while the perspective camera is actually travelling. The aura
+  // projects through `pointForCoordinate`, which reports the CURRENT camera —
+  // sampling it mid-flight puts the glow somewhere the marker is not.
+  const [cameraBusy, setCameraBusy] = useState(false);
+  const cameraSettleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pitchRestoreTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const [auraProjectionKey, setAuraProjectionKey] = useState(0);
   const reducedMotion = useReducedMotion();
@@ -245,7 +326,6 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
       gestureFallbackTargetRef.current = null;
       settledMorphProgressRef.current = progress;
       zoomProgress.value = progress;
-      setSettledMorphStep(morphCaptureStep(progress));
       setMapZooming(false);
     }
     props.onRegionChange?.({
@@ -277,7 +357,7 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
   // fix usually resolves from a cached position before the native map has
   // finished initialising, so animating then hits a null/unready mapRef and is
   // silently dropped — and because focusCoordinate never changes again, nothing
-  // ever retries and the camera stays on the Berlin initialRegion. Depending on
+  // ever retries and the camera stays on the neutral initial region. Depending on
   // mapReady replays the pending focus the moment the map can accept it.
   // Whatever currently hides the bottom of the map — an open detail sheet, the
   // Safety split deck. Read at focus time, so the camera compensates for what is
@@ -288,52 +368,154 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
   const viewportRef = useRef(viewport.height);
   viewportRef.current = viewport.height;
 
+  // The permanent tilted camera is kept in a ref because callbacks run after
+  // programmatic viewport changes.
+  const pitchedRef = useRef(true);
+
+  /**
+   * The heading the USER turned the map to, in degrees. Only gesture-driven
+   * region changes write it — a programmatic `animateToRegion` levels the camera
+   * to north as a side effect, and reading the heading back from that would
+   * quietly erase the rotation we are trying to preserve.
+   */
+  const userHeadingRef = useRef(0);
+
+  const markCameraBusy = (duration: number) => {
+    setCameraBusy(true);
+    if (cameraSettleTimer.current) clearTimeout(cameraSettleTimer.current);
+    cameraSettleTimer.current = setTimeout(() => {
+      cameraSettleTimer.current = null;
+      setCameraBusy(false);
+      setAuraProjectionKey((current) => current + 1);
+    }, duration + 90);
+  };
+
+  /**
+   * `animateToRegion` and `fitToCoordinates` both describe a flat, north-up
+   * viewport, so the renderer levels the camera AND turns it back to north.
+   * Re-applying pitch and heading afterwards keeps the chosen perspective and
+   * the user's rotation across recenter, focus and fit — without giving up
+   * those well-tested framing helpers.
+   *
+   * Runs whenever there is something to restore: a pitch, a heading, or both.
+   * It used to bail unless pitched, which is why a rotated 2D map snapped back
+   * to north the moment anything focused a marker.
+   */
+  const restoreCameraAfter = (delay: number) => {
+    if (pitchRestoreTimer.current) clearTimeout(pitchRestoreTimer.current);
+    pitchRestoreTimer.current = setTimeout(() => {
+      pitchRestoreTimer.current = null;
+      mapRef.current?.animateCamera(
+        { pitch: PERSPECTIVE_PITCH, heading: userHeadingRef.current },
+        { duration: 220 },
+      );
+      markCameraBusy(220);
+    }, delay);
+  };
+
+  const focusCamera = (
+    coordinate: MapCoordinate,
+    latitudeDelta: number,
+    longitudeDelta: number,
+    duration: number,
+  ) => {
+    const zoom = zoomForLongitudeDelta(longitudeDelta, viewport.width);
+    mapRef.current?.animateCamera(
+      {
+        center: {
+          latitude:
+            coordinate.latitude -
+            latitudeDelta * focusCenterOffset(coveredRef.current, viewportRef.current),
+          longitude: coordinate.longitude,
+        },
+        heading: userHeadingRef.current,
+        pitch: PERSPECTIVE_PITCH,
+        ...(zoom == null ? {} : { zoom }),
+      },
+      { duration },
+    );
+    markCameraBusy(duration);
+  };
+
+  useEffect(
+    () => () => {
+      if (cameraSettleTimer.current) clearTimeout(cameraSettleTimer.current);
+      if (pitchRestoreTimer.current) clearTimeout(pitchRestoreTimer.current);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!mapReady) return;
+    // Establish the permanent tilt without resetting a heading the user may
+    // already have chosen while the map was becoming ready.
+    mapRef.current?.animateCamera(
+      { pitch: PERSPECTIVE_PITCH, heading: userHeadingRef.current },
+      { duration: PERSPECTIVE_DURATION },
+    );
+    markCameraBusy(PERSPECTIVE_DURATION);
+    // markCameraBusy is deliberately not a dependency: this is a one-shot camera
+    // move, and adding it would re-tilt on every unrelated render.
+  }, [mapReady]);
+
   useEffect(() => {
     if (!mapReady || !props.focusCoordinate) return;
-
-    const latitudeDelta = 0.012;
-    mapRef.current?.animateToRegion(
-      {
-        latitude:
-          props.focusCoordinate.latitude -
-          latitudeDelta * focusCenterOffset(coveredRef.current, viewportRef.current),
-        longitude: props.focusCoordinate.longitude,
-        latitudeDelta,
-        longitudeDelta: 0.01,
-      },
-      280,
+    // Two different jobs behind one prop. Landing somewhere the user was NOT
+    // looking (own location on first fix, "auf Karte zeigen") gets a prescribed
+    // zoom, because whatever they were at says nothing about the new place.
+    // Recentring on something they placed themselves keeps their zoom exactly —
+    // pulling the camera to a fixed level right after the tap throws away the
+    // view they were deliberately working in.
+    const region = regionRef.current;
+    const focusDuration = props.focusDuration ?? 280;
+    focusCamera(
+      props.focusCoordinate,
+      props.focusKeepZoom ? region.latitudeDelta : PLACE_FOCUS_LATITUDE_DELTA,
+      props.focusKeepZoom ? region.longitudeDelta : PLACE_FOCUS_LONGITUDE_DELTA,
+      focusDuration,
     );
-  }, [mapReady, props.focusCoordinate]);
+    const focused = props.focusCoordinate;
+    const completionTimer = setTimeout(
+      () => props.onFocusComplete?.(focused),
+      focusDuration + 90,
+    );
+    return () => clearTimeout(completionTimer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapReady, props.focusCoordinate, viewport.width]);
 
   useEffect(() => {
     if (!mapReady || !props.selectionFocus) return;
 
     const region = regionRef.current;
-    mapRef.current?.animateToRegion(
-      {
-        latitude:
-          props.selectionFocus.coordinate.latitude -
-          region.latitudeDelta * focusCenterOffset(coveredRef.current, viewportRef.current),
-        longitude: props.selectionFocus.coordinate.longitude,
-        latitudeDelta: region.latitudeDelta,
-        longitudeDelta: region.longitudeDelta,
-      },
+    // A requested delta is a "get at least this close" floor, never a target:
+    // it exists so a tapped POI is legible, and someone already closer than
+    // that is by definition looking at it. Taking it literally pulled the
+    // camera back OUT from under a user who had zoomed in on purpose — the
+    // same complaint the publish path had. No request → keep the zoom exactly.
+    focusCamera(
+      props.selectionFocus.coordinate,
+      Math.min(props.selectionFocus.latitudeDelta ?? Infinity, region.latitudeDelta),
+      Math.min(props.selectionFocus.longitudeDelta ?? Infinity, region.longitudeDelta),
       300,
     );
-  }, [mapReady, props.selectionFocus]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapReady, props.bottomSheetHeight, props.selectionFocus, viewport.width]);
 
   useEffect(() => {
     const coordinates = props.fitRequest?.coordinates ?? [];
     if (!mapReady || !coordinates.length) return;
     if (coordinates.length === 1) {
-      mapRef.current?.animateToRegion(
-        {
-          ...coordinates[0],
-          latitudeDelta: 0.012,
-          longitudeDelta: 0.01,
-        },
-        320,
-      );
+      // One coordinate is not a "fit" at all, it is a focus — so it goes
+      // through the same helper and lands on the SAME prescribed zoom as every
+      // other jump. It used to carry its own 0.012/0.01, which meant a Safety
+      // focus on one friend arrived at a different zoom than "auf Karte
+      // zeigen" on the same person. Two numbers for one job is how a map
+      // starts feeling arbitrary.
+      //
+      // focusCamera also sets heading and pitch in the same animation, so this
+      // needs no restoreCameraAfter, and it shifts the camera clear of the
+      // Safety deck the way every other focus does.
+      focusCamera(coordinates[0], PLACE_FOCUS_LATITUDE_DELTA, PLACE_FOCUS_LONGITUDE_DELTA, 320);
       return;
     }
     mapRef.current?.fitToCoordinates(coordinates, {
@@ -345,6 +527,8 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
         left: 72,
       },
     });
+    restoreCameraAfter(360);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapReady, props.bottomOverlayHeight, props.fitRequest]);
 
   // Build one descriptor per marker. Each carries the off-screen `node` to
@@ -385,7 +569,7 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
         const bucket = countdownBucket(cluster.mode, cluster.startsAt, cluster.endsAt);
         descriptors.push({
           id: cluster.id,
-          captureKey: `${ACTIVITY_MARKER_VISUAL_VERSION}:cluster:${display.count}:${cluster.mode}:${cluster.maxParticipants ?? 0}:${cluster.category ?? ''}:${bucket ?? ''}:${avatarKey}:${props.journeyUnderwayCounts?.[cluster.id] ?? 0}:${selected}:${cluster.label ?? ''}:morph:${settledMorphStep}`,
+          captureKey: `${ACTIVITY_MARKER_VISUAL_VERSION}:cluster:${display.count}:${cluster.mode}:${cluster.maxParticipants ?? 0}:${cluster.category ?? ''}:${bucket ?? ''}:${avatarKey}:${props.journeyUnderwayCounts?.[cluster.id] ?? 0}:${selected}:${cluster.label ?? ''}`,
           coordinate:
             focusActivityId === cluster.id && props.journeyTargetCoordinate
               ? props.journeyTargetCoordinate
@@ -422,12 +606,24 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
                 : cluster.coordinate,
             color: markerModeStyles[cluster.mode].color,
             offsetY: ACTIVITY_MARKER_AURA_OFFSET_Y,
+            // The pulse is the marker's own squircle, so it needs the marker's
+            // settled width. The aura only renders while the map is still, so
+            // the settled morph progress is the right (and only) sample.
+            width: activityMarkerShellWidth(
+              Math.max(1, Math.min(4, display.count)),
+              display.count <= 1,
+              settledMorphProgressRef.current,
+            ),
             selected,
           });
         }
       });
 
-    mapMarkers
+    // Presence rides in the same descriptor pass as activities so the two share
+    // one z-order and one capture cache — but it is appended, never merged into
+    // the activity feed, and it drops out entirely under a Heimweg/journey focus
+    // just like the activities do.
+    [...mapMarkers, ...(focusActivityId ? [] : (props.openPresenceMarkers ?? []))]
       .filter(
         (marker) =>
           (!marker.maxParticipants ||
@@ -436,8 +632,41 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
           (!focusActivityId || marker.id === focusActivityId),
       )
       .forEach((marker) => {
+        const selectedMarker = props.selectedActivityId === marker.id;
+
+        /**
+         * Open presence — a friend who is available AND chose to share their
+         * location. Not an activity: it gets a plain round avatar, sits on the
+         * lowest layer so it can never cover a real plan, and is deliberately
+         * NOT `morphable` — the zoom morph is the activity marker's language,
+         * and a status has nothing to morph between.
+         *
+         * The captureKey holds appearance only. Coordinate, distance, expiry and
+         * zoom stay out of it on purpose: a friend walking around, or their
+         * window ticking down, must never re-capture the PNG.
+         */
+        if (marker.mode === 'open' && marker.friendId) {
+          descriptors.push({
+            id: marker.id,
+            captureKey: `open-presence-v1:${marker.avatarUrl ?? marker.initials}:${selectedMarker}`,
+            coordinate: marker.coordinate,
+            anchor: { x: 0.5, y: 0.5 },
+            morphable: false,
+            zIndex: selectedMarker ? Z_SELECTED : Z_OPEN_PRESENCE,
+            onPress: () => props.onMarkerPress?.(marker),
+            node: (
+              <OpenPresenceMarker
+                avatarUrl={marker.avatarUrl}
+                initials={marker.initials}
+                selected={selectedMarker}
+              />
+            ),
+          });
+          return;
+        }
+
         const joined = isJoined(marker.id);
-        const selected = props.selectedActivityId === marker.id;
+        const selected = selectedMarker;
         const unreadCount = joined ? getUnreadCount(marker.id) : 0;
         const bucket = countdownBucket(marker.mode, marker.startsAt, marker.endsAt);
         const display = participantDisplay(
@@ -458,7 +687,7 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
           .join(',');
         descriptors.push({
           id: marker.id,
-          captureKey: `${ACTIVITY_MARKER_VISUAL_VERSION}:avatar:${marker.mode}:${marker.avatarUrl ?? marker.initials}:${marker.displayName}:${avatarKey}:${joined}:${unreadCount}:${display.count}:${marker.maxParticipants ?? 0}:${marker.category ?? ''}:${bucket ?? ''}:${props.journeyUnderwayCounts?.[marker.id] ?? 0}:${selected}:${marker.title ?? ''}:${marker.friendId ?? ''}:morph:${settledMorphStep}`,
+          captureKey: `${ACTIVITY_MARKER_VISUAL_VERSION}:avatar:${marker.mode}:${marker.avatarUrl ?? marker.initials}:${marker.displayName}:${avatarKey}:${joined}:${unreadCount}:${display.count}:${marker.maxParticipants ?? 0}:${marker.category ?? ''}:${bucket ?? ''}:${props.journeyUnderwayCounts?.[marker.id] ?? 0}:${selected}:${marker.title ?? ''}:${marker.friendId ?? ''}`,
           coordinate:
             focusActivityId === marker.id && props.journeyTargetCoordinate
               ? props.journeyTargetCoordinate
@@ -499,6 +728,11 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
                 : marker.coordinate,
             color: markerModeStyles[marker.mode].color,
             offsetY: ACTIVITY_MARKER_AURA_OFFSET_Y,
+            width: activityMarkerShellWidth(
+              Math.max(1, Math.min(4, display.count)),
+              display.count <= 1,
+              settledMorphProgressRef.current,
+            ),
             selected,
           });
         }
@@ -562,18 +796,81 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
 
   const activeMorphIdSet = new Set(activeMorphIds);
   const morphDescriptors = descriptors.filter((descriptor) => activeMorphIdSet.has(descriptor.id));
-  const morphImagesReady = morphDescriptors.every((descriptor) =>
-    Boolean(uris[descriptor.captureKey]),
-  );
+  // `activeMorphIds` can outlive its descriptors (a marker leaves the feed
+  // mid-gesture). An empty list makes `.every()` vacuously true, which used to
+  // end the handoff early — require the overlay to actually still have targets.
+  const morphImagesReady =
+    morphDescriptors.length === activeMorphIds.length &&
+    morphDescriptors.every((descriptor) => Boolean(uris[descriptor.captureKey]));
 
+  // live/arming → handoff: the new rasters exist, so show them again UNDERNEATH
+  // the still-visible overlay. Nothing changes on screen at this point; it only
+  // guarantees the native markers are mounted with their final image before
+  // anything is taken away.
+  //
+  // `arming` is accepted too: a flick short enough to end before the overlay
+  // reported layout must not strand the phase machine.
   useEffect(() => {
-    if (!markerMorphVisible || mapZooming || !morphImagesReady) return;
-    const frame = requestAnimationFrame(() => {
-      setMarkerMorphVisible(false);
-      setActiveMorphIds([]);
+    if (morphPhase !== 'live' && morphPhase !== 'arming') return;
+    if (mapZooming || !morphImagesReady) return;
+    setMorphPhase('handoff');
+  }, [mapZooming, morphPhase, morphImagesReady]);
+
+  // Safety net. `morphImagesReady` depends on an async capture that can fail,
+  // stall, or lose its descriptor when a marker leaves the feed mid-gesture.
+  // Without this, the raster markers would stay hidden indefinitely — a far
+  // worse failure than the blink this whole machine exists to prevent.
+  useEffect(() => {
+    if (morphPhase !== 'live' && morphPhase !== 'arming') return;
+    if (mapZooming) return;
+    const timer = setTimeout(() => setMorphPhase('handoff'), MORPH_HANDOFF_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [mapZooming, morphPhase]);
+
+  // handoff → idle: give the native side two frames to actually paint the new
+  // bitmap, THEN drop the overlay. One frame was not enough on Android, where
+  // `<Marker image>` loads its icon asynchronously.
+  useEffect(() => {
+    if (morphPhase !== 'handoff') return;
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => {
+        setMorphPhase('idle');
+        setActiveMorphIds([]);
+      });
     });
-    return () => cancelAnimationFrame(frame);
-  }, [mapZooming, markerMorphVisible, morphImagesReady]);
+    return () => {
+      cancelAnimationFrame(first);
+      if (second) cancelAnimationFrame(second);
+    };
+  }, [morphPhase]);
+
+  // arming → live is driven by the overlay's own onLayout, so the raster marker
+  // is never hidden before the overlay has really been laid out.
+  const handleMorphOverlayReady = () => {
+    setMorphPhase((phase) => (phase === 'arming' ? 'live' : phase));
+  };
+
+  // Belt and braces for the same transition: if a layout event is ever delayed,
+  // two frames of BOTH representations is the acceptable failure, not a whole
+  // gesture of them. Whichever signal lands first wins.
+  useEffect(() => {
+    if (morphPhase !== 'arming') return;
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => {
+        setMorphPhase((phase) => (phase === 'arming' ? 'live' : phase));
+      });
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      if (second) cancelAnimationFrame(second);
+    };
+  }, [morphPhase]);
+
+  // The ONLY state in which a native marker may be invisible.
+  const rasterHiddenForMorph = morphPhase === 'live';
+  const morphOverlayVisible = morphPhase !== 'idle';
 
   // Cancel "Pop": the pin bursts the moment the user confirms, never when the
   // server answers. `dismissMarkerId` is armed one frame BEFORE the activity is
@@ -677,12 +974,42 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
         poiClickEnabled={!props.hideActivities}
         pitchEnabled={false}
         scrollEnabled
-        rotateEnabled={false}
+        // Two-finger rotate, in both the flat and the pitched view. The camera
+        // helpers below re-apply the resulting heading after every programmatic
+        // move, so a turned map stays turned.
+        rotateEnabled
+        // The ONLY way back to north once the map is off-axis. Google draws it
+        // only while heading ≠ 0 and hides it again on reset, so it costs
+        // nothing in the normal north-up state — but without it a rotated map
+        // is a place users can get stuck.
+        showsCompass={false}
+        // The native My Location layer draws its blue dot and a heading cone
+        // from the device's sensor. It is local-only and runs only while the
+        // map is visible or during the hidden boot prewarm.
+        showsUserLocation={props.showsOwnLocation === true}
+        onUserLocationChange={(event: UserLocationChangeEvent) => {
+          const coordinate = event.nativeEvent.coordinate;
+          if (
+            !coordinate ||
+            !Number.isFinite(coordinate.latitude) ||
+            !Number.isFinite(coordinate.longitude)
+          ) {
+            return;
+          }
+          props.onOwnLocationChange?.({
+            latitude: coordinate.latitude,
+            longitude: coordinate.longitude,
+          });
+        }}
+        // Android only (ignored on iOS): a one-second normal update cadence is
+        // visually immediate while avoiding a needless high-priority stream.
+        userLocationPriority={Platform.OS === 'android' ? 'balanced' : undefined}
+        userLocationUpdateInterval={Platform.OS === 'android' ? 1000 : undefined}
+        userLocationFastestInterval={Platform.OS === 'android' ? 500 : undefined}
         // Google's building footprints. Was `false`, which is why the map read
         // as empty ground with roads on it — no palette change can bring back
         // geometry the MapView is not drawing.
         showsBuildings
-        showsCompass={false}
         showsIndoors={false}
         showsMyLocationButton={false}
         showsPointsOfInterests={!props.hideActivities}
@@ -692,7 +1019,9 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
         onMapReady={() => {
           setMapReady(true);
           setAuraProjectionKey((current) => current + 1);
+          props.onMapReady?.();
         }}
+        onPanDrag={props.onUserMapGesture}
         onLongPress={(event: LongPressEvent) => {
           if (props.pickingLocation || props.hideActivities) return;
           props.onPlacePress?.(placeFromLongPress(event));
@@ -739,16 +1068,34 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
             gestureLastProgressRef.current = settledMorphProgressRef.current;
             gestureLastTimestampRef.current = Date.now();
             gestureProgressVelocityRef.current = 0;
-            setActiveMorphIds(
-              descriptors
+            setMapZooming(true);
+            // No live overlay with reduced motion, and none while the camera is
+            // pitched: the overlay projects with a flat lat/lng model that does
+            // not hold on a tilted map, and a marker in the wrong place is worse
+            // than a marker that simply does not animate. The raster markers
+            // keep running in both cases, so nothing blinks either way.
+            if (!reducedMotion && !pitchedRef.current) {
+              const centreRegion = regionRef.current;
+              const candidates = descriptors
                 .filter(
                   (descriptor) =>
-                    descriptor.morphable && isNearMorphViewport(descriptor, regionRef.current),
+                    descriptor.morphable && isNearMorphViewport(descriptor, centreRegion),
                 )
-                .map((descriptor) => descriptor.id),
-            );
-            setMapZooming(true);
-            setMarkerMorphVisible(true);
+                .sort((left, right) => {
+                  const leftSelected = props.selectedActivityId === left.id ? 0 : 1;
+                  const rightSelected = props.selectedActivityId === right.id ? 0 : 1;
+                  if (leftSelected !== rightSelected) return leftSelected - rightSelected;
+                  return centerRank(left, centreRegion) - centerRank(right, centreRegion);
+                })
+                .slice(0, MORPH_MAX_OVERLAYS)
+                .map((descriptor) => descriptor.id);
+              if (candidates.length) {
+                setActiveMorphIds(candidates);
+                // Deliberately NOT 'live': the raster markers stay visible until
+                // the overlay reports its own layout.
+                setMorphPhase('arming');
+              }
+            }
           }
 
           if (zoomingRef.current && !settlingZoomRef.current) {
@@ -775,7 +1122,7 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
           }
           // Keep the short-lived overlay spatially attached even when the user
           // starts panning immediately while the settled PNG is still capturing.
-          if (zoomFrame || zoomingRef.current || markerMorphVisible) {
+          if (zoomFrame || zoomingRef.current || morphPhase !== 'idle') {
             updateMorphCamera(region);
           }
           if (!movingRef.current) {
@@ -783,7 +1130,18 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
             setMapMoving(true);
           }
         }}
-        onRegionChangeComplete={(region: Region) => {
+        onRegionChangeComplete={(region: Region, details?: { isGesture?: boolean }) => {
+          // Remember the heading only when the USER turned the map. A
+          // programmatic animateToRegion levels the camera to north as a side
+          // effect, so reading it back there would erase the very rotation the
+          // restore is meant to re-apply.
+          if (details?.isGesture !== false) {
+            void mapRef.current?.getCamera().then((camera) => {
+              if (camera) userHeadingRef.current = camera.heading ?? 0;
+            });
+          }
+          if (details?.isGesture === true) props.onUserMapGesture?.();
+
           const rawProgress = zoomProgressForDelta(region.latitudeDelta);
           updateMorphCamera(region);
 
@@ -865,9 +1223,13 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
               coordinate={descriptor.coordinate}
               image={{ uri }}
               onPress={descriptor.onPress}
+              tracksViewChanges={false}
+              zIndex={descriptor.zIndex ?? Z_ACTIVITY}
               opacity={
                 props.launchMarkerId === descriptor.id ||
-                (descriptor.morphable && markerMorphVisible && activeMorphIdSet.has(descriptor.id))
+                (descriptor.morphable &&
+                  rasterHiddenForMorph &&
+                  activeMorphIdSet.has(descriptor.id))
                   ? 0
                   : 1
               }
@@ -878,14 +1240,18 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
       <MapMarkerMorphOverlay
         camera={morphCamera}
         height={viewport.height}
+        onReady={handleMorphOverlayReady}
         targets={morphDescriptors}
-        visible={markerMorphVisible}
+        visible={morphOverlayVisible}
         width={viewport.width}
       />
       <MapLiveAuraOverlay
         mapReady={mapReady}
         mapRef={mapRef}
-        moving={mapMoving}
+        // A travelling perspective camera counts as movement: the aura is
+        // projected through `pointForCoordinate`, so sampling it mid-flight
+        // would place the glow away from its marker. Hidden beats misplaced.
+        moving={mapMoving || cameraBusy}
         projectionKey={auraProjectionKey}
         targets={visibleAuraTargets}
       />

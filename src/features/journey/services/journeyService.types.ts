@@ -23,6 +23,7 @@ export interface JourneyService {
     actor: JourneyActor,
     activity: JourneyActivityContext,
     cb: (locations: JourneyLocationDoc[]) => void,
+    onError?: (error: Error) => void,
   ): Unsubscribe;
   startJourney(
     actor: JourneyActor,

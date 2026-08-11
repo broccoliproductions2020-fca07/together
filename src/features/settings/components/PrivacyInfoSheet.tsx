@@ -74,7 +74,7 @@ export function PrivacyInfoSheet({ visible, onClose }: PrivacyInfoSheetProps) {
           <View className="mb-4 h-1.5 w-12 self-center rounded-full bg-white/20" />
           <View className="flex-row items-center justify-between">
             <View className="w-11" />
-            <Text className="text-2xl font-extrabold text-white">So schützt dich Together</Text>
+            <Text className="text-2xl font-extrabold text-white">So schützt dich Como</Text>
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Info schließen"

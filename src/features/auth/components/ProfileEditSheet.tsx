@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import type * as ImagePickerTypes from 'expo-image-picker';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, Image, Modal, Platform, Pressable, Text, TextInput, View } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import Animated, { FadeIn, FadeOut, SlideInDown, SlideOutDown } from 'react-native-reanimated';
@@ -70,12 +70,27 @@ export function ProfileEditSheet({
   const [imageBusy, setImageBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // State only disables after React has rendered. These refs cover the tiny
+  // gap during which a second tap could open another native picker or submit a
+  // second profile write.
+  const avatarPickInFlightRef = useRef(false);
+  const saveInFlightRef = useRef(false);
+  const sessionRevisionRef = useRef(0);
+  const avatarOperationRevisionRef = useRef(0);
+  const saveOperationRevisionRef = useRef(0);
 
   useEffect(() => {
     if (!visible) {
       setAvatarSourceVisible(false);
       return;
     }
+    sessionRevisionRef.current += 1;
+    avatarOperationRevisionRef.current += 1;
+    saveOperationRevisionRef.current += 1;
+    avatarPickInFlightRef.current = false;
+    saveInFlightRef.current = false;
+    setImageBusy(false);
+    setBusy(false);
     setDisplayName(initialDisplayName);
     setAvatarUri(undefined);
     setError(null);
@@ -90,14 +105,20 @@ export function ProfileEditSheet({
     return () => clearTimeout(timer);
   }, [onAvatarPickerRequestConsumed, openAvatarPickerOnShow, visible]);
 
-  const interactionLocked = busy || imageBusy;
-
   function dismiss() {
-    if (!interactionLocked) onClose();
+    sessionRevisionRef.current += 1;
+    setAvatarSourceVisible(false);
+    onClose();
   }
 
+  const interactionLocked = busy || imageBusy;
+
   async function chooseAvatar(source: 'camera' | 'library') {
-    if (interactionLocked) return;
+    if (interactionLocked || avatarPickInFlightRef.current) return;
+    const sessionRevision = sessionRevisionRef.current;
+    const operationRevision = ++avatarOperationRevisionRef.current;
+    avatarPickInFlightRef.current = true;
+    setImageBusy(true);
     setAvatarSourceVisible(false);
     setError(null);
     try {
@@ -110,9 +131,11 @@ export function ProfileEditSheet({
 
       if (!permission.granted) {
         const label = source === 'camera' ? 'Kamera' : 'Fotos';
-        const message = `Erlaube Together den Zugriff auf ${label} in den Systemeinstellungen, um ein Profilbild zu wählen.`;
-        setError(message);
-        if (!permission.canAskAgain) Alert.alert(`${label}-Zugriff fehlt`, message);
+        const message = `Erlaube Como den Zugriff auf ${label} in den Systemeinstellungen, um ein Profilbild zu wählen.`;
+        if (sessionRevision === sessionRevisionRef.current) {
+          setError(message);
+          if (!permission.canAskAgain) Alert.alert(`${label}-Zugriff fehlt`, message);
+        }
         return;
       }
 
@@ -135,36 +158,44 @@ export function ProfileEditSheet({
 
       if (result.canceled || !result.assets[0]) return;
 
-      setImageBusy(true);
-      try {
-        setAvatarUri(await prepareAvatar(result.assets[0]));
-        haptics.success();
-      } finally {
-        setImageBusy(false);
-      }
+      const preparedAvatar = await prepareAvatar(result.assets[0]);
+      if (sessionRevision !== sessionRevisionRef.current) return;
+      setAvatarUri(preparedAvatar);
+      haptics.success();
     } catch (imageError) {
+      if (sessionRevision !== sessionRevisionRef.current) return;
       setError(
         imageError instanceof Error
           ? imageError.message
           : 'Das Foto konnte nicht verarbeitet werden. Bitte versuche es erneut.',
       );
       haptics.warning();
+    } finally {
+      if (operationRevision !== avatarOperationRevisionRef.current) return;
+      avatarPickInFlightRef.current = false;
+      if (sessionRevision === sessionRevisionRef.current) setImageBusy(false);
     }
   }
 
   async function save() {
+    if (interactionLocked || saveInFlightRef.current) return;
     const trimmed = displayName.trim();
     if (trimmed.length < 2) {
       setError('Dein Anzeigename braucht mindestens 2 Zeichen.');
       return;
     }
+    const sessionRevision = sessionRevisionRef.current;
+    const operationRevision = ++saveOperationRevisionRef.current;
+    saveInFlightRef.current = true;
     setBusy(true);
     setError(null);
     try {
       await onSave({ displayName: trimmed, avatarUri });
+      if (sessionRevision !== sessionRevisionRef.current) return;
       haptics.success();
-      onClose();
+      dismiss();
     } catch (saveError) {
+      if (sessionRevision !== sessionRevisionRef.current) return;
       setError(
         saveError instanceof Error
           ? saveError.message
@@ -172,7 +203,9 @@ export function ProfileEditSheet({
       );
       haptics.warning();
     } finally {
-      setBusy(false);
+      if (operationRevision !== saveOperationRevisionRef.current) return;
+      saveInFlightRef.current = false;
+      if (sessionRevision === sessionRevisionRef.current) setBusy(false);
     }
   }
 
@@ -200,7 +233,6 @@ export function ProfileEditSheet({
       >
         <Pressable
           className="absolute inset-0 bg-black/50"
-          disabled={interactionLocked}
           onPress={dismiss}
         />
         <View
@@ -218,8 +250,6 @@ export function ProfileEditSheet({
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Profilbearbeitung schließen"
-              accessibilityState={{ disabled: interactionLocked }}
-              disabled={interactionLocked}
               className="h-10 w-10 items-center justify-center rounded-full bg-secondary active:opacity-70"
               onPress={dismiss}
             >

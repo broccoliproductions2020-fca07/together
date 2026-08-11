@@ -219,7 +219,15 @@ function OpenFriendDetail({
 }
 
 /** A planning group that opted into "Offen für Dazustoßer" — teaser + join. */
-function OpeningRow({ opening, onJoin }: { opening: GroupOpening; onJoin: () => void }) {
+function OpeningRow({
+  opening,
+  joining,
+  onJoin,
+}: {
+  opening: GroupOpening;
+  joining: boolean;
+  onJoin: () => void;
+}) {
   return (
     <View
       className="gap-3 rounded-3xl border p-4"
@@ -250,9 +258,11 @@ function OpeningRow({ opening, onJoin }: { opening: GroupOpening; onJoin: () => 
         </View>
       </View>
       <SquircleButton
-        label="Dazustoßen"
+        label={joining ? 'Wird beigetreten …' : 'Dazustoßen'}
         color={OPEN_COLOR}
         size="md"
+        disabled={joining}
+        loading={joining}
         icon="enter-outline"
         fullWidth={false}
         accessibilityLabel={`Bei ${opening.title} dazustoßen`}
@@ -280,10 +290,14 @@ export interface NearbySheetProps {
   emptyReason?: 'no-friends' | 'none-open' | 'out-of-range' | 'quiet';
   /** Foreground location permission is denied → distances cannot be computed. */
   locationDenied?: boolean;
+  /** Open straight onto this friend's detail — set when the sheet was opened by
+   * tapping their open-presence marker on the map, so the tap lands on "… ist
+   * offen" instead of the generic list. */
+  focusFriendId?: string;
   onAddFriends?: () => void;
   onClose: () => void;
-  onStartSpontaneousRound: (members: GroupMember[]) => Promise<void>;
-  onJoinOpening: (opening: GroupOpening) => void;
+  onStartSpontaneousRound: (members: GroupMember[]) => Promise<boolean>;
+  onJoinOpening: (opening: GroupOpening) => Promise<boolean>;
 }
 
 export function NearbySheet({
@@ -292,6 +306,7 @@ export function NearbySheet({
   friendsWithoutLocation,
   emptyReason = 'out-of-range',
   locationDenied = false,
+  focusFriendId,
   onAddFriends,
   onClose,
   onStartSpontaneousRound,
@@ -302,6 +317,10 @@ export function NearbySheet({
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [detailFriend, setDetailFriend] = useState<NearbyFriend | null>(null);
   const startingRef = useRef(false);
+  const [starting, setStarting] = useState(false);
+  const [joiningOpeningId, setJoiningOpeningId] = useState<string | null>(null);
+  const joiningOpeningRef = useRef<string | null>(null);
+  const interactionRevisionRef = useRef(0);
 
   // The openings listener runs only while this sheet is visible (listener budget).
   useEffect(() => {
@@ -311,13 +330,29 @@ export function NearbySheet({
 
   useEffect(() => {
     if (!visible) {
+      interactionRevisionRef.current += 1;
       setSelected(new Set());
       setDetailFriend(null);
+      setStarting(false);
+      setJoiningOpeningId(null);
+      joiningOpeningRef.current = null;
     }
     startingRef.current = false;
   }, [visible]);
 
   const allFriends = [...friends, ...friendsWithoutLocation];
+
+  // Arriving from a map marker: land on that person. Runs after `allFriends`
+  // exists so the lookup can resolve, and only while visible so closing the
+  // sheet still clears the detail above.
+  useEffect(() => {
+    if (!visible || !focusFriendId) return;
+    const match = allFriends.find((friend) => friend.id === focusFriendId);
+    if (match) setDetailFriend(match);
+    // `allFriends` is rebuilt every render; keying the effect on the id list
+    // keeps it from re-opening the detail on every presence tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, focusFriendId, allFriends.map((friend) => friend.id).join(',')]);
   const nearbyCount = friends.length;
   const openCount = allFriends.length;
   const count = selected.size;
@@ -337,18 +372,47 @@ export function NearbySheet({
     });
   }
 
+  function dismiss() {
+    interactionRevisionRef.current += 1;
+    startingRef.current = false;
+    setStarting(false);
+    setJoiningOpeningId(null);
+    joiningOpeningRef.current = null;
+    onClose();
+  }
+
   async function handleStartPlanning() {
     if (startingRef.current) return;
     const members: GroupMember[] = allFriends
       .filter((friend) => selected.has(friend.id))
       .map((friend) => ({ id: friend.id, displayName: friend.displayName }));
     if (!members.length) return;
+    const interactionRevision = interactionRevisionRef.current;
     startingRef.current = true;
+    setStarting(true);
     try {
-      await onStartSpontaneousRound(members);
-      setSelected(new Set());
+      const started = await onStartSpontaneousRound(members);
+      if (started && interactionRevision === interactionRevisionRef.current) setSelected(new Set());
     } finally {
-      startingRef.current = false;
+      if (interactionRevision === interactionRevisionRef.current) {
+        startingRef.current = false;
+        setStarting(false);
+      }
+    }
+  }
+
+  async function handleJoinOpening(opening: GroupOpening) {
+    if (joiningOpeningRef.current) return;
+    const interactionRevision = interactionRevisionRef.current;
+    joiningOpeningRef.current = opening.id;
+    setJoiningOpeningId(opening.id);
+    try {
+      await onJoinOpening(opening);
+    } finally {
+      if (interactionRevision === interactionRevisionRef.current) {
+        joiningOpeningRef.current = null;
+        setJoiningOpeningId(null);
+      }
     }
   }
 
@@ -361,12 +425,12 @@ export function NearbySheet({
       transparent
       animationType="slide"
       visible={visible}
-      onRequestClose={onClose}
+      onRequestClose={dismiss}
       statusBarTranslucent
       navigationBarTranslucent
     >
       <GestureHandlerRootView style={{ flex: 1 }}>
-        <Pressable className="flex-1 justify-end bg-black/50" onPress={onClose}>
+        <Pressable className="flex-1 justify-end bg-black/50" onPress={dismiss}>
           <Pressable
             className="max-h-[86%] rounded-t-[34px] border border-white/10"
             style={{ backgroundColor: '#0B1016' }}
@@ -402,7 +466,7 @@ export function NearbySheet({
                 accessibilityRole="button"
                 accessibilityLabel="Offene Freunde schließen"
                 className="h-10 w-10 items-center justify-center rounded-full bg-white/8 active:opacity-70"
-                onPress={onClose}
+                onPress={dismiss}
               >
                 <Ionicons name="close" size={20} color="rgba(244,245,247,0.8)" />
               </Pressable>
@@ -468,7 +532,7 @@ export function NearbySheet({
                   ) : emptyReason === 'no-friends' ? (
                     <View className="items-center gap-3 py-6">
                       <Text className="text-center text-sm leading-5 text-white/40">
-                        Du hast noch niemanden bei Together. Füge zuerst Freunde hinzu — erst dann
+                        Du hast noch niemanden bei Como. Füge zuerst Freunde hinzu — erst dann
                         siehst du hier, wer offen ist.
                       </Text>
                       <Pressable
@@ -516,7 +580,8 @@ export function NearbySheet({
                           <OpeningRow
                             key={opening.id}
                             opening={opening}
-                            onJoin={() => onJoinOpening(opening)}
+                            joining={joiningOpeningId === opening.id}
+                            onJoin={() => void handleJoinOpening(opening)}
                           />
                         ))}
                       </View>
@@ -531,7 +596,8 @@ export function NearbySheet({
                 label={winkFooterLabel}
                 color={OPEN_COLOR}
                 icon="hand-left-outline"
-                disabled={count === 0}
+                disabled={count === 0 || starting}
+                loading={starting}
                 onPress={handleStartPlanning}
               />
             </View>

@@ -61,6 +61,10 @@ function PanelContent({ session, activating }: { session: SafetySession; activat
     imSafe,
     arriveSafe,
     endingHeimweg,
+    statusUpdating,
+    statusError,
+    checkInUpdating,
+    checkInError,
     extendHeimweg,
     answerCheckIn,
     setConsoleMinimized,
@@ -176,7 +180,7 @@ function PanelContent({ session, activating }: { session: SafetySession; activat
                 <Text className="flex-1 text-base font-extrabold text-white" numberOfLines={1}>
                   {activating ? 'Heimweg wird gestartet' : STATUS_WORD[session.status]}
                 </Text>
-                {activating ? (
+                {activating || statusUpdating ? (
                   <ActivityIndicator size="small" color={STATUS_COLOR.blue} />
                 ) : (
                   <Text className="text-xs font-semibold text-white/50">
@@ -193,6 +197,15 @@ function PanelContent({ session, activating }: { session: SafetySession; activat
                   <Ionicons name="chevron-down" size={17} color="#F4F5F7" />
                 </Pressable>
               </View>
+
+              {statusUpdating ? (
+                <Text className="mt-2 text-center text-xs text-white/55">
+                  Deine Sicherheitsmeldung wird übermittelt
+                </Text>
+              ) : null}
+              {statusError ? (
+                <Text className="mt-2 text-center text-xs text-[#E87773]">{statusError}</Text>
+              ) : null}
 
               <View
                 className="mt-3 flex-row items-center gap-3 rounded-2xl border px-3.5 py-3"
@@ -255,6 +268,7 @@ function PanelContent({ session, activating }: { session: SafetySession; activat
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="Alles okay bestätigen"
+                  disabled={checkInUpdating}
                   onPress={answerCheckIn}
                   className="mt-2.5 flex-row items-center gap-3 rounded-2xl border px-3.5 py-3 active:opacity-85"
                   style={{
@@ -263,11 +277,16 @@ function PanelContent({ session, activating }: { session: SafetySession; activat
                   }}
                 >
                   <Ionicons name="hand-left-outline" size={18} color={STATUS_COLOR.orange} />
-                  <Text className="flex-1 text-sm font-bold text-white">Alles okay?</Text>
+                  <Text className="flex-1 text-sm font-bold text-white">
+                    {checkInUpdating ? 'Wird bestätigt …' : 'Alles okay?'}
+                  </Text>
                   <Text className="text-sm font-extrabold" style={{ color: STATUS_COLOR.orange }}>
                     Ja
                   </Text>
                 </Pressable>
+              ) : null}
+              {checkInError ? (
+                <Text className="mt-2 text-center text-xs text-[#E87773]">{checkInError}</Text>
               ) : null}
 
               <View

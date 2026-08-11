@@ -81,6 +81,7 @@ export function EmailAuthForm({
   const [resetSent, setResetSent] = useState(false);
   const [resetError, setResetError] = useState<string | null>(null);
   const [resetBusy, setResetBusy] = useState(false);
+  const resetInFlightRef = useRef(false);
 
   const isSignup = mode === 'signup';
 
@@ -178,12 +179,14 @@ export function EmailAuthForm({
   };
 
   const handleResetPassword = async () => {
+    if (resetInFlightRef.current) return;
     const normalizedEmail = email.trim();
     if (!EMAIL_RE.test(normalizedEmail)) {
       setResetSent(false);
       setResetError('Bitte gib oben deine E-Mail ein.');
       return;
     }
+    resetInFlightRef.current = true;
     setResetError(null);
     setResetBusy(true);
     try {
@@ -197,6 +200,7 @@ export function EmailAuthForm({
           : 'Der Link konnte gerade nicht gesendet werden. Bitte versuche es erneut.',
       );
     } finally {
+      resetInFlightRef.current = false;
       setResetBusy(false);
     }
   };

@@ -12,7 +12,11 @@ import { DEFAULT_MAP_REGION } from '../utils/defaultRegion';
 
 const CANDIDATE_CLEAR_DISTANCE = 0.00025;
 const PLACE_SEARCH_MIN_QUERY_LENGTH = 3;
-const PLACE_SEARCH_DEBOUNCE_MS = 650;
+/** Must mirror the callable's `cleanString(..., 120, 'Suchtext')` boundary.
+ * Keeping it here (rather than only on the TextInput) also covers pasted or
+ * future programmatic search input before it can create a rejected request. */
+const PLACE_SEARCH_MAX_QUERY_LENGTH = 120;
+const PLACE_SEARCH_DEBOUNCE_MS = 300;
 
 function placeSearchFailureMessage(error: unknown) {
   const code = (error as { code?: unknown } | null)?.code;
@@ -92,6 +96,8 @@ export interface UseMapLocationPickerOptions {
 export interface MapLocationPickerOpenOptions {
   focusCurrentLocation?: boolean;
   autoConfirm?: boolean;
+  /** Let the selected place's detail sheet own the camera focus instead. */
+  focusMapOnPick?: boolean;
   /** Search is a distinct task, not a manual map-pin picker. */
   searchMode?: boolean;
   /** Local-only bias for Places; it is never written to Firebase. */
@@ -125,6 +131,12 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
   const searchSessionRef = useRef(createPlaceSearchSessionToken());
   const searchSessionHasInputRef = useRef(false);
   const searchSessionResolvedRef = useRef(false);
+  /** Every open/cancel/selection gets a new ticket. Async GPS and Places work
+   * must prove it still belongs to the visible picker before touching state. */
+  const pickerSessionRef = useRef(0);
+  const placeResolutionInFlightRef = useRef(false);
+  const currentLocationInFlightRef = useRef(false);
+  const confirmInFlightRef = useRef(false);
   /**
    * "The moment a real place is resolved, hand it back and get out of the way."
    *
@@ -234,6 +246,13 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
    * a place can never be delivered while the picker stays half-open. */
   const finishWith = useCallback(
     (place: SelectedPlace) => {
+      // Invalidate any slower GPS/reverse-geocode request before handing the
+      // choice back. Without this, closing and immediately reopening the
+      // picker could receive the previous session's answer.
+      pickerSessionRef.current += 1;
+      placeResolutionInFlightRef.current = false;
+      currentLocationInFlightRef.current = false;
+      confirmInFlightRef.current = false;
       pendingPickRef.current?.(place);
       pendingPickRef.current = null;
       autoConfirmRef.current = false;
@@ -252,7 +271,8 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
     [resetSearchSession],
   );
 
-  const updateSearchQuery = useCallback((query: string) => {
+  const updateSearchQuery = useCallback((rawQuery: string) => {
+    const query = rawQuery.slice(0, PLACE_SEARCH_MAX_QUERY_LENGTH);
     const hasInput = query.trim().length > 0;
     if (hasInput && (!searchSessionHasInputRef.current || searchSessionResolvedRef.current)) {
       searchSessionRef.current = createPlaceSearchSessionToken();
@@ -294,11 +314,14 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
   }, []);
 
   const focusCurrentLocation = useCallback(async () => {
-    if (currentLocationLoading) return;
+    if (currentLocationInFlightRef.current) return;
 
+    const session = pickerSessionRef.current;
+    currentLocationInFlightRef.current = true;
     setCurrentLocationLoading(true);
     try {
       const permission = await Location.requestForegroundPermissionsAsync();
+      if (session !== pickerSessionRef.current) return;
       if (permission.status !== Location.PermissionStatus.GRANTED) {
         // An explicit tap on "Aktuellen Standort verwenden" must never end in
         // silence — say why nothing happened and offer the fix.
@@ -309,11 +332,13 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
       const position = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Balanced,
       });
+      if (session !== pickerSessionRef.current) return;
       const nextCoordinate = {
         latitude: position.coords.latitude,
         longitude: position.coords.longitude,
       };
       const address = await reverseGeocodePlaceTitle(nextCoordinate);
+      if (session !== pickerSessionRef.current) return;
       const place: SelectedPlace = {
         id: `current-${nextCoordinate.latitude.toFixed(5)}-${nextCoordinate.longitude.toFixed(5)}`,
         name: 'Aktueller Standort',
@@ -340,9 +365,12 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
       }
       setSelectedPlaceCandidate(place);
     } finally {
-      setCurrentLocationLoading(false);
+      if (session === pickerSessionRef.current) {
+        currentLocationInFlightRef.current = false;
+        setCurrentLocationLoading(false);
+      }
     }
-  }, [currentLocationLoading, finishWith]);
+  }, [finishWith]);
 
   const open = useCallback(
     (
@@ -350,6 +378,10 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
       onPick: (place: SelectedPlace) => void,
       options: MapLocationPickerOpenOptions = {},
     ) => {
+      pickerSessionRef.current += 1;
+      placeResolutionInFlightRef.current = false;
+      currentLocationInFlightRef.current = false;
+      confirmInFlightRef.current = false;
       pendingPickRef.current = onPick;
       autoConfirmRef.current = options.autoConfirm ?? false;
       setMode(nextMode);
@@ -371,6 +403,10 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
   );
 
   const cancel = useCallback(() => {
+    pickerSessionRef.current += 1;
+    placeResolutionInFlightRef.current = false;
+    currentLocationInFlightRef.current = false;
+    confirmInFlightRef.current = false;
     pendingPickRef.current = null;
     autoConfirmRef.current = false;
     resetSearchSession();
@@ -388,8 +424,14 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
 
   const selectSearchResult = useCallback(
     async (suggestion: PlaceSuggestion) => {
-      if (resolving) return;
+      if (placeResolutionInFlightRef.current) return;
 
+      // Choosing a search result supersedes a slower foreground-location
+      // lookup started while the picker opened.
+      const session = ++pickerSessionRef.current;
+      placeResolutionInFlightRef.current = true;
+      currentLocationInFlightRef.current = false;
+      searchRequestRef.current += 1;
       setResolving(true);
       try {
         const place = await placeService.resolve({
@@ -397,6 +439,7 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
           sessionToken: searchSessionRef.current,
           name: suggestion.name,
         });
+        if (session !== pickerSessionRef.current) return;
         if (place.latitude == null || place.longitude == null) {
           throw new Error('Der Ort hat keine Kartenkoordinate.');
         }
@@ -421,16 +464,25 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
         }
         setSelectedPlaceCandidate(resolved);
       } catch {
+        if (session !== pickerSessionRef.current) return;
         Alert.alert('Ort nicht verfügbar', 'Bitte wähle den Ort direkt auf der Karte aus.');
       } finally {
-        setResolving(false);
+        if (session === pickerSessionRef.current) {
+          placeResolutionInFlightRef.current = false;
+          setResolving(false);
+        }
       }
     },
-    [finishWith, resolving],
+    [finishWith],
   );
 
   const selectMapPlace = useCallback(
     (place: MapPlaceSelection) => {
+      // A direct map tap is a newer decision than any pending Places/GPS work.
+      pickerSessionRef.current += 1;
+      placeResolutionInFlightRef.current = false;
+      currentLocationInFlightRef.current = false;
+      confirmInFlightRef.current = false;
       const nextCoordinate = place.coordinate;
       searchRequestRef.current += 1;
       searchSignatureRef.current = undefined;
@@ -454,12 +506,23 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
   );
 
   const confirm = useCallback(async () => {
-    if (resolving) return;
+    if (confirmInFlightRef.current || placeResolutionInFlightRef.current) return;
 
+    const session = ++pickerSessionRef.current;
+    confirmInFlightRef.current = true;
+    currentLocationInFlightRef.current = false;
     setResolving(true);
-    const place = selectedPlaceCandidate ?? (await coordinateToComposerPlace(coordinate));
-    finishWith(place);
-  }, [coordinate, finishWith, resolving, selectedPlaceCandidate]);
+    try {
+      const place = selectedPlaceCandidate ?? (await coordinateToComposerPlace(coordinate));
+      if (session !== pickerSessionRef.current) return;
+      finishWith(place);
+    } finally {
+      if (session === pickerSessionRef.current) {
+        confirmInFlightRef.current = false;
+        setResolving(false);
+      }
+    }
+  }, [coordinate, finishWith, selectedPlaceCandidate]);
 
   return {
     active,

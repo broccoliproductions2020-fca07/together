@@ -1,6 +1,6 @@
-# Together Betrieb (localhost)
+# Como Betrieb (localhost)
 
-This is a private operations dashboard for the Together project. It is a
+This is a private operations dashboard for the Como project. It is a
 separate Node process, is bound exclusively to `127.0.0.1`, and must never be
 served through a tunnel, proxy, or public host.
 
@@ -92,7 +92,7 @@ $env:TOGETHER_DASHBOARD_BILLING_TABLE = 'your-billing-project.billing_dataset.gc
 npm run dashboard
 ```
 
-The billing query includes only the two Together project IDs and only the
+The billing query includes only the two Como project IDs and only the
 current calendar month. Results are cached for five minutes, because Google
 Billing data is not a real-time source. Costs outside the Google Cloud Billing
 account (for example Expo/EAS subscriptions and the Apple Developer Program)

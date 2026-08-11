@@ -73,12 +73,13 @@ export function ParticipantLimitField({
             {limited ? `Voll bei ${limit} Teilnehmern` : 'Unbegrenzt'}
           </Text>
         </View>
-        <Switch
-          value={limited}
-          onValueChange={toggle}
-          trackColor={{ false: 'rgba(255,255,255,0.15)', true: accent }}
-          thumbColor="#ffffff"
-        />
+        <View pointerEvents="none">
+          <Switch
+            value={limited}
+            trackColor={{ false: 'rgba(255,255,255,0.15)', true: accent }}
+            thumbColor="#ffffff"
+          />
+        </View>
       </Pressable>
 
       {limited ? (

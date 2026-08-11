@@ -29,15 +29,28 @@ export interface MarkerMorphTarget {
 interface MapMarkerMorphOverlayProps {
   camera: MorphCameraValues;
   height: number;
+  /**
+   * Fires once this overlay has actually been laid out. The caller hides the
+   * underlying raster markers ONLY after this — hiding them in the same commit
+   * that mounts the overlay leaves a frame with neither, which is the blink.
+   */
+  onReady?: () => void;
   targets: MarkerMorphTarget[];
   visible: boolean;
   width: number;
 }
 
-/** Draws gesture-time markers outside react-native-maps' 40 ms bitmap tracker. */
+/**
+ * Draws gesture-time markers outside react-native-maps' 40 ms bitmap tracker.
+ *
+ * `pointerEvents="none"` throughout: the real native markers stay underneath
+ * and keep receiving taps, so a marker can be opened during and right after a
+ * pinch.
+ */
 export function MapMarkerMorphOverlay({
   camera,
   height,
+  onReady,
   targets,
   visible,
   width,
@@ -45,7 +58,11 @@ export function MapMarkerMorphOverlay({
   if (!visible || width <= 0 || height <= 0 || targets.length === 0) return null;
 
   return (
-    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+    <View
+      pointerEvents="none"
+      style={StyleSheet.absoluteFill}
+      onLayout={() => onReady?.()}
+    >
       {targets.map((target) => (
         <ProjectedMorphMarker
           key={target.id}

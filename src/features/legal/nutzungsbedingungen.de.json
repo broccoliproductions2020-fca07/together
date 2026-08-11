@@ -7,7 +7,7 @@
       "blocks": [
         {
           "type": "p",
-          "text": "Diese Nutzungsbedingungen gelten für die Nutzung der Together-App. Anbieter ist [Vor- und Nachname bzw. Unternehmen], [Straße und Hausnummer], [PLZ und Ort] (siehe Impressum). Mit der Registrierung erklärst du dich mit diesen Bedingungen einverstanden."
+          "text": "Diese Nutzungsbedingungen gelten für die Nutzung der Como-App. Anbieter ist [Vor- und Nachname bzw. Unternehmen], [Straße und Hausnummer], [PLZ und Ort] (siehe Impressum). Mit der Registrierung erklärst du dich mit diesen Bedingungen einverstanden."
         }
       ]
     },
@@ -16,7 +16,7 @@
       "blocks": [
         {
           "type": "p",
-          "text": "Together ist eine kostenlose App, mit der du dich privat mit bestätigten Freundinnen und Freunden verabreden kannst. Es besteht kein Anspruch auf ununterbrochene Verfügbarkeit; wir dürfen die App weiterentwickeln, verändern oder einzelne Funktionen einstellen."
+          "text": "Como ist eine kostenlose App, mit der du dich privat mit bestätigten Freundinnen und Freunden verabreden kannst. Es besteht kein Anspruch auf ununterbrochene Verfügbarkeit; wir dürfen die App weiterentwickeln, verändern oder einzelne Funktionen einstellen."
         }
       ]
     },
@@ -39,7 +39,7 @@
       "blocks": [
         {
           "type": "p",
-          "text": "Bei der Nutzung von Together ist es untersagt:"
+          "text": "Bei der Nutzung von Como ist es untersagt:"
         },
         {
           "type": "list",
@@ -61,11 +61,11 @@
       "blocks": [
         {
           "type": "p",
-          "text": "Die Sicherheitsfunktionen von Together (insbesondere der Heimweg-Modus) verbinden dich mit von dir ausgewählten Freundinnen und Freunden. Sie sind eine Unterstützung durch private Kontakte — sie sind KEIN Notruf und ersetzen keine professionelle Hilfe. In einer Notlage wähle immer den Notruf 112."
+          "text": "Die Sicherheitsfunktionen von Como (insbesondere der Heimweg-Modus) verbinden dich mit von dir ausgewählten Freundinnen und Freunden. Sie sind eine Unterstützung durch private Kontakte — sie sind KEIN Notruf und ersetzen keine professionelle Hilfe. In einer Notlage wähle immer den Notruf 112."
         },
         {
           "type": "p",
-          "text": "Wir können nicht garantieren, dass Benachrichtigungen zugestellt werden, dass ausgewählte Personen sie sehen oder reagieren, oder dass Standortdaten jederzeit aktuell übertragen werden. Ob ein Gerät klingelt, entscheidet dessen Betriebssystem; Funklöcher, Akkustand und Geräteeinstellungen können die Übertragung unterbrechen. Together verspricht keine Rettung und keine Überwachung."
+          "text": "Wir können nicht garantieren, dass Benachrichtigungen zugestellt werden, dass ausgewählte Personen sie sehen oder reagieren, oder dass Standortdaten jederzeit aktuell übertragen werden. Ob ein Gerät klingelt, entscheidet dessen Betriebssystem; Funklöcher, Akkustand und Geräteeinstellungen können die Übertragung unterbrechen. Como verspricht keine Rettung und keine Überwachung."
         }
       ]
     },
@@ -74,7 +74,7 @@
       "blocks": [
         {
           "type": "p",
-          "text": "Für Inhalte, die du in Together erstellst (Nachrichten, Aktivitäten, Profilbild), bleibst du verantwortlich. Du räumst uns das einfache, jederzeit widerrufliche Recht ein, diese Inhalte technisch zu speichern und den von dir gewählten Empfängerinnen und Empfängern anzuzeigen — ausschließlich zum Betrieb der App. Inhalte löschen sich nach den in der Datenschutzerklärung genannten Fristen von selbst."
+          "text": "Für Inhalte, die du in Como erstellst (Nachrichten, Aktivitäten, Profilbild), bleibst du verantwortlich. Du räumst uns das einfache, jederzeit widerrufliche Recht ein, diese Inhalte technisch zu speichern und den von dir gewählten Empfängerinnen und Empfängern anzuzeigen — ausschließlich zum Betrieb der App. Inhalte löschen sich nach den in der Datenschutzerklärung genannten Fristen von selbst."
         }
       ]
     },
