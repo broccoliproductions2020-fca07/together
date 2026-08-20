@@ -1099,6 +1099,17 @@ export function MapScreen({
    * happens in the sheet — a tap here used to add the person as a member with
    * an empty availability, which is the one state the round cannot use.
    */
+  /**
+   * A freshly locked Activity exists on the server before the feed listener has
+   * echoed it, so a single lookup finds nothing and the tap does nothing. Retry
+   * briefly rather than swallow it.
+   */
+  function openActivityWhenKnown(activityId: string, attempt = 0) {
+    if (openActivityById(activityId)) return;
+    if (attempt >= 12) return;
+    setTimeout(() => openActivityWhenKnown(activityId, attempt + 1), 400);
+  }
+
   function openTimePlan(planId: string) {
     setPostfachVisible(false);
     setTimePlanId(planId);
@@ -2152,7 +2163,7 @@ export function MapScreen({
               setTimePlanPromptOnOpen(false);
               setTimePlanId(undefined);
             }}
-            onOpenActivity={(activityId) => openActivityById(activityId)}
+            onOpenActivity={(activityId) => openActivityWhenKnown(activityId)}
           />
 
           <MarkerDetailSheet

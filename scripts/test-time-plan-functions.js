@@ -294,8 +294,21 @@ async function main() {
     }),
   );
 
+  // A locked-notification id is deterministic, so one may already be there.
+  // Writing it with `create` made that an unhandled ALREADY_EXISTS, which
+  // reached the user as the word "INTERNAL".
+  await db.doc(`notifications/timeplanlocked_${planId}_${bob.uid}`).set({
+    recipientUid: bob.uid,
+    kind: 'time_plan_locked',
+    title: 'Alt',
+    body: 'Alt',
+    timePlanId: planId,
+    createdAt: admin.firestore.Timestamp.now(),
+    expireAt: admin.firestore.Timestamp.fromMillis(Date.now() + 60 * 60 * 1000),
+  });
+
   const activityId = 'activity_locked_1';
-  await expectOk('the host locks a slot', () =>
+  await expectOk('locking survives a notification that already exists', () =>
     callFunction(alice.token, 'lockTimePlan', {
       planId,
       windowId: 'w1',

@@ -44,6 +44,22 @@ function isTimePlanResponseOperation(
   return operation.kind === 'timePlan.response';
 }
 
+/**
+ * Callable failures come in two flavours and only one of them may be shown.
+ *
+ * The messages this feature's callables throw are already German, user-facing
+ * sentences. Everything else arrives as a bare provider code — "INTERNAL",
+ * "UNAVAILABLE" — which is precisely what the auth surface is forbidden to put
+ * in front of a person, and for the same reason: it explains nothing and reads
+ * as a crash. A real sentence has a lowercase letter and a space; a status code
+ * has neither.
+ */
+function planningErrorMessage(caught: unknown, fallback: string): string {
+  const message = caught instanceof Error ? caught.message : '';
+  const looksWritten = /[a-zäöüß]/.test(message) && message.includes(' ');
+  return looksWritten ? message : fallback;
+}
+
 function fullInterval(window: TimePlanWindow): TimePlanInterval {
   return { startsAt: window.startsAt, endsAt: window.endsAt };
 }
@@ -99,6 +115,7 @@ export function TimePlanningSheet({
   const { operations: syncOperations } = useSyncOutbox();
   const uid = user?.id;
   const subscriptionRevisionRef = useRef(0);
+  const membersRevisionRef = useRef(0);
   const [plan, setPlan] = useState<TimePlan | null>(null);
   const [members, setMembers] = useState<TimePlanMember[]>([]);
   const [answers, setAnswers] = useState<Record<string, DayAnswer>>({});
@@ -106,35 +123,63 @@ export function TimePlanningSheet({
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [locking, setLocking] = useState(false);
+  // The member listener can only attach once the plan doc reports the new
+  // membership, which is a round trip away. Without this the CTA sits there
+  // saying "Antworten und beitreten" after it already succeeded.
+  const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const seededRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     if (!visible || !planId || !uid) {
       setPlan(null);
-      setMembers([]);
       return;
     }
     const revision = ++subscriptionRevisionRef.current;
-    const actor = { uid };
-    const stopPlan = timePlanningService.subscribeTimePlan(actor, planId, (next) => {
+    const stopPlan = timePlanningService.subscribeTimePlan({ uid }, planId, (next) => {
       if (revision === subscriptionRevisionRef.current) setPlan(next);
-    });
-    const stopMembers = timePlanningService.subscribeMembers(actor, planId, (next) => {
-      if (revision === subscriptionRevisionRef.current) setMembers(next);
     });
     return () => {
       subscriptionRevisionRef.current += 1;
       stopPlan();
-      stopMembers();
     };
   }, [planId, uid, visible]);
+
+  const isMember = Boolean(uid && plan?.memberUids.includes(uid));
+
+  /**
+   * Availability is members-only, so this listener is keyed on MEMBERSHIP and
+   * not merely on the sheet being open.
+   *
+   * Two reasons, and the second is a bug that already happened. Attaching it as
+   * an invitee is a guaranteed permission error — and a Firestore listener does
+   * not recover from one: the error callback fires once and the subscription is
+   * dead. Joining then changed nothing on screen, because the listener that
+   * would have reported the new membership had already given up. Keying it on
+   * `plan.memberUids` (which the plan listener CAN read either way) makes it
+   * attach exactly when it is allowed to, including right after joining.
+   */
+  useEffect(() => {
+    if (!visible || !planId || !uid || !isMember) {
+      setMembers([]);
+      return;
+    }
+    const revision = ++membersRevisionRef.current;
+    const stopMembers = timePlanningService.subscribeMembers({ uid }, planId, (next) => {
+      if (revision === membersRevisionRef.current) setMembers(next);
+    });
+    return () => {
+      membersRevisionRef.current += 1;
+      stopMembers();
+    };
+  }, [isMember, planId, uid, visible]);
 
   useEffect(() => {
     if (!visible) {
       setEditing(false);
       setError(null);
       seededRef.current = undefined;
+      setSubmitted(false);
     }
   }, [visible]);
 
@@ -199,7 +244,7 @@ export function TimePlanningSheet({
 
   const unanswered = windows.filter((window) => answers[window.id] == null).length;
   const anyYes = windows.some((window) => answers[window.id] === 'yes');
-  const answering = !hasAnswered || editing;
+  const answering = (!hasAnswered && !submitted) || editing;
 
   const setAnswer = useCallback((windowId: string, next: DayAnswer) => {
     setAnswers((current) => ({ ...current, [windowId]: next }));
@@ -223,12 +268,11 @@ export function TimePlanningSheet({
         await timePlanningService.joinTimePlan({ uid }, plan.id, responses);
       }
       haptics.success();
+      setSubmitted(true);
       setEditing(false);
     } catch (caught) {
       setError(
-        caught instanceof Error && caught.message
-          ? caught.message
-          : 'Das hat nicht geklappt. Bitte versuche es erneut.',
+        planningErrorMessage(caught, 'Das hat nicht geklappt. Bitte versuche es erneut.'),
       );
       haptics.warning();
     } finally {
@@ -241,18 +285,19 @@ export function TimePlanningSheet({
     setLocking(true);
     setError(null);
     try {
-      const activityId = await timePlanningService.lockTimePlan({ uid }, plan.id, window.id, {
+      await timePlanningService.lockTimePlan({ uid }, plan.id, window.id, {
         startsAt,
         endsAt,
       });
       haptics.success();
-      onClose();
-      onOpenActivity?.(activityId);
+      // Deliberately does NOT close. The plan listener flips `status` to
+      // `locked` a moment later and the sheet becomes the confirmation — which
+      // is immediate and unambiguous. Closing and jumping straight to the new
+      // Activity looked like nothing had happened at all: the activity feed has
+      // not echoed the document yet, so there was nothing to open.
     } catch (caught) {
       setError(
-        caught instanceof Error && caught.message
-          ? caught.message
-          : 'Der Termin konnte nicht festgelegt werden.',
+        planningErrorMessage(caught, 'Der Termin konnte nicht festgelegt werden.'),
       );
       haptics.warning();
     } finally {

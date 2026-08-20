@@ -1774,7 +1774,11 @@ exports.lockTimePlan = onCall(CALLABLE_OPTS, async (request) => {
     members.forEach((member) => {
       if (member.uid === uid) return;
       notified.push(member.uid);
-      transaction.create(db.doc(`notifications/timeplanlocked_${planId}_${member.uid}`), {
+      // `set`, not `create`: the id is deterministic on purpose, so a second
+      // write for the same plan+person is a repeat of the same fact rather than
+      // a conflict. `create` turned that into an unhandled ALREADY_EXISTS,
+      // which the client could only report as "INTERNAL".
+      transaction.set(db.doc(`notifications/timeplanlocked_${planId}_${member.uid}`), {
         recipientUid: member.uid,
         kind: 'time_plan_locked',
         title: 'Der Termin steht',

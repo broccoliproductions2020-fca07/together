@@ -35,8 +35,22 @@ const COUNT_WIDTH = 58;
  * stacking metaphor stops holding — 30 layers cannot be told apart. */
 const MAX_FANNED_ROWS = 10;
 
+/** Compact on purpose: the label column is fixed so every row's strip starts
+ * at the same x, and "Fr., 21. Aug." does not fit in it. Truncating the date
+ * away would leave rows that cannot be told apart. */
 function dayLabel(iso: string): string {
-  return new Date(iso).toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'short' });
+  const date = new Date(iso);
+  const weekday = date.toLocaleDateString('de-DE', { weekday: 'short' }).replace('.', '');
+  return `${weekday} ${date.getDate()}.${date.getMonth() + 1}.`;
+}
+
+/** The long form, for screen readers and anywhere with room. */
+function fullDayLabel(iso: string): string {
+  return new Date(iso).toLocaleDateString('de-DE', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+  });
 }
 
 function clock(ms: number): string {
@@ -176,7 +190,7 @@ export const TimePlanOverview = memo(function TimePlanOverview({
               <Pressable
                 accessibilityRole="button"
                 accessibilityState={{ expanded }}
-                accessibilityLabel={`${dayLabel(window.startsAt)}, ${
+                accessibilityLabel={`${fullDayLabel(window.startsAt)}, ${
                   best ? `${best.count} von ${availability?.totalCount ?? 0} können` : 'niemand kann'
                 }. Antippen für die einzelnen Antworten.`}
                 // Only one day open at a time: the stack is what makes the axis
