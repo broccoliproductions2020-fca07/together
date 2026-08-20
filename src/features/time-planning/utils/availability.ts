@@ -148,47 +148,56 @@ function sameUids(left: string[], right: string[]): boolean {
 }
 
 /**
- * The one window the card names.
+ * The strongest windows the overview can name.
  *
- * Runs of equal cover are joined first, because a run split only by another
- * member's boundary is still one stretch of the same people. The best run is
- * the one with the highest count; a tie goes to the longer one, then to the
- * earlier. A run shorter than {@link MIN_SLOT_MINUTES} is only offered when
+ * Only adjacent segments covered by the same people are joined. A change in
+ * people must stay visible: otherwise the suggested window could not be
+ * accepted by every person it names. The best run has the highest count; a tie
+ * goes to the longer one. Exact ties are all returned in chronological order.
+ * A run shorter than {@link MIN_SLOT_MINUTES} is only offered when
  * nothing longer exists at all — a five-minute peak is not an appointment.
  */
-export function bestSlot(segments: AvailabilitySegment[], totalCount: number): BestSlot | null {
+export function bestSlots(segments: AvailabilitySegment[], totalCount: number): BestSlot[] {
   const runs: AvailabilitySegment[] = [];
   segments.forEach((segment) => {
     if (segment.count === 0) return;
     const previous = runs[runs.length - 1];
-    if (previous && previous.endMs === segment.startMs && previous.count === segment.count) {
+    if (
+      previous &&
+      previous.endMs === segment.startMs &&
+      sameUids(previous.uids, segment.uids)
+    ) {
       previous.endMs = segment.endMs;
-      previous.uids = previous.uids.filter((uid) => segment.uids.includes(uid));
       return;
     }
     runs.push({ ...segment, uids: [...segment.uids] });
   });
-  if (runs.length === 0) return null;
+  if (runs.length === 0) return [];
 
   const minMs = MIN_SLOT_MINUTES * MINUTE_MS;
   const longEnough = runs.filter((run) => run.endMs - run.startMs >= minMs);
   const pool = longEnough.length > 0 ? longEnough : runs;
 
-  const winner = pool.reduce((best, run) => {
-    if (run.count !== best.count) return run.count > best.count ? run : best;
-    const runLength = run.endMs - run.startMs;
-    const bestLength = best.endMs - best.startMs;
-    if (runLength !== bestLength) return runLength > bestLength ? run : best;
-    return run.startMs < best.startMs ? run : best;
-  });
+  const highestCount = Math.max(...pool.map((run) => run.count));
+  const countWinners = pool.filter((run) => run.count === highestCount);
+  const longestDuration = Math.max(...countWinners.map((run) => run.endMs - run.startMs));
 
-  return {
-    startMs: winner.startMs,
-    endMs: winner.endMs,
-    count: winner.count,
-    uids: [...winner.uids],
-    everyone: totalCount > 0 && winner.count === totalCount,
-  };
+  return countWinners
+    .filter((run) => run.endMs - run.startMs === longestDuration)
+    .sort((left, right) => left.startMs - right.startMs)
+    .map((winner) => ({
+      startMs: winner.startMs,
+      endMs: winner.endMs,
+      count: winner.count,
+      uids: [...winner.uids],
+      everyone: totalCount > 0 && winner.count === totalCount,
+    }));
+}
+
+/** The deterministic first of {@link bestSlots}, used where a single action
+ * still needs an unambiguous fallback. */
+export function bestSlot(segments: AvailabilitySegment[], totalCount: number): BestSlot | null {
+  return bestSlots(segments, totalCount)[0] ?? null;
 }
 
 /**

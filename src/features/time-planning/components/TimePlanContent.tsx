@@ -14,7 +14,7 @@ import type { TimePlan, TimePlanInterval, TimePlanMember, TimePlanWindow } from 
 import { aggregateWindow, type WindowAvailability } from '../utils/availability';
 import { normalizeIntervals } from '../utils/intervals';
 import { TimePlanAnswerCard, type DayAnswer } from './TimePlanAnswerCard';
-import { TimePlanOverview } from './TimePlanOverview';
+import { TimeMatchingCard } from './TimeMatchingCard';
 
 /**
  * The Terminfindung surface — rendered INSIDE the normal marker detail sheet,
@@ -337,7 +337,7 @@ export function TimePlanContent({
         </>
       ) : (
         <>
-          <TimePlanOverview
+          <TimeMatchingCard
             windows={windows}
             members={members}
             currentUid={uid}

@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zeitmatching — Übersicht (Mock)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&display=swap">
+<style>
+  :root {
+    --page: #1a1c1f;
+    --page-ink: #e8e6e1;
+    --page-muted: #9b968d;
+
+    /* Sheet + card, light theme (the app's own tokens) */
+    --l-sheet: #ffffff;
+    --l-card: #f7f4ef;
+    --l-card-border: #e6dfd3;
+    --l-ink: #14211c;
+    --l-muted: #6b6258;
+    --l-guide: rgba(20, 33, 28, 0.09);
+    --l-tick: rgba(20, 33, 28, 0.22);
+
+    --d-sheet: #13201b;
+    --d-card: #182722;
+    --d-card-border: #24332c;
+    --d-ink: #f2efe9;
+    --d-muted: #9aa39d;
+    --d-guide: rgba(255, 255, 255, 0.075);
+    --d-tick: rgba(255, 255, 255, 0.2);
+
+    /* One meaning per colour */
+    --window-fill: rgba(59, 130, 246, 0.10);
+    --window-line: rgba(59, 130, 246, 0.55);
+    --l-step: #2fa97a;
+    --d-step: #41c08d;
+    --person: #7657a8;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    padding: 40px 28px 72px;
+    background: var(--page);
+    color: var(--page-ink);
+    font-family: 'Schibsted Grotesk', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  header { max-width: 1180px; margin: 0 auto 34px; }
+  h1 { font-size: 21px; font-weight: 700; margin: 0 0 6px; letter-spacing: -0.3px; }
+  header p { margin: 0; color: var(--page-muted); font-size: 13px; max-width: 62ch; line-height: 1.55; }
+
+  .board {
+    max-width: 1180px;
+    margin: 0 auto;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 30px;
+    align-items: flex-start;
+  }
+
+  .frame { width: 390px; }
+  .frame > figcaption {
+    font-size: 11px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--page-muted);
+    margin: 0 0 9px 2px;
+    font-weight: 600;
+  }
+
+  /* ---- the phone sheet ------------------------------------------------ */
+  .sheet {
+    border-radius: 22px;
+    padding: 18px 16px 20px;
+    background: var(--l-sheet);
+    color: var(--l-ink);
+  }
+  .sheet.dark { background: var(--d-sheet); color: var(--d-ink); }
+
+  .sheet-title { font-size: 20px; font-weight: 700; letter-spacing: -0.4px; margin: 0 0 8px; }
+  .meta { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
+  .meta-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .meta-row svg { flex: none; }
+  .sheet .meta-row { color: var(--l-ink); }
+  .sheet.dark .meta-row { color: var(--d-ink); }
+
+  /* ---- the matching panel --------------------------------------------- */
+  .panel {
+    border-radius: 14px;
+    border: 1px solid var(--l-card-border);
+    background: var(--l-card);
+    padding: 12px 12px 10px;
+  }
+  .dark .panel { border-color: var(--d-card-border); background: var(--d-card); }
+
+  .summary {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    font-size: 12px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+  }
+  .summary .label { color: var(--l-muted); font-weight: 500; }
+  .dark .summary .label { color: var(--d-muted); }
+  .summary .value { font-weight: 700; letter-spacing: -0.1px; }
+  .summary .dot { color: var(--l-muted); }
+  .dark .summary .dot { color: var(--d-muted); }
+
+  .chart { width: 100%; display: block; overflow: visible; }
+
+  .foot {
+    margin-top: 9px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 10.5px;
+    color: var(--l-muted);
+  }
+  .dark .foot { color: var(--d-muted); }
+  .swatch { display: inline-flex; align-items: center; gap: 5px; }
+  .swatch i { width: 13px; height: 9px; border-radius: 1px; display: inline-block; }
+
+  .note {
+    max-width: 1180px;
+    margin: 34px auto 0;
+    color: var(--page-muted);
+    font-size: 12.5px;
+    line-height: 1.6;
+  }
+  .note b { color: var(--page-ink); font-weight: 600; }
+  .note ul { margin: 8px 0 0; padding-left: 18px; }
+  .note li { margin-bottom: 4px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Zeitmatching — Übersicht</h1>
+  <p>Mock des neuen Verfügbarkeitsbereichs. Eine gemeinsame Achse, durchlaufende Hilfslinien,
+     Die Vorschlagsleiste ist der Picker selbst — gleiche Schiene, gleiche Pille,
+     gleicher Radius, nur ohne Griffe. Die grüne Treppe liegt darin.</p>
+</header>
+
+<h2 style="max-width:1180px;margin:0 auto 14px;font-size:15px;font-weight:600;">Braucht die Übersicht den Rahmen überhaupt?</h2>
+<p style="max-width:1180px;margin:0 auto 18px;color:var(--page-muted);font-size:12.5px;line-height:1.6;">
+  Der Host antwortet beim Anlegen automatisch mit dem ganzen Fenster. Die Treppe fällt
+  innerhalb eines Vorschlags also nie auf null und deckt seine Breite immer exakt ab —
+  der blaue Rahmen wiederholt damit nur, was die Stufen schon zeigen.</p>
+<div class="board" id="compare" style="margin-bottom:46px"></div>
+
+<h2 style="max-width:1180px;margin:0 auto 14px;font-size:15px;font-weight:600;">Vollbild, Variante A</h2>
+<div class="board" id="board"></div>
+
+<div class="note">
+  <b>Was der Mock zeigt</b>
+  <ul>
+    <li>Die Höhe der grünen Stufe ist <b>availableCount / totalParticipants</b> — 5/5 füllt die Leiste, 1/5 ist ein flacher Sockel. Farbe ist nie die einzige Information.</li>
+    <li>Die Zahl steht nur im höchsten, ausreichend breiten Abschnitt. Schmale Spitzen bleiben unbeschriftet.</li>
+    <li>Hilfslinien laufen von den Achsen-Ticks durch <b>alle</b> Zeilen, auch die aufgefächerten.</li>
+    <li>Aufgefächert sind alle Personenbalken violett, „Du“ zuerst — nie amber, das gehört dem Bedienelement.</li>
+  </ul>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Model — five people, three proposed days, one shared time-of-day axis.
+// ---------------------------------------------------------------------------
+const TOTAL = 5;
+const AXIS = { from: 12, to: 21 };          // hours of the day
+const LABEL_W = 50;                          // day/person label column
+const PAD_R = 6;
+const TRACK_H = 32;                          // the picker's container
+const BAR_H = 24;                            // the picker's range bar
+const BAR_GAP = 5;                           // vertical gap between day rows
+const STEP_INSET = 3;                        // green never touches the blue edge
+const AXIS_H = 26;                           // times + ticks
+const PERSON_H = 13;
+const PERSON_GAP = 4;
+
+const DAYS = [
+  {
+    label: 'Fr 21.8.', from: 16, to: 21,
+    steps: [ [16, 17, 2], [17, 21, 5] ],
+    best: [17, 21],
+    people: [
+      { name: 'Du', spans: [[16, 21]] },
+      { name: 'Max (Host)', spans: [[16, 21]] },
+      { name: 'Jonas', spans: [[17, 21]] },
+      { name: 'Lisa', spans: [[17, 21]] },
+      { name: 'Ida', spans: [[17, 21]] },
+    ],
+  },
+  {
+    label: 'Sa 22.8.', from: 17, to: 21,
+    // The host answers with the WHOLE window at creation time, so the count
+    // never drops to zero inside an offer — which is exactly why the blue
+    // frame turned out to be redundant: the steps already span the offer.
+    steps: [ [17, 19, 1], [19, 21, 3] ],
+    best: [19, 21],
+    people: [
+      { name: 'Du', spans: [[19, 21]] },
+      { name: 'Max (Host)', spans: [[17, 21]] },
+      { name: 'Jonas', spans: [] },
+      { name: 'Lisa', spans: [[19, 21]] },
+      { name: 'Ida', spans: [] },
+    ],
+  },
+  {
+    label: 'So 23.8.', from: 12, to: 18,
+    steps: [ [12, 14, 3], [14, 16, 4], [16, 18, 2] ],
+    best: [14, 16],
+    people: [
+      { name: 'Du', spans: [[12, 16]] },
+      { name: 'Max (Host)', spans: [[12, 18]] },
+      { name: 'Jonas', spans: [[12, 16]] },
+      { name: 'Lisa', spans: [[14, 16]] },
+      { name: 'Ida', spans: [] },
+    ],
+  },
+];
+
+const clock = (h) => String(Math.floor(h)).padStart(2, '0') + ':' + String(Math.round((h % 1) * 60)).padStart(2, '0');
+
+function buildChart({ width, expandedIndex, dark, variant = 'picker' }) {
+  const ink = dark ? 'var(--d-ink)' : 'var(--l-ink)';
+  const muted = dark ? 'var(--d-muted)' : 'var(--l-muted)';
+  const guide = dark ? 'var(--d-guide)' : 'var(--l-guide)';
+  const tick = dark ? 'var(--d-tick)' : 'var(--l-tick)';
+  const step = dark ? 'var(--d-step)' : 'var(--l-step)';
+  const track = dark ? 'rgba(255,255,255,0.05)' : 'rgba(20,33,28,0.045)';
+
+  const plotX = LABEL_W;
+  const plotW = width - LABEL_W - PAD_R;
+  const hours = AXIS.to - AXIS.from;
+  const x = (h) => plotX + ((h - AXIS.from) / hours) * plotW;
+
+  // --- vertical extent -----------------------------------------------------
+  let y = AXIS_H;
+  const rows = DAYS.map((day, index) => {
+    const top = y;
+    y += TRACK_H;
+    let people = null;
+    if (index === expandedIndex) {
+      y += PERSON_GAP;
+      people = { top: y };
+      y += day.people.length * (PERSON_H + PERSON_GAP) - PERSON_GAP;
+    }
+    y += BAR_GAP;
+    return { day, top, people };
+  });
+  const height = y - BAR_GAP + 2;
+
+  const parts = [];
+
+  // --- guide lines run the FULL height, behind everything ------------------
+  for (let h = AXIS.from; h <= AXIS.to; h += 1) {
+    parts.push(`<line x1="${x(h).toFixed(2)}" y1="${AXIS_H - 7}" x2="${x(h).toFixed(2)}" y2="${height}"
+      stroke="${guide}" stroke-width="1" shape-rendering="crispEdges"/>`);
+  }
+
+  // --- the one shared axis -------------------------------------------------
+  for (let h = AXIS.from; h <= AXIS.to; h += 1) {
+    const even = (h - AXIS.from) % 2 === 0;
+    if (even) {
+      parts.push(`<text x="${x(h).toFixed(2)}" y="11" text-anchor="middle"
+        font-size="9.5" font-weight="500" fill="${muted}"
+        font-family="'Schibsted Grotesk',system-ui">${clock(h)}</text>`);
+    }
+    parts.push(`<line x1="${x(h).toFixed(2)}" y1="${even ? 15 : 17}" x2="${x(h).toFixed(2)}" y2="${AXIS_H - 7}"
+      stroke="${tick}" stroke-width="1" shape-rendering="crispEdges"/>`);
+  }
+
+  // --- day rows ------------------------------------------------------------
+  rows.forEach(({ day, top, people }, rowIndex) => {
+    parts.push(`<text x="0" y="${top + TRACK_H / 2 + 4}" font-size="11.5" font-weight="600" fill="${ink}"
+      font-family="'Schibsted Grotesk',system-ui">${day.label}</text>`);
+
+    const barTop = top + (TRACK_H - BAR_H) / 2;
+    const wx = x(day.from);
+    const ww = x(day.to) - wx;
+    const r = variant === 'picker' ? BAR_H / 2 : 2;
+    const clipId = `clip-${variant}-${dark ? 'd' : 'l'}-${expandedIndex}-${rowIndex}`;
+
+    if (variant === 'picker') {
+      // The picker's own body, minus the grips: its container, then the pill
+      // it draws for a selection — translucent fill, stronger edge, radius =
+      // half the height.
+      parts.push(`<rect x="${plotX}" y="${top}" width="${plotW}" height="${TRACK_H}" rx="10"
+        fill="${track}"/>`);
+    }
+    parts.push(`<clipPath id="${clipId}"><rect x="${wx.toFixed(2)}" y="${barTop}" width="${ww.toFixed(2)}" height="${BAR_H}" rx="${r}"/></clipPath>`);
+    if (variant !== 'bare') {
+      parts.push(`<rect x="${wx.toFixed(2)}" y="${barTop}" width="${ww.toFixed(2)}" height="${BAR_H}" rx="${r}"
+        fill="var(--window-fill)"/>`);
+    }
+
+    // ---- the green staircase, inside the window --------------------------
+    // Clipped to the pill so it follows the picker's shape instead of
+    // punching square corners through it.
+    const floorY = barTop + BAR_H;
+    const maxH = BAR_H - STEP_INSET;
+    const peak = Math.max(...day.steps.map((s) => s[2]));
+    let labelled = false;
+    const stepShapes = [];
+
+    day.steps.forEach(([from, to, count]) => {
+      if (count <= 0) return;
+      const sh = (count / TOTAL) * maxH;
+      const sx = x(from);
+      const sw = x(to) - sx;
+      stepShapes.push(`<rect x="${sx.toFixed(2)}" y="${(floorY - sh).toFixed(2)}" width="${sw.toFixed(2)}" height="${sh.toFixed(2)}"
+        fill="${step}" shape-rendering="crispEdges"/>`);
+    });
+    parts.push(`<g clip-path="url(#${clipId})">${stepShapes.join('')}</g>`);
+
+    // The count rides in the tallest segment wide and tall enough to hold it.
+    day.steps.forEach(([from, to, count]) => {
+      if (labelled || count !== peak) return;
+      const sh = (count / TOTAL) * maxH;
+      const sx = x(from);
+      const sw = x(to) - sx;
+      if (sw < 32 || sh < 12) return;
+      labelled = true;
+      parts.push(`<text x="${(sx + sw / 2).toFixed(2)}" y="${(floorY - sh / 2 + 3.4).toFixed(2)}"
+        text-anchor="middle" font-size="8.5" font-weight="700" fill="#ffffff"
+        font-family="'Schibsted Grotesk',system-ui">${count}/${TOTAL}</text>`);
+    });
+
+    // The offer's edge sits ON TOP of the steps, so its shape survives.
+    if (variant === 'picker') {
+      parts.push(`<rect x="${wx.toFixed(2)}" y="${barTop}" width="${ww.toFixed(2)}" height="${BAR_H}" rx="${r}"
+        fill="none" stroke="var(--window-line)" stroke-width="1"/>`);
+    } else if (variant === 'rail') {
+      // Just the extent: a baseline the width of the offer, with two short
+      // end marks. Enough to say how far the offer reaches, quiet enough not
+      // to imitate a control.
+      parts.push(`<line x1="${wx.toFixed(2)}" y1="${floorY + 0.5}" x2="${(wx + ww).toFixed(2)}" y2="${floorY + 0.5}"
+        stroke="var(--window-line)" stroke-width="1" shape-rendering="crispEdges"/>`);
+      [wx, wx + ww].forEach((ex) => {
+        parts.push(`<line x1="${ex.toFixed(2)}" y1="${(floorY - 5).toFixed(2)}" x2="${ex.toFixed(2)}" y2="${(floorY + 1).toFixed(2)}"
+          stroke="var(--window-line)" stroke-width="1" shape-rendering="crispEdges"/>`);
+      });
+    }
+
+    // ---- fanned out person rows -----------------------------------------
+    if (people) {
+      day.people.forEach((person, i) => {
+        const py = people.top + i * (PERSON_H + PERSON_GAP);
+        parts.push(`<text x="0" y="${py + PERSON_H - 2.5}" font-size="9.5"
+          font-weight="${person.name === 'Du' ? 700 : 500}" fill="${person.name === 'Du' ? ink : muted}"
+          font-family="'Schibsted Grotesk',system-ui">${person.name}</text>`);
+        parts.push(`<rect x="${plotX}" y="${py}" width="${plotW}" height="${PERSON_H}" rx="${PERSON_H / 2}"
+          fill="${track}"/>`);
+        if (person.spans.length === 0) {
+          parts.push(`<text x="${(x(day.from) + 6).toFixed(2)}" y="${py + PERSON_H - 3.2}" font-size="8.5"
+            fill="${muted}" font-family="'Schibsted Grotesk',system-ui">kann nicht</text>`);
+          return;
+        }
+        person.spans.forEach(([from, to]) => {
+          parts.push(`<rect x="${x(from).toFixed(2)}" y="${py}" width="${(x(to) - x(from)).toFixed(2)}" height="${PERSON_H}" rx="${PERSON_H / 2}"
+            fill="var(--person)" opacity="${person.name === 'Du' ? 0.92 : 0.55}"/>`);
+        });
+      });
+    }
+  });
+
+  return `<svg class="chart" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img"
+    aria-label="Verfügbarkeit je Vorschlagstag auf einer gemeinsamen Zeitachse">${parts.join('')}</svg>`;
+}
+
+function personIcon(color) {
+  return `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="1.7"
+    stroke-linecap="round"><circle cx="12" cy="8" r="3.4"/><path d="M5 20c0-3.6 3.1-5.6 7-5.6s7 2 7 5.6"/></svg>`;
+}
+function pinIcon(color) {
+  return `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="1.7"
+    stroke-linecap="round"><path d="M12 21s7-5.3 7-11a7 7 0 1 0-14 0c0 5.7 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg>`;
+}
+
+function compareRow({ caption, variant, dark }) {
+  return `<figure class="frame">
+    <figcaption>${caption}</figcaption>
+    <div class="sheet${dark ? ' dark' : ''}">
+      <div class="panel">
+        <div class="summary">
+          <span class="label">Beste gemeinsame Zeit</span>
+          <span class="dot">·</span>
+          <span class="value">Fr 21.8. · 17:00–21:00</span>
+        </div>
+        ${buildChart({ width: 358, expandedIndex: -1, dark, variant })}
+      </div>
+    </div>
+  </figure>`;
+}
+
+function frame({ caption, dark, expandedIndex, summary }) {
+  const width = 358;
+  return `<figure class="frame">
+    <figcaption>${caption}</figcaption>
+    <div class="sheet${dark ? ' dark' : ''}">
+      <div class="sheet-title">Grillen im Park</div>
+      <div class="meta">
+        <div class="meta-row">${personIcon('var(--person)')}<span>von Max Krüger</span></div>
+        <div class="meta-row">${pinIcon('var(--person)')}<span>Volkspark am Weinberg</span></div>
+      </div>
+      <div class="panel">
+        <div class="summary">
+          <span class="label">Beste gemeinsame Zeit</span>
+          <span class="dot">·</span>
+          <span class="value">${summary}</span>
+        </div>
+        ${buildChart({ width, expandedIndex, dark })}
+      </div>
+    </div>
+  </figure>`;
+}
+
+document.getElementById('compare').innerHTML = [
+  compareRow({ caption: 'A · Picker-Pille (bisher)', variant: 'picker', dark: false }),
+  compareRow({ caption: 'B · nur Grundlinie', variant: 'rail', dark: false }),
+  compareRow({ caption: 'C · nur Stufen', variant: 'bare', dark: false }),
+].join('');
+
+document.getElementById('board').innerHTML = [
+  frame({ caption: 'Eingeklappt · hell', dark: false, expandedIndex: -1, summary: 'Fr 21.8. · 17:00–21:00' }),
+  frame({ caption: 'Aufgefächert (Fr) · hell', dark: false, expandedIndex: 0, summary: 'Fr 21.8. · 17:00–21:00' }),
+  frame({ caption: 'Eingeklappt · dunkel', dark: true, expandedIndex: -1, summary: 'Fr 21.8. · 17:00–21:00' }),
+  frame({ caption: 'Aufgefächert (So) · dunkel', dark: true, expandedIndex: 2, summary: 'Fr 21.8. · 17:00–21:00' }),
+].join('');
+</script>
+</body>
+</html>

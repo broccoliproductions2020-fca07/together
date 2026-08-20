@@ -42,6 +42,7 @@ const {
   aggregateWindow,
   availabilityLevel,
   bestSlot,
+  bestSlots,
   memberIntervals,
   rankWindows,
   AVAILABILITY_LEVELS,
@@ -231,18 +232,40 @@ check('a tie on count and length goes to the earlier slot', () => {
   assert.equal(result.best.startMs, Date.parse(at(21, 18)));
 });
 
-check('a run split by a third person stays one run', () => {
+check('a change in who can splits a lockable candidate', () => {
   const w = windowAt('w1', 21, 18, 23);
   // b and c together cover 18–23 at count 2 the whole way, but the switch
-  // between them introduces a boundary. The run must not be cut there.
+  // participant set changes, so they are two distinct lockable candidates.
   const result = aggregateWindow(w, [
     member('a', 'host', { w1: [{ startsAt: at(21, 18), endsAt: at(21, 23) }] }),
     member('b', 'member', { w1: [{ startsAt: at(21, 18), endsAt: at(21, 21) }] }),
     member('c', 'member', { w1: [{ startsAt: at(21, 21), endsAt: at(21, 23) }] }),
   ]);
   assert.equal(result.best.count, 2);
-  assert.equal(minutes(result.best.endMs - result.best.startMs), 300);
-  assert.deepEqual(result.best.uids, ['a'], 'only the people present throughout');
+  assert.equal(minutes(result.best.endMs - result.best.startMs), 180);
+  assert.deepEqual(result.best.uids, ['a', 'b']);
+});
+
+check('returns every exact tie for the overview summary', () => {
+  const w = windowAt('w1', 21, 18, 23);
+  const result = aggregateWindow(w, [
+    member('a', 'host', { w1: [{ startsAt: at(21, 18), endsAt: at(21, 23) }] }),
+    member('b', 'member', {
+      w1: [
+        { startsAt: at(21, 18), endsAt: at(21, 19) },
+        { startsAt: at(21, 22), endsAt: at(21, 23) },
+      ],
+    }),
+  ]);
+  const candidates = bestSlots(result.segments, result.totalCount);
+  assert.equal(candidates.length, 2);
+  assert.deepEqual(
+    candidates.map((candidate) => [candidate.startMs, candidate.endMs]),
+    [
+      [Date.parse(at(21, 18)), Date.parse(at(21, 19))],
+      [Date.parse(at(21, 22)), Date.parse(at(21, 23))],
+    ],
+  );
 });
 
 check(`a peak under ${MIN_SLOT_MINUTES} min loses to a longer, lower run`, () => {

@@ -15,6 +15,12 @@ The core loop: set a mode (Open / Soon / Now) → friends nearby see it → some
 - Update or remove a comment as soon as its statement is no longer true.
 - Put longer product or architectural context in the relevant focused documentation, not inline in implementation files.
 
+## Project-local skills
+
+- The project-local `frontend-design` and `ui-ux-pro-max` skills are reserved **exclusively** for an explicitly requested landing-page build or landing-page implementation.
+- Do not use, apply, or silently draw guidance from either skill for the native Together app: this includes app UI, UX reviews, mockups, time planning, pickers, activity screens, and all other product work.
+- This restriction applies to every agent working in this repository, including Codex and Claude, and remains in force in future chats unless the user explicitly changes it.
+
 ---
 
 ## Backend Strategy & Hard Constraints
@@ -877,6 +883,22 @@ kein fixes Datum, bis der Host einen Slot festzurrt.
   eine Stunde in jeder Zeile anders breit und der Vergleich, den der Stapel geradezu
   einlädt, wäre falsch. Der leere Platz ist Information (man SIEHT, dass Samstag ein
   Nachmittag ist), keine Verschwendung.
+- **Die Übersicht ist eine Availability-MATRIX, kein deaktivierter Picker**
+  (`TimeMatchingCard`). Sie teilt mit `TimeRangePicker` nur die Zeit-zu-Pixel-Rechnung.
+  Eine Read-only-Fläche, die den Körper eines Bedienelements ausleiht (Schiene, Pille,
+  Griffe), liest sich als „Eingabefeld, das du nicht anfassen darfst" — das hier liest
+  sich als Diagramm, weil es eines ist. **Nur Amber `#E0A23E`**, kein Grün, kein
+  Violett: Höhe ist `verfügbar / geantwortet`, die Deckkraft trägt dieselbe Zahl ein
+  zweites Mal, damit Farbe nie der einzige Kanal ist. Kanten hart, keine Verläufe.
+  Alles außerhalb des Peaks behält seine echte Höhe und bleibt amber, nur 18 % durch-
+  sichtiger — **ausgrauen wäre eine andere und falsche Aussage** („nicht verfügbar"
+  oder „außerhalb des Vorschlags"). Zeilenhöhe sinkt mit der Zahl der Vorschlagstage
+  (48 → 32 dp, `dayRowHeight`) und hört bei 32 auf, weil darunter der Höhenunterschied
+  verschwindet; die Tastfläche wird per `hitSlop` auf 44 dp gehalten.
+- **Kein Rahmen um den Vorschlag.** `createTimePlan` beantwortet für den Host das
+  GANZE Fenster, die Kurve fällt innerhalb eines Vorschlags also nie auf null und
+  deckt seine Breite bereits exakt ab. Ein gezeichneter Rahmen würde nur wiederholen,
+  was die Form zeigt.
 - **Farben: drei, je eine Aufgabe** (`planningTheme.ts`). Violett = Identität („das ist
   eine Planungsrunde", dasselbe Violett wie `GROUP_CHAT_ACCENT`). **Amber = das
   BEDIENELEMENT** — die Schiene des Hosts und dein eigener Balken darin, in der

@@ -1,6 +1,6 @@
 export { TimePlanContent } from './components/TimePlanContent';
 export { PlanningOfferFields } from './components/PlanningOfferFields';
-export { TimePlanOverview } from './components/TimePlanOverview';
+export { TimeMatchingCard } from './components/TimeMatchingCard';
 export { timePlanningService } from './services/timePlanningService';
 export { useInvitedTimePlans } from './useInvitedTimePlans';
 export { timePlansToMapMarkers } from './utils/planMarkers';
