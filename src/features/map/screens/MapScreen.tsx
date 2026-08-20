@@ -38,7 +38,9 @@ import { claimNotificationResponse } from '@/features/notifications/notification
 import {
   TimePlanningSheet,
   timePlanCreateInputFromDraft,
+  timePlansToMapMarkers,
   timePlanningService,
+  useInvitedTimePlans,
   type TimePlanCreation,
   type TimePlanOfferGroup,
 } from '@/features/time-planning';
@@ -291,6 +293,14 @@ export function MapScreen({
   const nearbyActionRevisionRef = useRef(0);
   const [postfachVisible, setPostfachVisible] = useState(false);
   const [timePlanId, setTimePlanId] = useState<string>();
+  // Only while the map surface is actually visible — same rule friend presence
+  // follows. A round is map furniture and has no business listening from the
+  // calendar or a Heimweg focus.
+  const invitedTimePlans = useInvitedTimePlans(active);
+  const planningMarkers = useMemo(
+    () => timePlansToMapMarkers(invitedTimePlans),
+    [invitedTimePlans],
+  );
   const [timePlanPromptOnOpen, setTimePlanPromptOnOpen] = useState(false);
   // The open chat carries its resolved colour, so the same room looks the same
   // whether it was opened from the Postfach, a push, or the marker sheet.
@@ -1944,7 +1954,15 @@ export function MapScreen({
           setSelection(clusterToSelection(cluster));
         }}
         openPresenceMarkers={openPresenceMarkers}
+        planningMarkers={planningMarkers}
         onMarkerPress={(marker) => {
+          // A round is not an activity: it has no participants and no time, so
+          // `markerToSelection` would build a detail sheet full of blanks.
+          if (marker.planning) {
+            setTimePlanPromptOnOpen(false);
+            setTimePlanId(marker.id);
+            return;
+          }
           if (mapLocationPicker.active || heimwegFocusActive) return;
           placeSelectionRequestRef.current += 1;
           // Open presence is a STATUS, not a plan: it opens the Offen-Fenster on

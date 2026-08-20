@@ -80,6 +80,14 @@ export interface MapMarker {
   friendId?: string;
   /** Creator-chosen category → icon badge top-right on the marker. */
   category?: ActivityCategory;
+  /**
+   * A round still looking for a time (Terminfindung), not a fixed plan.
+   *
+   * The ring is a clock, so this marker has none — that absence IS the
+   * statement. Since the ring is also the only thing carrying the mode colour,
+   * the colour moves into the name badge instead, in the app's planning violet.
+   */
+  planning?: boolean;
   /** ISO 8601 — drives the "soon" → "now" auto-transition, if set. */
   startsAt?: string;
   /** ISO 8601 — with startsAt, drives the depleting countdown ring on `now`. */

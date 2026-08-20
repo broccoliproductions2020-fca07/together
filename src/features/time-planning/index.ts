@@ -2,6 +2,8 @@ export { TimePlanningSheet } from './components/TimePlanningSheet';
 export { PlanningOfferFields } from './components/PlanningOfferFields';
 export { TimePlanOverview } from './components/TimePlanOverview';
 export { timePlanningService } from './services/timePlanningService';
+export { useInvitedTimePlans } from './useInvitedTimePlans';
+export { timePlansToMapMarkers } from './utils/planMarkers';
 export { AVAILABLE_COLOR, FRAME_COLOR, PLANNING_COLOR, availabilityColor } from './planningTheme';
 export { normalizeIntervals, PLANNING_SNAP_MINUTES } from './utils/intervals';
 export {

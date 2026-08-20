@@ -4,160 +4,316 @@
       "collectionGroup": "blocks",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "blockerUid", "order": "ASCENDING" },
-        { "fieldPath": "blockedUid", "order": "ASCENDING" }
+        {
+          "fieldPath": "blockerUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "blockedUid",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "blocks",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "blockedUid", "order": "ASCENDING" },
-        { "fieldPath": "blockerUid", "order": "ASCENDING" }
+        {
+          "fieldPath": "blockedUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "blockerUid",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "chats",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "memberIds", "arrayConfig": "CONTAINS" },
-        { "fieldPath": "expireAt", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "memberIds",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "expireAt",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "chats",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "creatorUid", "order": "ASCENDING" },
-        { "fieldPath": "type", "order": "ASCENDING" },
-        { "fieldPath": "expireAt", "order": "ASCENDING" }
+        {
+          "fieldPath": "creatorUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "type",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "expireAt",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "circles",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "memberIds", "arrayConfig": "CONTAINS" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "memberIds",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "activities",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "audienceUids", "arrayConfig": "CONTAINS" },
-        { "fieldPath": "status", "order": "ASCENDING" },
-        { "fieldPath": "visibleUntil", "order": "ASCENDING" }
+        {
+          "fieldPath": "audienceUids",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "visibleUntil",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "activities",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "status", "order": "ASCENDING" },
-        { "fieldPath": "startsAt", "order": "ASCENDING" }
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "startsAt",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "activities",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "status", "order": "ASCENDING" },
-        { "fieldPath": "visibleUntil", "order": "ASCENDING" }
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "visibleUntil",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "activities",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "hostId", "order": "ASCENDING" },
-        { "fieldPath": "status", "order": "ASCENDING" }
+        {
+          "fieldPath": "hostId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "activities",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "participantUids", "arrayConfig": "CONTAINS" },
-        { "fieldPath": "status", "order": "ASCENDING" }
+        {
+          "fieldPath": "participantUids",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "friendships",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "participantUids", "arrayConfig": "CONTAINS" },
-        { "fieldPath": "status", "order": "ASCENDING" }
+        {
+          "fieldPath": "participantUids",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "friendSearch",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "discoverable", "order": "ASCENDING" },
-        { "fieldPath": "searchPrefixes", "arrayConfig": "CONTAINS" }
+        {
+          "fieldPath": "discoverable",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "searchPrefixes",
+          "arrayConfig": "CONTAINS"
+        }
       ]
     },
     {
       "collectionGroup": "presence",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "audienceUids", "arrayConfig": "CONTAINS" },
-        { "fieldPath": "expireAt", "order": "ASCENDING" }
+        {
+          "fieldPath": "audienceUids",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "expireAt",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "groupOpenings",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "audienceUids", "arrayConfig": "CONTAINS" },
-        { "fieldPath": "status", "order": "ASCENDING" },
-        { "fieldPath": "expireAt", "order": "ASCENDING" }
+        {
+          "fieldPath": "audienceUids",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "expireAt",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "groupOpenings",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "audienceUids", "arrayConfig": "CONTAINS" },
-        { "fieldPath": "kind", "order": "ASCENDING" },
-        { "fieldPath": "status", "order": "ASCENDING" },
-        { "fieldPath": "expireAt", "order": "ASCENDING" }
+        {
+          "fieldPath": "audienceUids",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "kind",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "expireAt",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "messages",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "expireAt", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "expireAt",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "messages",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "kind", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "kind",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "notifications",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "recipientUid", "order": "ASCENDING" },
-        { "fieldPath": "expireAt", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "recipientUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "expireAt",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "circleInvites",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "inviteeUid", "order": "ASCENDING" },
-        { "fieldPath": "status", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "inviteeUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "timePlans",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "audienceUids",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "expireAt",
+          "order": "ASCENDING"
+        }
       ]
     }
   ],
@@ -210,7 +366,12 @@
       "collectionGroup": "presence",
       "fieldPath": "expireAt",
       "ttl": true,
-      "indexes": [{ "queryScope": "COLLECTION", "order": "ASCENDING" }]
+      "indexes": [
+        {
+          "queryScope": "COLLECTION",
+          "order": "ASCENDING"
+        }
+      ]
     },
     {
       "collectionGroup": "presence",
@@ -315,7 +476,12 @@
       "collectionGroup": "groupOpenings",
       "fieldPath": "expireAt",
       "ttl": true,
-      "indexes": [{ "queryScope": "COLLECTION", "order": "ASCENDING" }]
+      "indexes": [
+        {
+          "queryScope": "COLLECTION",
+          "order": "ASCENDING"
+        }
+      ]
     },
     {
       "collectionGroup": "spontaneousRoundInvites",
@@ -457,12 +623,22 @@
       "collectionGroup": "socialSessions",
       "fieldPath": "expiresAt",
       "ttl": true,
-      "indexes": [{ "queryScope": "COLLECTION", "order": "ASCENDING" }]
+      "indexes": [
+        {
+          "queryScope": "COLLECTION",
+          "order": "ASCENDING"
+        }
+      ]
     },
     {
       "collectionGroup": "users",
       "fieldPath": "pushTokens",
-      "indexes": [{ "queryScope": "COLLECTION", "arrayConfig": "CONTAINS" }]
+      "indexes": [
+        {
+          "queryScope": "COLLECTION",
+          "arrayConfig": "CONTAINS"
+        }
+      ]
     },
     {
       "collectionGroup": "friendships",

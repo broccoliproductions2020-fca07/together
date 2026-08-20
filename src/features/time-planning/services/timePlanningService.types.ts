@@ -42,6 +42,14 @@ export interface TimePlanningService {
     revision: number,
     responsesByWindow: Record<string, TimePlanInterval[]>,
   ): Promise<SyncRunResult>;
+  /**
+   * The rounds this person is in — joined OR merely invited — so a
+   * Terminfindung can show on the map before anyone has answered.
+   *
+   * ONE listener, bounded, and only ever `collecting`: a locked round is an
+   * Activity from then on and the activity feed already carries it.
+   */
+  subscribeInvitedTimePlans(actor: TimePlanActor, cb: (plans: TimePlan[]) => void): Unsubscribe;
   subscribeTimePlan(
     actor: TimePlanActor,
     planId: string,

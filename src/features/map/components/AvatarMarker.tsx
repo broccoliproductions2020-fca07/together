@@ -18,6 +18,8 @@ export interface AvatarMarkerProps {
   /** Text under the marker — activity title (concrete) or friend name (presence). */
   label?: string;
   progress: SharedValue<number>;
+  /** A round still looking for a time: no ring, violet name badge. */
+  planning?: boolean;
   /** Keep the label visible even when zoomed out (selected / joined). */
   titlePriority?: boolean;
   unreadCount?: number;
@@ -42,6 +44,7 @@ export function AvatarMarker({
   avatarUrl,
   avatars,
   label,
+  planning,
   progress,
   titlePriority = false,
   unreadCount = 0,
@@ -72,6 +75,7 @@ export function AvatarMarker({
       remainingFraction={remainingFraction}
       selected={selected}
       title={label ?? displayName}
+      planning={planning}
       titlePriority={titlePriority || selected}
       journeyUnderwayCount={journeyUnderwayCount}
     />

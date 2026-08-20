@@ -1,11 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import { memo, useMemo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import Animated, { FadeIn, FadeOut, LinearTransition, useReducedMotion } from 'react-native-reanimated';
 
 import { TimeRangePicker, type TimeRangeLayer } from '@/shared/components/time-range-picker';
 import { FONT, TEXT_CAPPED, TYPE } from '@/shared/theme';
 
-import { AVAILABILITY_RAMP, AVAILABLE_COLOR, UNAVAILABLE_COLOR } from '../planningTheme';
+import { AVAILABILITY_RAMP, AVAILABLE_COLOR } from '../planningTheme';
 import type { TimePlanInterval, TimePlanWindow } from '../types';
 import { availabilityLevel, type WindowAvailability } from '../utils/availability';
 import { PLANNING_SNAP_MINUTES } from '../utils/intervals';
@@ -99,6 +100,7 @@ export const TimePlanAnswerCard = memo(function TimePlanAnswerCard({
   onAnswer: (next: DayAnswer) => void;
   onInterval: (next: TimePlanInterval) => void;
 }) {
+  const reducedMotion = useReducedMotion();
   const windowStart = useMemo(() => new Date(window.startsAt), [window.startsAt]);
   const windowEnd = useMemo(() => new Date(window.endsAt), [window.endsAt]);
   const label = dayLabel(window.startsAt);
@@ -119,14 +121,16 @@ export const TimePlanAnswerCard = memo(function TimePlanAnswerCard({
     [interval.endsAt, interval.startsAt],
   );
 
-  const startMs = Date.parse(interval.startsAt);
-  const endMs = Date.parse(interval.endsAt);
-  const whole =
-    startMs <= Date.parse(window.startsAt) && endMs >= Date.parse(window.endsAt);
   const others = availability && availability.totalCount > 0 ? availability : null;
 
   return (
-    <View style={[styles.card, answer === 'no' ? styles.cardMuted : null]}>
+    // The card changes height when a day is declined, and that height IS the
+    // feedback — the screen visibly gets shorter as the answer fills in. An
+    // instant jump reads as a glitch, so the collapse is animated.
+    <Animated.View
+      layout={reducedMotion ? undefined : LinearTransition.duration(220)}
+      style={[styles.card, answer === 'no' ? styles.cardMuted : null]}
+    >
       <View style={styles.header}>
         <Text
           numberOfLines={1}
@@ -147,10 +151,12 @@ export const TimePlanAnswerCard = memo(function TimePlanAnswerCard({
         <AnswerSwitch value={answer} onChange={onAnswer} label={label} />
       </View>
 
-      {answer === 'no' ? (
-        <Text style={styles.declined}>Passt dir nicht.</Text>
-      ) : (
-        <View style={styles.body}>
+      {answer === 'no' ? null : (
+        <Animated.View
+          entering={reducedMotion ? undefined : FadeIn.duration(160)}
+          exiting={reducedMotion ? undefined : FadeOut.duration(120)}
+          style={styles.body}
+        >
           {others ? (
             <Text style={styles.others}>
               {others.peakCount} von {others.totalCount} können hier schon
@@ -183,18 +189,9 @@ export const TimePlanAnswerCard = memo(function TimePlanAnswerCard({
             accessibilityLabelStart={`${label}: Beginn deiner Zeit`}
             accessibilityLabelEnd={`${label}: Ende deiner Zeit`}
           />
-          {answer === 'yes' ? (
-            <Text style={styles.summary}>
-              {whole
-                ? 'Passt · ganzer Zeitraum'
-                : `Passt · ${clock(startMs)} – ${clock(endMs)}`}
-            </Text>
-          ) : (
-            <Text style={styles.hint}>Noch nicht beantwortet</Text>
-          )}
-        </View>
+        </Animated.View>
       )}
-    </View>
+    </Animated.View>
   );
 });
 
@@ -215,9 +212,6 @@ const styles = StyleSheet.create({
   window: { color: 'rgba(244,245,247,0.55)', flex: 1, fontFamily: FONT.medium, fontSize: TYPE.caption.fontSize },
   body: { gap: 8 },
   others: { color: 'rgba(244,245,247,0.55)', fontFamily: FONT.medium, fontSize: TYPE.micro.fontSize },
-  summary: { color: AVAILABLE_COLOR, fontFamily: FONT.semibold, fontSize: TYPE.caption.fontSize },
-  hint: { color: 'rgba(244,245,247,0.42)', fontFamily: FONT.medium, fontSize: TYPE.caption.fontSize },
-  declined: { color: UNAVAILABLE_COLOR, fontFamily: FONT.medium, fontSize: TYPE.caption.fontSize },
   switchTrack: {
     alignItems: 'center',
     backgroundColor: 'rgba(255,255,255,0.06)',

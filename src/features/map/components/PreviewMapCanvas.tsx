@@ -99,6 +99,12 @@ export interface PreviewMapCanvasProps {
    * sharing off removes the marker.
    */
   openPresenceMarkers?: MapMarker[];
+  /**
+   * Rounds still looking for a time. A separate prop for the same reason
+   * presence is: a Terminfindung is NOT an activity, it has no fixed time and
+   * no ring, and keeping it out of `mapMarkers` makes that impossible to blur.
+   */
+  planningMarkers?: MapMarker[];
   onClusterPress?: (cluster: MarkerCluster) => void;
   onPlacePress?: (place: MapPlaceSelection) => void;
   onCanvasPress?: () => void;

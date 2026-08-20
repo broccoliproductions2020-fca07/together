@@ -299,17 +299,19 @@ service cloud.firestore {
     // TWO tiers, because joining IS answering and the answer surface has to
     // open BEFORE anyone is a member. An invitee may read the ROUND — title,
     // place and the proposed windows, i.e. exactly what they need in order to
-    // answer — and nothing else. Availability stays members-only: someone who
-    // has not shared their own times does not get to read everyone else's.
-    // The invite id is deterministic (`{planId}_{uid}`, written by
-    // createTimePlan), so this costs one lookup and still lets nobody
-    // enumerate who else was asked.
+    // answer, and what puts the round on their map — and nothing else.
+    // Availability stays members-only: someone who has not shared their own
+    // times does not get to read everyone else's.
+    //
+    // `audienceUids` rather than a lookup in `timePlanInvites`: a rule that
+    // reads another document cannot back a QUERY without one extra read per
+    // result, so listing your own rounds would have been impossible. Same
+    // denormalisation an Activity's audience already uses. The invitations
+    // themselves stay unreadable, so nobody can enumerate who else was asked.
     match /timePlans/{planId} {
-      function invited() {
-        return exists(/databases/$(database)/documents/timePlanInvites/$(planId + '_' + request.auth.uid));
-      }
       allow read: if signedIn()
-        && (request.auth.uid in resource.data.memberUids || invited());
+        && (request.auth.uid in resource.data.memberUids
+            || request.auth.uid in resource.data.audienceUids);
       allow create, update, delete: if false;
 
       match /timePlanMembers/{uid} {

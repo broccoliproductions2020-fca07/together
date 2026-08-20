@@ -1418,6 +1418,11 @@ exports.createTimePlan = onCall(CALLABLE_OPTS, async (request) => {
       hostId: uid,
       hostName: displayName,
       hostInitials: initials,
+      // Denormalised exactly like an Activity's audience, and for the same
+      // reason: without it a client cannot ask "which rounds am I in?" at all.
+      // The invitations themselves stay server-private, so this is the only
+      // thing that makes an invited round visible to the person invited.
+      audienceUids: [uid, ...inviteeUids],
       title,
       ...(place ? { place } : {}),
       ...(category ? { category } : {}),

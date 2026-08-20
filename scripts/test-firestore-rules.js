@@ -161,6 +161,7 @@ async function main() {
     sourceWindows: [],
     revision: 1,
     status: 'collecting',
+    audienceUids: [aUid],
     memberUids: [aUid],
     createdAt: admin.firestore.Timestamp.now(),
     updatedAt: admin.firestore.Timestamp.now(),
@@ -197,14 +198,11 @@ async function main() {
     }),
   );
   // The answer surface has to open BEFORE anyone is a member, so an invitee
-  // gets a narrower tier: the round itself, never anyone's availability.
-  await adminDb.doc(`timePlanInvites/private-plan_${bUid}`).set({
-    planId: 'private-plan',
-    inviteeUid: bUid,
-    status: 'pending',
-    createdAt: admin.firestore.Timestamp.now(),
-    expireAt: adminFuture,
-  });
+  // gets a narrower tier: the round itself, never anyone's availability. The
+  // audience is denormalised onto the plan because a rule that reads another
+  // document cannot back a QUERY — and listing your own rounds is what puts
+  // them on the map.
+  await adminDb.doc('timePlans/private-plan').update({ audienceUids: [aUid, bUid] });
   await allowed('invited user can read the round they were asked to answer', () =>
     getDoc(doc(b.db, 'timePlans', 'private-plan')),
   );

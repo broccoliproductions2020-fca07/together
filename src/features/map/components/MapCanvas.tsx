@@ -615,7 +615,11 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
     // one z-order and one capture cache — but it is appended, never merged into
     // the activity feed, and it drops out entirely under a Heimweg/journey focus
     // just like the activities do.
-    [...mapMarkers, ...(focusActivityId ? [] : (props.openPresenceMarkers ?? []))]
+    [
+      ...mapMarkers,
+      ...(focusActivityId ? [] : (props.openPresenceMarkers ?? [])),
+      ...(focusActivityId ? [] : (props.planningMarkers ?? [])),
+    ]
       .filter(
         (marker) =>
           (!marker.maxParticipants ||
@@ -660,7 +664,11 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
         const joined = isJoined(marker.id);
         const selected = selectedMarker;
         const unreadCount = joined ? getUnreadCount(marker.id) : 0;
-        const bucket = countdownBucket(marker.mode, marker.startsAt, marker.endsAt);
+        // The ring is a clock. A round with no fixed time has no clock, so it
+        // never gets one — not even the plain mode ring.
+        const bucket = marker.planning
+          ? undefined
+          : countdownBucket(marker.mode, marker.startsAt, marker.endsAt);
         const display = participantDisplay(
           marker.avatars,
           marker.participantCount,
@@ -679,7 +687,7 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
           .join(',');
         descriptors.push({
           id: marker.id,
-          captureKey: `${ACTIVITY_MARKER_VISUAL_VERSION}:avatar:${marker.mode}:${marker.avatarUrl ?? marker.initials}:${marker.displayName}:${avatarKey}:${joined}:${unreadCount}:${display.count}:${marker.maxParticipants ?? 0}:${marker.category ?? ''}:${bucket ?? ''}:${props.journeyUnderwayCounts?.[marker.id] ?? 0}:${selected}:${marker.title ?? ''}:${marker.friendId ?? ''}`,
+          captureKey: `${ACTIVITY_MARKER_VISUAL_VERSION}:avatar:${marker.mode}:${marker.avatarUrl ?? marker.initials}:${marker.displayName}:${avatarKey}:${joined}:${unreadCount}:${display.count}:${marker.maxParticipants ?? 0}:${marker.category ?? ''}:${bucket ?? ''}:${marker.planning ? 'plan' : ''}:${props.journeyUnderwayCounts?.[marker.id] ?? 0}:${selected}:${marker.title ?? ''}:${marker.friendId ?? ''}`,
           coordinate:
             focusActivityId === marker.id && props.journeyTargetCoordinate
               ? props.journeyTargetCoordinate
@@ -697,6 +705,7 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
               progress={zoomProgress}
               titlePriority={selected || joined}
               mode={marker.mode}
+              planning={marker.planning}
               unreadCount={unreadCount}
               participantCount={display.count}
               maxParticipants={marker.maxParticipants}

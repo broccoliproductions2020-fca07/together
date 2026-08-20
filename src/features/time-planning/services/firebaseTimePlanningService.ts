@@ -5,6 +5,7 @@ import {
   onSnapshot,
   query,
   Timestamp,
+  where,
   type DocumentData,
 } from '@react-native-firebase/firestore';
 import { httpsCallable } from '@react-native-firebase/functions';
@@ -157,6 +158,21 @@ export const firebaseTimePlanningService: TimePlanningService = {
       await discardSyncOperation(actor.uid, `timePlan.response:${planId}`);
     }
     return result;
+  },
+
+  subscribeInvitedTimePlans(actor, cb) {
+    const plans = query(
+      collection(getFirebaseDb(), 'timePlans'),
+      where('audienceUids', 'array-contains', actor.uid),
+      where('status', '==', 'collecting'),
+      where('expireAt', '>', Timestamp.fromMillis(Date.now())),
+      limit(20),
+    );
+    return onSnapshot(
+      plans,
+      (snapshot) => cb(snapshot.docs.map((item) => planFromDoc(item.id, item.data()))),
+      () => cb([]),
+    );
   },
 
   subscribeTimePlan(_actor, planId, cb) {

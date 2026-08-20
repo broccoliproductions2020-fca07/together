@@ -22,6 +22,16 @@ const DAY = 24 * HOUR;
 const RETENTION_MS = 14 * DAY;
 const STEP = 5 * 60 * 1000;
 
+/** Near the seed roster's centre, so the locked Activity lands a pin you can
+ * actually see. Without a place the resulting Activity has no coordinate and
+ * therefore no marker at all — which made the payoff of locking invisible. */
+const PLACE = {
+  label: 'Volkspark am Weinberg',
+  latitude: 52.5232,
+  longitude: 13.4062,
+  visibility: 'pin',
+};
+
 const now = Date.now();
 const ts = (ms) => admin.firestore.Timestamp.fromMillis(ms);
 const iso = (ms) => new Date(ms).toISOString();
@@ -118,9 +128,13 @@ async function main() {
     hostInitials: max.initials,
     title: 'Grillen im Park',
     category: 'essen',
+    place: PLACE,
     sourceWindows: invitedWindows,
     revision: 1,
     status: 'collecting',
+    // Same denormalisation createTimePlan writes: without it the client cannot
+    // ask which rounds it is in, so the marker never appears.
+    audienceUids: [max.uid, lisa.uid, jonas.uid, me.uid],
     memberUids: [max.uid, lisa.uid, jonas.uid],
     createdAt: ts(now - 2 * HOUR),
     updatedAt: ts(now - HOUR),
@@ -193,9 +207,11 @@ async function main() {
     hostName: me.displayName,
     hostInitials: me.initials,
     title: 'Brunch oder Kino',
+    place: { ...PLACE, label: 'Rosenthaler Platz', latitude: 52.5185, longitude: 13.4128 },
     sourceWindows: hostedWindows,
     revision: 1,
     status: 'collecting',
+    audienceUids: [me.uid, max.uid, lisa.uid, jonas.uid],
     memberUids: [me.uid, max.uid, lisa.uid, jonas.uid],
     createdAt: ts(now - 5 * HOUR),
     updatedAt: ts(now - 20 * 60 * 1000),

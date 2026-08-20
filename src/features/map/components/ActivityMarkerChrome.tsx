@@ -51,6 +51,10 @@ const FACE_SQUIRCLE_RADIUS = 13;
 
 // Mode ring / countdown geometry. One rounded rectangle follows the same
 // squircle radius at every width, including the fully unfolded row.
+/** The app's planning violet, repeated as a literal so the map does not have to
+ * depend on the chat feature that owns the token. */
+const PLANNING_TINT = '#7657A8';
+
 const RING_STROKE = 2.5;
 const RING_INNER_H = SHELL_H - RING_STROKE;
 
@@ -81,6 +85,9 @@ export interface ActivityMarkerChromeProps {
   title?: string;
   /** Show the title even at city zoom (selected / joined get priority). */
   titlePriority?: boolean;
+  /** A round still looking for a time: no ring at all, and the name badge
+   * carries the planning violet because nothing else can carry a colour. */
+  planning?: boolean;
   journeyUnderwayCount?: number;
 }
 
@@ -102,6 +109,7 @@ export function ActivityMarkerChrome({
   selected = false,
   title,
   titlePriority = false,
+  planning = false,
   journeyUnderwayCount = 0,
 }: ActivityMarkerChromeProps) {
   const modeStyle = markerModeStyles[mode];
@@ -179,7 +187,9 @@ export function ActivityMarkerChrome({
               width: widths[2] + 10,
             },
             glowStyle,
-            { backgroundColor: colorWithAlpha(modeStyle.color, 0.18) },
+            // The selection glow is the last place a mode colour could leak
+            // onto a round that has no mode.
+            { backgroundColor: colorWithAlpha(planning ? PLANNING_TINT : modeStyle.color, 0.18) },
           ]}
         />
       ) : null}
@@ -189,7 +199,10 @@ export function ActivityMarkerChrome({
         style={[
           styles.shell,
           shellStyle,
-          hasCountdown
+          // No ring means NO ring: not a faint one, not a neutral one. The
+          // absence is what says "no time fixed yet", and a decorative outline
+          // would blunt exactly that.
+          hasCountdown || planning
             ? null
             : {
                 borderColor: modeStyle.color,
@@ -237,11 +250,11 @@ export function ActivityMarkerChrome({
 
       {showTitle ? (
         <Animated.View pointerEvents="none" style={[styles.titleWrap, titleStyle]}>
-          <View style={styles.titlePill}>
+          <View style={[styles.titlePill, planning ? styles.titlePillPlanning : null]}>
             <Text
               numberOfLines={selected ? 2 : 1}
               ellipsizeMode="tail"
-              style={styles.titleText}
+              style={[styles.titleText, planning ? styles.titleTextPlanning : null]}
               {...TEXT_FIXED}
             >
               {title}
@@ -490,6 +503,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 9,
   },
   titleText: { color: INK, flexShrink: 1, fontSize: 11, fontWeight: '700' },
+  // Violet is the app's planning colour (GROUP_CHAT_ACCENT). Repeated here as a
+  // literal because the map must not depend on the chat feature.
+  titlePillPlanning: { backgroundColor: '#7657A8', borderColor: 'rgba(255,255,255,0.35)' },
+  titleTextPlanning: { color: '#FFFFFF' },
   journeyPill: {
     alignItems: 'center',
     backgroundColor: INK,
