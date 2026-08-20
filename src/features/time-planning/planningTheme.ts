@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 
-import { useThemeColors } from '@/features/theme';
+import { useThemeColors, useThemePreference } from '@/features/theme';
 import { SEMANTIC_COLOR } from '@/shared/utils/semanticColors';
 
 /**
@@ -83,17 +83,27 @@ export interface PlanningSurfaceColors {
 
 export function usePlanningColors(): PlanningSurfaceColors {
   const colors = useThemeColors();
+  const { resolvedScheme } = useThemePreference();
+  const dark = resolvedScheme === 'dark';
   return useMemo(
     () => ({
       text: colors.foreground,
       muted: colors.mutedForeground,
       faint: colors.border,
-      card: colors.secondary,
+      /**
+       * The matching card's ground must NOT be the app's warm `secondary`
+       * (#EFEAE1 in light). That sand is a near neighbour of the amber the
+       * chart is drawn in, so the low steps — a single person, two of five —
+       * sank into it and the whole block read as tinted. A neutral ground is
+       * what lets amber be data. Dark keeps `secondary`, which is a cool
+       * green-grey and separates from amber perfectly well.
+       */
+      card: dark ? colors.secondary : colors.card,
       cardBorder: colors.border,
       track: colors.background,
       handle: colors.foreground,
       onAccent: '#FFFFFF',
     }),
-    [colors],
+    [colors, dark],
   );
 }
