@@ -6,7 +6,7 @@ import Animated, { FadeIn, FadeOut, LinearTransition, useReducedMotion } from 'r
 import { TimeRangePicker, type TimeRangeLayer } from '@/shared/components/time-range-picker';
 import { FONT, TEXT_CAPPED, TYPE } from '@/shared/theme';
 
-import { AVAILABILITY_RAMP, AVAILABLE_COLOR, usePlanningColors } from '../planningTheme';
+import { AVAILABILITY_RAMP, AVAILABLE_COLOR, FRAME_COLOR, usePlanningColors } from '../planningTheme';
 import type { TimePlanInterval, TimePlanWindow } from '../types';
 import { availabilityLevel, type WindowAvailability } from '../utils/availability';
 import { PLANNING_SNAP_MINUTES } from '../utils/intervals';
@@ -172,7 +172,12 @@ export const TimePlanAnswerCard = memo(function TimePlanAnswerCard({
               stepMinutes={PLANNING_SNAP_MINUTES}
               minDurationMinutes={MIN_DURATION_MINUTES}
               layers={layers}
-              accent={AVAILABLE_COLOR}
+              // Amber, not green. Amber is the CONTROL — the host's rail and
+              // your bar inside it; green is the DATA behind it, what everyone
+              // else already said. Painting your own bar green put the thing
+              // you are setting in the same colour as the thing you are reading
+              // it against, and the two only separated by an outline.
+              accent={FRAME_COLOR}
               disabled={answer !== 'yes'}
               theme={{
                 container: { height: PICKER_HEIGHT, background: t.track, radius: 10 },

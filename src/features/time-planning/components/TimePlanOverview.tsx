@@ -7,6 +7,7 @@ import { FONT, TEXT_CAPPED, TYPE } from '@/shared/theme';
 
 import {
   AVAILABLE_COLOR,
+  FRAME_COLOR,
   PLANNING_COLOR,
   UNAVAILABLE_COLOR,
   usePlanningColors,
@@ -281,7 +282,11 @@ export const TimePlanOverview = memo(function TimePlanOverview({
                                 window={window}
                                 axis={axis}
                                 intervals={intervals}
-                                color={isSelf ? t.text : AVAILABLE_COLOR}
+                                // Your own row is amber for the same reason your
+                                // bar is: it is yours, not part of the group's
+                                // green data. It used to be near-black purely to
+                                // escape green-on-green, which was the symptom.
+                                color={isSelf ? FRAME_COLOR : AVAILABLE_COLOR}
                               />
                             ) : (
                               <Text style={[styles.personEmpty, { color: t.muted }]}>

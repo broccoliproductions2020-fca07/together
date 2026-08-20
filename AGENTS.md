@@ -878,10 +878,16 @@ kein fixes Datum, bis der Host einen Slot festzurrt.
   einlädt, wäre falsch. Der leere Platz ist Information (man SIEHT, dass Samstag ein
   Nachmittag ist), keine Verschwendung.
 - **Farben: drei, je eine Aufgabe** (`planningTheme.ts`). Violett = Identität („das ist
-  eine Planungsrunde", dasselbe Violett wie `GROUP_CHAT_ACCENT`), Amber = der Rahmen
-  des Hosts (nie Verfügbarkeit), Grün = Verfügbarkeit überall (eigener Balken,
-  Aggregat, Einzelzeilen). „Alle können" wird über die **Form** markiert (kräftiger
-  Rahmen + Wort), nie über eine zweite Farbstufe.
+  eine Planungsrunde", dasselbe Violett wie `GROUP_CHAT_ACCENT`). **Amber = das
+  BEDIENELEMENT** — die Schiene des Hosts und dein eigener Balken darin, in der
+  Übersicht auch deine eigene Zeile. **Grün = die DATEN** — was die anderen
+  geantwortet haben, als Aggregat und als Einzelzeilen. Ein früherer Entwurf machte
+  auch den eigenen Balken grün („eine Bedeutung pro Farbe"); das legte die Sache, die
+  man EINSTELLT, in dieselbe Farbe wie die, gegen die man sie liest, getrennt nur
+  durch einen Umriss — und zwang die Zeile „Du" beim Auffächern auf Fast-Schwarz, nur
+  um überhaupt unterscheidbar zu sein. Amber passt außerdem zum Composer, wo derselbe
+  Picker amber ist. „Alle können" wird über die **Form** markiert (kräftiger Rahmen +
+  Wort), nie über eine zweite Farbstufe.
 - **Lesen ist chronologisch, Entscheiden ist sortiert.** Die Übersicht bleibt in
   Tagesreihenfolge — den besten Tag nach oben zu schieben, bevor jemand geantwortet
   hat, drückt ihn in eine Richtung. Gerankt wird nur dort, wo das Ranking die Frage
