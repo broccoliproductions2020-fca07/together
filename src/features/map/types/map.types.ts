@@ -151,6 +151,19 @@ export interface ActivitySelectionPreview {
 }
 
 export type MapSelection =
+  /**
+   * A round still looking for a time. It is a selection like any other, so it
+   * lands in the SAME detail sheet as an activity — same header, same place
+   * row. Only where a fixed activity shows its time, this shows the proposals.
+   */
+  | {
+      type: 'Planning';
+      planId: string;
+      title: string;
+      hostName: string;
+      placeLabel?: string;
+      coordinate?: MapCoordinate;
+    }
   | ({ type: 'Avatar'; hostName: string } & ActivitySelectionPreview)
   | ({ type: 'Cluster' } & ActivitySelectionPreview)
   | {

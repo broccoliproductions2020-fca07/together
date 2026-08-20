@@ -110,6 +110,16 @@ async function main() {
   const lisa = await profileOf(db, 'seed-lisa', 'Lisa Becker');
   const jonas = await profileOf(db, 'seed-jonas', 'Jonas Pohl');
 
+  // Wipe any member docs from a previous run first. `set` on the plan resets
+  // memberUids, but a leftover member document does not go with it — and
+  // joinTimePlan then sees a member who is not in the list, which is a state
+  // the real flow can never produce. That mismatch is what made a seeded round
+  // refuse a join.
+  for (const planId of ['timePlan_seed_invited', 'timePlan_seed_hosted']) {
+    const existing = await db.collection(`timePlans/${planId}/timePlanMembers`).get();
+    await Promise.all(existing.docs.map((entry) => entry.ref.delete()));
+  }
+
   const batch = db.batch();
 
   // ── 1. Someone else is asking. You are INVITED and have not answered, so the

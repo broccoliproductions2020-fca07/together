@@ -5,7 +5,13 @@ import Animated, { FadeInDown, LinearTransition, useReducedMotion } from 'react-
 
 import { FONT, TEXT_CAPPED, TYPE } from '@/shared/theme';
 
-import { AVAILABLE_COLOR, PLANNING_COLOR, UNAVAILABLE_COLOR } from '../planningTheme';
+import {
+  AVAILABLE_COLOR,
+  PLANNING_COLOR,
+  UNAVAILABLE_COLOR,
+  usePlanningColors,
+  type PlanningSurfaceColors,
+} from '../planningTheme';
 import type { TimePlanMember, TimePlanWindow } from '../types';
 import {
   aggregateWindow,
@@ -58,18 +64,30 @@ function clock(ms: number): string {
   return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
 }
 
-function Face({ initials, state }: { initials: string; state: 'yes' | 'no' | 'pending' }) {
+function Face({
+  initials,
+  state,
+  t,
+}: {
+  initials: string;
+  state: 'yes' | 'no' | 'pending';
+  t: PlanningSurfaceColors;
+}) {
   return (
     <View
       style={[
         styles.face,
-        state === 'yes' ? styles.faceYes : state === 'no' ? styles.faceNo : styles.facePending,
+        state === 'yes'
+          ? styles.faceYes
+          : state === 'no'
+            ? { backgroundColor: t.faint }
+            : { borderColor: t.faint, borderStyle: 'dashed', borderWidth: 1 },
       ]}
     >
       <Text
         maxFontSizeMultiplier={TEXT_CAPPED.maxFontSizeMultiplier}
         allowFontScaling={TEXT_CAPPED.allowFontScaling}
-        style={[styles.faceText, state === 'yes' ? styles.faceTextYes : null]}
+        style={[styles.faceText, { color: t.muted }, state === 'yes' ? styles.faceTextYes : null]}
       >
         {initials.slice(0, 2).toUpperCase()}
       </Text>
@@ -126,6 +144,7 @@ export const TimePlanOverview = memo(function TimePlanOverview({
   onLock?: (window: TimePlanWindow, startsAt: string, endsAt: string) => void;
   locking?: boolean;
 }) {
+  const t = usePlanningColors();
   const reducedMotion = useReducedMotion();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [axisWidth, setAxisWidth] = useState(0);
@@ -163,8 +182,8 @@ export const TimePlanOverview = memo(function TimePlanOverview({
   return (
     <View style={styles.container}>
       <View style={styles.headerRow}>
-        <Text style={styles.headerTitle}>Gemeinsame Zeit</Text>
-        <Text style={styles.headerMeta}>
+        <Text style={[styles.headerTitle, { color: t.text }]}>Gemeinsame Zeit</Text>
+        <Text style={[styles.headerMeta, { color: t.muted }]}>
           {pendingCount > 0
             ? `${answeredCount} von ${members.length} geantwortet`
             : `${members.length} ${members.length === 1 ? 'Antwort' : 'Antworten'}`}
@@ -203,7 +222,7 @@ export const TimePlanOverview = memo(function TimePlanOverview({
                     numberOfLines={1}
                     maxFontSizeMultiplier={TEXT_CAPPED.maxFontSizeMultiplier}
                     allowFontScaling={TEXT_CAPPED.allowFontScaling}
-                    style={styles.dayLabel}
+                    style={[styles.dayLabel, { color: t.text }]}
                   >
                     {dayLabel(window.startsAt)}
                   </Text>
@@ -212,20 +231,20 @@ export const TimePlanOverview = memo(function TimePlanOverview({
                   <AvailabilityStrip window={window} axis={axis} availability={availability} />
                 </View>
                 <View style={[styles.countCell, { width: COUNT_WIDTH }]}>
-                  <Text style={styles.countText}>
+                  <Text style={[styles.countText, { color: t.text }]}>
                     {best ? `${best.count}/${availability?.totalCount ?? 0}` : '–'}
                   </Text>
                   <Ionicons
                     name={expanded ? 'chevron-up' : 'chevron-down'}
                     size={13}
-                    color="rgba(244,245,247,0.40)"
+                    color={t.muted}
                   />
                 </View>
               </Pressable>
 
               <View style={styles.summaryRow}>
                 <View style={{ width: LABEL_WIDTH }} />
-                <Text style={styles.summaryText}>
+                <Text style={[styles.summaryText, { color: t.muted }]}>
                   {best
                     ? best.everyone
                       ? `alle ${best.count} können · ${clock(best.startMs)} – ${clock(best.endMs)}`
@@ -247,7 +266,11 @@ export const TimePlanOverview = memo(function TimePlanOverview({
                               numberOfLines={1}
                               maxFontSizeMultiplier={TEXT_CAPPED.maxFontSizeMultiplier}
                               allowFontScaling={TEXT_CAPPED.allowFontScaling}
-                              style={[styles.personName, isSelf ? styles.personNameSelf : null]}
+                              style={[
+                                styles.personName,
+                                { color: t.muted },
+                                isSelf ? { color: t.text, fontFamily: FONT.semibold } : null,
+                              ]}
                             >
                               {isSelf ? 'Du' : member.displayName}
                             </Text>
@@ -258,10 +281,10 @@ export const TimePlanOverview = memo(function TimePlanOverview({
                                 window={window}
                                 axis={axis}
                                 intervals={intervals}
-                                color={isSelf ? '#FFFFFF' : AVAILABLE_COLOR}
+                                color={isSelf ? t.text : AVAILABLE_COLOR}
                               />
                             ) : (
-                              <Text style={styles.personEmpty}>
+                              <Text style={[styles.personEmpty, { color: t.muted }]}>
                                 {intervals ? 'kann nicht' : 'noch keine Antwort'}
                               </Text>
                             )}
@@ -285,7 +308,7 @@ export const TimePlanOverview = memo(function TimePlanOverview({
                   ) : (
                     <View style={styles.groupedBlock}>
                       {groupedRows(window, members).map((line) => (
-                        <Text key={line} style={styles.groupedLine}>
+                        <Text key={line} style={[styles.groupedLine, { color: t.muted }]}>
                           {line}
                         </Text>
                       ))}
@@ -304,10 +327,12 @@ export const TimePlanOverview = memo(function TimePlanOverview({
                           : intervals.length === 0
                             ? ('no' as const)
                             : ('yes' as const);
-                      return <Face key={member.uid} initials={member.initials} state={state} />;
+                      return (
+                        <Face key={member.uid} initials={member.initials} state={state} t={t} />
+                      );
                     })}
                     {members.length > 8 ? (
-                      <Text style={styles.facesMore}>+{members.length - 8}</Text>
+                      <Text style={[styles.facesMore, { color: t.muted }]}>+{members.length - 8}</Text>
                     ) : null}
                   </View>
                 </View>
@@ -335,7 +360,7 @@ export const TimePlanOverview = memo(function TimePlanOverview({
             numberOfLines={1}
             maxFontSizeMultiplier={TEXT_CAPPED.maxFontSizeMultiplier}
             allowFontScaling={TEXT_CAPPED.allowFontScaling}
-            style={styles.lockLabel}
+            style={[styles.lockLabel, { color: t.onAccent }]}
           >
             {locking
               ? 'Termin wird festgelegt …'
@@ -350,35 +375,32 @@ export const TimePlanOverview = memo(function TimePlanOverview({
 const styles = StyleSheet.create({
   container: { gap: 12 },
   headerRow: { alignItems: 'baseline', flexDirection: 'row', justifyContent: 'space-between' },
-  headerTitle: { color: '#F4F5F7', fontFamily: FONT.semibold, fontSize: TYPE.label.fontSize },
-  headerMeta: { color: 'rgba(244,245,247,0.45)', fontFamily: FONT.medium, fontSize: TYPE.micro.fontSize },
+  headerTitle: { fontFamily: FONT.semibold, fontSize: TYPE.label.fontSize },
+  headerMeta: { fontFamily: FONT.medium, fontSize: TYPE.micro.fontSize },
   axisRow: { alignItems: 'flex-end', flexDirection: 'row' },
   axisArea: { flex: 1, minWidth: 0 },
   dayBlock: { paddingVertical: 4 },
   dayRow: { alignItems: 'center', flexDirection: 'row', minHeight: 44 - 8 },
-  dayLabel: { color: '#F4F5F7', fontFamily: FONT.semibold, fontSize: TYPE.caption.fontSize },
+  dayLabel: { fontFamily: FONT.semibold, fontSize: TYPE.caption.fontSize },
   countCell: { alignItems: 'center', flexDirection: 'row', gap: 2, justifyContent: 'flex-end' },
-  countText: { color: 'rgba(244,245,247,0.75)', fontFamily: FONT.semibold, fontSize: TYPE.caption.fontSize },
+  countText: { fontFamily: FONT.semibold, fontSize: TYPE.caption.fontSize },
   summaryRow: { flexDirection: 'row', marginTop: 2 },
-  summaryText: { color: 'rgba(244,245,247,0.55)', flex: 1, fontFamily: FONT.medium, fontSize: TYPE.micro.fontSize },
+  summaryText: { flex: 1, fontFamily: FONT.medium, fontSize: TYPE.micro.fontSize },
   facesRow: { flexDirection: 'row', marginTop: 4 },
   faces: { alignItems: 'center', flexDirection: 'row', flex: 1, gap: 2 },
-  facesMore: { color: 'rgba(244,245,247,0.45)', fontFamily: FONT.medium, fontSize: TYPE.micro.fontSize, marginLeft: 2 },
+  facesMore: { fontFamily: FONT.medium, fontSize: TYPE.micro.fontSize, marginLeft: 2 },
   face: { alignItems: 'center', borderRadius: 999, height: 20, justifyContent: 'center', width: 20 },
   faceYes: { backgroundColor: AVAILABLE_COLOR },
-  faceNo: { backgroundColor: 'rgba(255,255,255,0.10)' },
   // Not answered is an OUTLINE, never a dimmed fill: "hasn't said yet" and
   // "said no" are different facts and must not look like degrees of the same one.
-  facePending: { borderColor: 'rgba(255,255,255,0.28)', borderStyle: 'dashed', borderWidth: 1 },
-  faceText: { color: UNAVAILABLE_COLOR, fontFamily: FONT.semibold, fontSize: TYPE.micro.fontSize - 2 },
+  faceText: { fontFamily: FONT.semibold, fontSize: TYPE.micro.fontSize - 2 },
   faceTextYes: { color: '#0B1310' },
   fanned: { gap: 4, marginTop: 8 },
   personRow: { alignItems: 'center', flexDirection: 'row', minHeight: 18 },
-  personName: { color: 'rgba(244,245,247,0.70)', fontFamily: FONT.medium, fontSize: TYPE.micro.fontSize },
-  personNameSelf: { color: '#F4F5F7', fontFamily: FONT.semibold },
-  personEmpty: { color: UNAVAILABLE_COLOR, fontFamily: FONT.medium, fontSize: TYPE.micro.fontSize - 1 },
+  personName: { fontFamily: FONT.medium, fontSize: TYPE.micro.fontSize },
+  personEmpty: { fontFamily: FONT.medium, fontSize: TYPE.micro.fontSize - 1 },
   groupedBlock: { gap: 2, paddingLeft: LABEL_WIDTH },
-  groupedLine: { color: 'rgba(244,245,247,0.62)', fontFamily: FONT.medium, fontSize: TYPE.micro.fontSize },
+  groupedLine: { fontFamily: FONT.medium, fontSize: TYPE.micro.fontSize },
   lockButton: {
     alignItems: 'center',
     backgroundColor: PLANNING_COLOR,
@@ -388,5 +410,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   lockButtonBusy: { opacity: 0.6 },
-  lockLabel: { color: '#FFFFFF', fontFamily: FONT.semibold, fontSize: TYPE.label.fontSize },
+  lockLabel: { fontFamily: FONT.semibold, fontSize: TYPE.label.fontSize },
 });

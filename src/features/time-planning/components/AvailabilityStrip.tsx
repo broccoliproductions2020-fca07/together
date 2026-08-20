@@ -3,7 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { FONT, TEXT_CAPPED, TYPE } from '@/shared/theme';
 
-import { AVAILABLE_COLOR, FRAME_COLOR, availabilityColor } from '../planningTheme';
+import { AVAILABLE_COLOR, FRAME_COLOR, availabilityColor, usePlanningColors } from '../planningTheme';
 import type { TimePlanInterval, TimePlanWindow } from '../types';
 import { availabilityLevel, type WindowAvailability } from '../utils/availability';
 import { axisFraction, dayStartMs, type DayAxis } from '../utils/dayAxis';
@@ -138,6 +138,7 @@ export const AvailabilityAxis = memo(function AvailabilityAxis({
   marks: number[];
   format: (minutes: number) => string;
 }) {
+  const t = usePlanningColors();
   return (
     <View style={styles.axis}>
       {marks.map((minutes) => (
@@ -148,12 +149,12 @@ export const AvailabilityAxis = memo(function AvailabilityAxis({
             { left: percent((minutes - axis.startMinutes) / axis.spanMinutes) },
           ]}
         >
-          <View style={styles.axisTick} />
+          <View style={[styles.axisTick, { backgroundColor: t.faint }]} />
           <Text
             numberOfLines={1}
             maxFontSizeMultiplier={TEXT_CAPPED.maxFontSizeMultiplier}
             allowFontScaling={TEXT_CAPPED.allowFontScaling}
-            style={styles.axisLabel}
+            style={[styles.axisLabel, { color: t.muted }]}
           >
             {format(minutes)}
           </Text>
@@ -181,18 +182,20 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: -2,
     bottom: -2,
-    borderColor: 'rgba(255,255,255,0.55)',
+    // Dark ink, not white: the bracket has to read on the app's light card too,
+    // and it marks "this is the answer" — a mark that disappears in one theme
+    // is not a mark.
+    borderColor: 'rgba(20,33,28,0.45)',
     borderRadius: 6,
     borderWidth: 1,
   },
   // "Everyone can" is a different KIND of answer, not one more step on the
   // ramp. It is marked by form so it cannot be mistaken for a shade.
-  bestEveryone: { borderColor: '#FFFFFF', borderWidth: 2 },
+  bestEveryone: { borderColor: AVAILABLE_COLOR, borderWidth: 2 },
   axis: { height: 20, position: 'relative', width: '100%' },
   axisMark: { position: 'absolute', top: 0, width: AXIS_LABEL_WIDTH, marginLeft: -AXIS_LABEL_WIDTH / 2, alignItems: 'center' },
-  axisTick: { width: 1, height: 4, backgroundColor: 'rgba(255,255,255,0.20)' },
+  axisTick: { width: 1, height: 4 },
   axisLabel: {
-    color: 'rgba(255,255,255,0.5)',
     fontFamily: FONT.medium,
     fontSize: TYPE.micro.fontSize - 2,
     marginTop: 2,

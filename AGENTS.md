@@ -903,6 +903,26 @@ kein fixes Datum, bis der Host einen Slot festzurrt.
   ein vom Elternteil danebengemalter Streifen hätte eine zweite Zeit-zu-Pixel-Rechnung
   und würde genau während einer Geste verrutschen. Der Aufrufer liefert WAS, der
   Picker entscheidet WO. `core/` bleibt davon unberührt.
+- **Kein eigenes Sheet — alles im `MarkerDetailSheet`.** Eine Runde mit Ort liegt als
+  ringloser Marker auf der Karte; Antippen öffnet dieselbe Detailfläche wie jede
+  Aktivität (Titel, Host, Ort), nur steht an der Stelle der Uhrzeit die Übersicht
+  bzw. die Antwortzeilen (`PlanningContent` neben `ActivityContent`). Ein zweites
+  Detail-Sheet ist genau das, was diese Fläche verhindern soll. Sichtbar wird die
+  Runde über `audienceUids` auf dem Plan-Dokument — eine Regel, die ein zweites
+  Dokument liest, kann keine Query tragen, und ohne Query kann der Client nicht
+  fragen, in welchen Runden er ist.
+- **Die Antwort ist eine ZEILE pro Tag, keine Karte.** Label + Picker + `[ ✓ | ✕ ]`
+  nebeneinander, rund 62 statt 142 dp. Die Kartenhülle (Rand, Füllung, Polster)
+  trug keine Information und schob den Knopf, der die Sache abschließt, aus dem
+  Bild. **Die Stundenskala bleibt** — sie sagt als Einziges, wohin man einen Griff
+  zieht, und kostet nichts, weil der Picker sie in seinem eigenen Kasten zeichnet.
+  Der Schalter ist sichtbar 30 dp und per `hitSlop` 44 dp groß, dieselbe Trennung
+  wie bei den 6-dp-Griffen des Pickers. **Nicht in den Balken legen:** bei der
+  15-Minuten-Mindestdauer ist der ~16 dp breit, und an seinen Enden sitzen die
+  Griffe.
+- **Planungsflächen nehmen die App-Farben** (`usePlanningColors`). Sie waren zuerst
+  für ein dunkles Sheet gezeichnet und hart auf Weiß gesetzt — im hellen
+  Detail-Sheet war davon nichts mehr zu sehen.
 - **Tests:** `npm run test:time-planning` (Aggregation, bester Slot, geteilte Achse),
   `npm run test:time-plan-functions` (Callables im Emulator: kein Mitglied ohne
   Antwort, Lock-Regeln, Idempotenz), `npm run test:marker-countdown` (Ringe).

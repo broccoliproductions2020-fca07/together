@@ -1,3 +1,6 @@
+import { useMemo } from 'react';
+
+import { useThemeColors } from '@/features/theme';
 import { SEMANTIC_COLOR } from '@/shared/utils/semanticColors';
 
 /**
@@ -36,4 +39,42 @@ export const AVAILABILITY_RAMP = [
 export function availabilityColor(level: number): string {
   if (level <= 0) return 'transparent';
   return AVAILABILITY_RAMP[Math.min(level, AVAILABILITY_RAMP.length) - 1];
+}
+
+/**
+ * The surface colours every planning component uses.
+ *
+ * These screens were first drawn on a dark sheet and hard-coded white, which
+ * rendered them invisible the moment they moved into the app's own detail
+ * sheet — that sheet follows the theme, and in light mode white text on a white
+ * card is simply gone. One mapping, taken from the app tokens, so a planning
+ * surface can never drift from the sheet it sits in again.
+ */
+export interface PlanningSurfaceColors {
+  text: string;
+  muted: string;
+  faint: string;
+  card: string;
+  cardBorder: string;
+  track: string;
+  handle: string;
+  /** Readable ON the violet CTA. */
+  onAccent: string;
+}
+
+export function usePlanningColors(): PlanningSurfaceColors {
+  const colors = useThemeColors();
+  return useMemo(
+    () => ({
+      text: colors.foreground,
+      muted: colors.mutedForeground,
+      faint: colors.border,
+      card: colors.secondary,
+      cardBorder: colors.border,
+      track: colors.background,
+      handle: colors.foreground,
+      onAccent: '#FFFFFF',
+    }),
+    [colors],
+  );
 }

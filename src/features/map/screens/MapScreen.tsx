@@ -36,7 +36,6 @@ import { PostfachSheet, type PostfachChatTarget } from '@/features/mailbox';
 import { usePushNudge } from '@/features/notifications';
 import { claimNotificationResponse } from '@/features/notifications/notificationResponse';
 import {
-  TimePlanningSheet,
   timePlanCreateInputFromDraft,
   timePlansToMapMarkers,
   timePlanningService,
@@ -292,7 +291,6 @@ export function MapScreen({
   const [openStatusSheetVisible, setOpenStatusSheetVisible] = useState(false);
   const nearbyActionRevisionRef = useRef(0);
   const [postfachVisible, setPostfachVisible] = useState(false);
-  const [timePlanId, setTimePlanId] = useState<string>();
   // Only while the map surface is actually visible — same rule friend presence
   // follows. A round is map furniture and has no business listening from the
   // calendar or a Heimweg focus.
@@ -301,7 +299,6 @@ export function MapScreen({
     () => timePlansToMapMarkers(invitedTimePlans),
     [invitedTimePlans],
   );
-  const [timePlanPromptOnOpen, setTimePlanPromptOnOpen] = useState(false);
   // The open chat carries its resolved colour, so the same room looks the same
   // whether it was opened from the Postfach, a push, or the marker sheet.
   const [chatActivity, setChatActivity] = useState<PostfachChatTarget | null>(null);
@@ -1120,10 +1117,24 @@ export function MapScreen({
     setTimeout(() => openActivityWhenKnown(activityId, attempt + 1), 400);
   }
 
+  /**
+   * A round opens the SAME detail sheet as anything else on the map. That is
+   * the point: it is an ordinary selection, so it gets the ordinary container,
+   * header and place row — only the time part differs.
+   */
   function openTimePlan(planId: string) {
+    const plan = invitedTimePlans.find((entry) => entry.id === planId);
     setPostfachVisible(false);
-    setTimePlanId(planId);
-    setTimePlanPromptOnOpen(true);
+    setSelection({
+      type: 'Planning',
+      planId,
+      title: plan?.title ?? 'Terminfindung',
+      hostName: plan?.hostName ?? 'Jemand',
+      ...(plan?.place?.label ? { placeLabel: plan.place.label } : {}),
+      ...(plan?.place?.visibility === 'pin'
+        ? { coordinate: { latitude: plan.place.latitude, longitude: plan.place.longitude } }
+        : {}),
+    });
   }
 
   function closeNearbySheet() {
@@ -1959,8 +1970,7 @@ export function MapScreen({
           // A round is not an activity: it has no participants and no time, so
           // `markerToSelection` would build a detail sheet full of blanks.
           if (marker.planning) {
-            setTimePlanPromptOnOpen(false);
-            setTimePlanId(marker.id);
+            openTimePlan(marker.id);
             return;
           }
           if (mapLocationPicker.active || heimwegFocusActive) return;
@@ -2173,18 +2183,8 @@ export function MapScreen({
             onOpenTimePlan={(planId) => openTimePlan(planId)}
           />
 
-          <TimePlanningSheet
-            visible={Boolean(timePlanId)}
-            planId={timePlanId}
-            promptOnOpen={timePlanPromptOnOpen}
-            onClose={() => {
-              setTimePlanPromptOnOpen(false);
-              setTimePlanId(undefined);
-            }}
-            onOpenActivity={(activityId) => openActivityWhenKnown(activityId)}
-          />
-
           <MarkerDetailSheet
+            onOpenPlannedActivity={(activityId: string) => openActivityWhenKnown(activityId)}
             selection={displayedSelection}
             visible={Boolean(selection)}
             joined={selectedActivityJoined}
@@ -2253,11 +2253,12 @@ export function MapScreen({
           setComposerTitle(undefined);
           setComposerPlace(undefined);
           proposalToMarkRef.current = null;
-          setTimePlanPromptOnOpen(false);
-          setTimePlanId(creation.id);
+          openTimePlan(creation.id);
           haptics.success();
           void creation.ready.catch((error: unknown) => {
-            setTimePlanId((current) => (current === creation.id ? undefined : current));
+            setSelection((current) =>
+              current?.type === 'Planning' && current.planId === creation.id ? null : current,
+            );
             haptics.warning();
             Alert.alert(
               'Terminfindung nicht angelegt',

@@ -1,4 +1,4 @@
-export { TimePlanningSheet } from './components/TimePlanningSheet';
+export { TimePlanContent } from './components/TimePlanContent';
 export { PlanningOfferFields } from './components/PlanningOfferFields';
 export { TimePlanOverview } from './components/TimePlanOverview';
 export { timePlanningService } from './services/timePlanningService';

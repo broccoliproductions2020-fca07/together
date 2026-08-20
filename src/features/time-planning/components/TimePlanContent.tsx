@@ -1,23 +1,14 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  Modal,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/features/auth';
 import { useSyncOutbox, type SyncOperation } from '@/features/sync';
 import { FONT, TEXT_CAPPED, TYPE } from '@/shared/theme';
 import { haptics } from '@/shared/utils/haptics';
 
-import { AVAILABLE_COLOR, PLANNING_COLOR } from '../planningTheme';
+import { AVAILABLE_COLOR, PLANNING_COLOR, usePlanningColors } from '../planningTheme';
 import { timePlanningService } from '../services/timePlanningService';
 import type { TimePlan, TimePlanInterval, TimePlanMember, TimePlanWindow } from '../types';
 import { aggregateWindow, type WindowAvailability } from '../utils/availability';
@@ -26,8 +17,14 @@ import { TimePlanAnswerCard, type DayAnswer } from './TimePlanAnswerCard';
 import { TimePlanOverview } from './TimePlanOverview';
 
 /**
- * The Terminfindung surface. Two states, and which one you get depends on one
- * thing only: whether you have answered.
+ * The Terminfindung surface — rendered INSIDE the normal marker detail sheet,
+ * where a fixed activity shows its time. It is not a sheet of its own: a round
+ * is an ordinary thing on the map, so tapping it must give the same container,
+ * the same header and the same place row as everything else. A second detail
+ * surface is exactly what `MarkerDetailSheet` exists to prevent.
+ *
+ * Two states, and which one you get depends on one thing only: whether you
+ * have answered.
  *
  * - Not a member → the answer cards. Answering IS joining, in ONE call, because
  *   a member without an availability is a name the host waits on forever.
@@ -94,23 +91,18 @@ function seedFromMember(
   return { answers, intervals };
 }
 
-export function TimePlanningSheet({
-  visible,
+export function TimePlanContent({
   planId,
-  promptOnOpen = false,
-  onClose,
   onOpenActivity,
+  onClose,
 }: {
-  visible: boolean;
-  planId?: string;
-  /** Kept for call-site compatibility; the surface now decides for itself,
-   * because "have you answered" is a fact and not something to be told. */
-  promptOnOpen?: boolean;
-  onClose: () => void;
+  planId: string;
   /** Called with the new Activity id once the host locks a slot. */
   onOpenActivity?: (activityId: string) => void;
+  /** Closes the detail sheet — used only by the locked state's hand-off. */
+  onClose?: () => void;
 }) {
-  const insets = useSafeAreaInsets();
+  const t = usePlanningColors();
   const { user } = useAuth();
   const { operations: syncOperations } = useSyncOutbox();
   const uid = user?.id;
@@ -131,7 +123,7 @@ export function TimePlanningSheet({
   const seededRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
-    if (!visible || !planId || !uid) {
+    if (!planId || !uid) {
       setPlan(null);
       return;
     }
@@ -143,7 +135,7 @@ export function TimePlanningSheet({
       subscriptionRevisionRef.current += 1;
       stopPlan();
     };
-  }, [planId, uid, visible]);
+  }, [planId, uid]);
 
   const isMember = Boolean(uid && plan?.memberUids.includes(uid));
 
@@ -160,7 +152,7 @@ export function TimePlanningSheet({
    * attach exactly when it is allowed to, including right after joining.
    */
   useEffect(() => {
-    if (!visible || !planId || !uid || !isMember) {
+    if (!planId || !uid || !isMember) {
       setMembers([]);
       return;
     }
@@ -172,16 +164,7 @@ export function TimePlanningSheet({
       membersRevisionRef.current += 1;
       stopMembers();
     };
-  }, [isMember, planId, uid, visible]);
-
-  useEffect(() => {
-    if (!visible) {
-      setEditing(false);
-      setError(null);
-      seededRef.current = undefined;
-      setSubmitted(false);
-    }
-  }, [visible]);
+  }, [isMember, planId, uid]);
 
   const ownMember = useMemo(() => members.find((member) => member.uid === uid), [members, uid]);
   const isHost = Boolean(plan && uid && plan.hostId === uid);
@@ -315,132 +298,100 @@ export function TimePlanningSheet({
           ? 'Antworten und beitreten'
           : 'Antworten · ich kann nicht';
 
-  return (
-    <Modal
-      visible={visible}
-      animationType="slide"
-      transparent
-      statusBarTranslucent
-      navigationBarTranslucent
-      onRequestClose={onClose}
-    >
-      <View style={styles.backdrop}>
-        <View style={[styles.sheet, { paddingBottom: insets.bottom + 16 }]}>
-          <View style={styles.grabber} />
-          {!plan ? (
-            <View style={styles.loading}>
-              <ActivityIndicator color={PLANNING_COLOR} />
-            </View>
-          ) : (
-            <>
-              <View style={styles.header}>
-                <View style={styles.headerText}>
-                  <Text
-                    numberOfLines={2}
-                    maxFontSizeMultiplier={TEXT_CAPPED.maxFontSizeMultiplier}
-                    allowFontScaling={TEXT_CAPPED.allowFontScaling}
-                    style={styles.title}
-                  >
-                    {plan.title}
-                  </Text>
-                  <Text style={styles.subtitle}>
-                    {plan.status === 'locked'
-                      ? 'Der Termin steht'
-                      : `Zeit wird noch gesucht · ${windows.length} ${windows.length === 1 ? 'Vorschlag' : 'Vorschläge'}`}
-                  </Text>
-                </View>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Schließen"
-                  onPress={onClose}
-                  style={styles.close}
-                >
-                  <Ionicons name="close" size={20} color="rgba(244,245,247,0.75)" />
-                </Pressable>
-              </View>
-
-              <ScrollView
-                contentContainerStyle={styles.content}
-                keyboardShouldPersistTaps="handled"
-                showsVerticalScrollIndicator={false}
-              >
-                {plan.status === 'locked' ? (
-                  <LockedNotice plan={plan} onOpenActivity={onOpenActivity} onClose={onClose} />
-                ) : answering ? (
-                  <>
-                    <Text style={styles.lead}>
-                      {hasAnswered
-                        ? 'Ändere, wann du kannst.'
-                        : 'Sag kurz, wann du kannst. Ein Tipp pro Tag reicht.'}
-                    </Text>
-                    {windows.map((window) => (
-                      <TimePlanAnswerCard
-                        key={window.id}
-                        window={window}
-                        availability={availabilityByWindow.get(window.id) ?? null}
-                        answer={answers[window.id] ?? null}
-                        interval={intervals[window.id] ?? fullInterval(window)}
-                        onAnswer={(next) => setAnswer(window.id, next)}
-                        onInterval={(next) => setInterval(window.id, next)}
-                      />
-                    ))}
-                  </>
-                ) : (
-                  <>
-                    <TimePlanOverview
-                      windows={windows}
-                      members={members}
-                      currentUid={uid}
-                      isHost={isHost}
-                      onLock={lock}
-                      locking={locking}
-                    />
-                    <Pressable
-                      accessibilityRole="button"
-                      onPress={() => setEditing(true)}
-                      style={styles.secondary}
-                    >
-                      <Ionicons name="create-outline" size={16} color="rgba(244,245,247,0.75)" />
-                      <Text style={styles.secondaryLabel}>Meine Zeiten ändern</Text>
-                    </Pressable>
-                  </>
-                )}
-
-                {error ? (
-                  <Animated.View entering={FadeIn.duration(140)} style={styles.error}>
-                    <Text style={styles.errorText}>{error}</Text>
-                  </Animated.View>
-                ) : null}
-                {queuedResponse ? (
-                  <Text style={styles.queued}>
-                    Offline gespeichert — wird gesendet, sobald du wieder Netz hast.
-                  </Text>
-                ) : null}
-              </ScrollView>
-
-              {plan.status === 'collecting' && answering ? (
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityState={{ disabled: unanswered > 0 || saving }}
-                  disabled={unanswered > 0 || saving}
-                  onPress={() => void submit()}
-                  style={[styles.cta, unanswered > 0 || saving ? styles.ctaDisabled : null]}
-                >
-                  <Text
-                    numberOfLines={1}
-                    maxFontSizeMultiplier={TEXT_CAPPED.maxFontSizeMultiplier}
-                    allowFontScaling={TEXT_CAPPED.allowFontScaling}
-                    style={styles.ctaLabel}
-                  >
-                    {ctaLabel}
-                  </Text>
-                </Pressable>
-              ) : null}
-            </>
-          )}
-        </View>
+  if (!plan) {
+    return (
+      <View style={styles.loading}>
+        <ActivityIndicator color={PLANNING_COLOR} />
       </View>
-    </Modal>
+    );
+  }
+
+  return (
+    <View style={styles.content}>
+      <Text style={[styles.subtitle, { color: t.muted }]}>
+        {plan.status === 'locked'
+          ? 'Der Termin steht'
+          : `Zeit wird noch gesucht · ${windows.length} ${windows.length === 1 ? 'Vorschlag' : 'Vorschläge'}`}
+      </Text>
+
+      {plan.status === 'locked' ? (
+        <LockedNotice plan={plan} onOpenActivity={onOpenActivity} onClose={onClose} />
+      ) : answering ? (
+        <>
+          <Text style={[styles.lead, { color: t.muted }]}>
+            {hasAnswered
+              ? 'Ändere, wann du kannst.'
+              : 'Sag kurz, wann du kannst. Ein Tipp pro Tag reicht.'}
+          </Text>
+          {windows.map((window) => (
+            <TimePlanAnswerCard
+              key={window.id}
+              window={window}
+              availability={availabilityByWindow.get(window.id) ?? null}
+              answer={answers[window.id] ?? null}
+              interval={intervals[window.id] ?? fullInterval(window)}
+              onAnswer={(next) => setAnswer(window.id, next)}
+              onInterval={(next) => setInterval(window.id, next)}
+            />
+          ))}
+        </>
+      ) : (
+        <>
+          <TimePlanOverview
+            windows={windows}
+            members={members}
+            currentUid={uid}
+            isHost={isHost}
+            onLock={lock}
+            locking={locking}
+          />
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setEditing(true)}
+            style={styles.secondary}
+          >
+            <Ionicons name="create-outline" size={16} color={t.muted} />
+            <Text style={[styles.secondaryLabel, { color: t.muted }]}>Meine Zeiten ändern</Text>
+          </Pressable>
+        </>
+      )}
+
+      {error ? (
+        <Animated.View entering={FadeIn.duration(140)} style={styles.error}>
+          <Text style={styles.errorText}>{error}</Text>
+        </Animated.View>
+      ) : null}
+      {queuedResponse ? (
+        <Text style={styles.queued}>
+          Offline gespeichert — wird gesendet, sobald du wieder Netz hast.
+        </Text>
+      ) : null}
+
+      {plan.status === 'collecting' && answering ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ disabled: unanswered > 0 || saving }}
+          disabled={unanswered > 0 || saving}
+          onPress={() => void submit()}
+          style={[
+            styles.cta,
+            unanswered > 0 || saving ? { backgroundColor: t.faint } : null,
+          ]}
+        >
+          <Text
+            numberOfLines={1}
+            maxFontSizeMultiplier={TEXT_CAPPED.maxFontSizeMultiplier}
+            allowFontScaling={TEXT_CAPPED.allowFontScaling}
+            style={[
+              styles.ctaLabel,
+              { color: unanswered > 0 || saving ? t.muted : t.onAccent },
+            ]}
+          >
+            {ctaLabel}
+          </Text>
+        </Pressable>
+      ) : null}
+    </View>
   );
 }
 
@@ -451,7 +402,7 @@ function LockedNotice({
 }: {
   plan: TimePlan;
   onOpenActivity?: (activityId: string) => void;
-  onClose: () => void;
+  onClose?: () => void;
 }) {
   const start = plan.lockedStartsAt ? Date.parse(plan.lockedStartsAt) : NaN;
   const end = plan.lockedEndsAt ? Date.parse(plan.lockedEndsAt) : NaN;
@@ -466,16 +417,17 @@ function LockedNotice({
     Number.isFinite(start) && Number.isFinite(end)
       ? `${new Date(start).getHours().toString().padStart(2, '0')}:${new Date(start).getMinutes().toString().padStart(2, '0')} – ${new Date(end).getHours().toString().padStart(2, '0')}:${new Date(end).getMinutes().toString().padStart(2, '0')}`
       : null;
+  const t = usePlanningColors();
   return (
     <View style={styles.locked}>
       <Ionicons name="checkmark-circle" size={28} color={AVAILABLE_COLOR} />
-      <Text style={styles.lockedTitle}>{label ?? 'Der Termin steht'}</Text>
-      {time ? <Text style={styles.lockedTime}>{time}</Text> : null}
+      <Text style={[styles.lockedTitle, { color: t.text }]}>{label ?? 'Der Termin steht'}</Text>
+      {time ? <Text style={[styles.lockedTime, { color: t.muted }]}>{time}</Text> : null}
       {plan.activityId && onOpenActivity ? (
         <Pressable
           accessibilityRole="button"
           onPress={() => {
-            onClose();
+            onClose?.();
             onOpenActivity(plan.activityId!);
           }}
           style={styles.lockedCta}
@@ -488,38 +440,10 @@ function LockedNotice({
 }
 
 const styles = StyleSheet.create({
-  backdrop: { backgroundColor: 'rgba(0,0,0,0.55)', flex: 1, justifyContent: 'flex-end' },
-  sheet: {
-    backgroundColor: '#15161A',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    maxHeight: '92%',
-    paddingHorizontal: 16,
-    paddingTop: 8,
-  },
-  grabber: {
-    alignSelf: 'center',
-    backgroundColor: 'rgba(255,255,255,0.20)',
-    borderRadius: 999,
-    height: 4,
-    marginBottom: 12,
-    width: 38,
-  },
   loading: { alignItems: 'center', justifyContent: 'center', paddingVertical: 32 * 2 },
-  header: { alignItems: 'flex-start', flexDirection: 'row', gap: 12, marginBottom: 12 },
-  headerText: { flex: 1, gap: 2 },
-  title: { color: '#F4F5F7', fontFamily: FONT.bold, fontSize: TYPE.body.fontSize },
-  subtitle: { color: 'rgba(244,245,247,0.55)', fontFamily: FONT.medium, fontSize: TYPE.caption.fontSize },
-  close: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.07)',
-    borderRadius: 999,
-    height: 40,
-    justifyContent: 'center',
-    width: 40,
-  },
-  content: { gap: 12, paddingBottom: 16 },
-  lead: { color: 'rgba(244,245,247,0.62)', fontFamily: FONT.medium, fontSize: TYPE.caption.fontSize },
+  subtitle: { fontFamily: FONT.medium, fontSize: TYPE.caption.fontSize },
+  content: { gap: 12 },
+  lead: { fontFamily: FONT.medium, fontSize: TYPE.caption.fontSize },
   secondary: {
     alignItems: 'center',
     alignSelf: 'flex-start',
@@ -528,7 +452,7 @@ const styles = StyleSheet.create({
     minHeight: 44,
     paddingHorizontal: 4,
   },
-  secondaryLabel: { color: 'rgba(244,245,247,0.75)', fontFamily: FONT.medium, fontSize: TYPE.caption.fontSize },
+  secondaryLabel: { fontFamily: FONT.medium, fontSize: TYPE.caption.fontSize },
   cta: {
     alignItems: 'center',
     backgroundColor: PLANNING_COLOR,
@@ -536,18 +460,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     minHeight: 56,
   },
-  ctaDisabled: { backgroundColor: 'rgba(255,255,255,0.10)' },
-  ctaLabel: { color: '#FFFFFF', fontFamily: FONT.semibold, fontSize: TYPE.body.fontSize },
+  ctaLabel: { fontFamily: FONT.semibold, fontSize: TYPE.body.fontSize },
   error: {
     backgroundColor: 'rgba(243,103,94,0.14)',
     borderRadius: 12,
     padding: 12,
   },
   errorText: { color: '#F3675E', fontFamily: FONT.medium, fontSize: TYPE.caption.fontSize },
-  queued: { color: 'rgba(244,245,247,0.5)', fontFamily: FONT.medium, fontSize: TYPE.micro.fontSize },
+  queued: { fontFamily: FONT.medium, fontSize: TYPE.micro.fontSize },
   locked: { alignItems: 'center', gap: 8, paddingVertical: 24 },
-  lockedTitle: { color: '#F4F5F7', fontFamily: FONT.bold, fontSize: TYPE.body.fontSize },
-  lockedTime: { color: 'rgba(244,245,247,0.70)', fontFamily: FONT.medium, fontSize: TYPE.label.fontSize },
+  lockedTitle: { fontFamily: FONT.bold, fontSize: TYPE.body.fontSize },
+  lockedTime: { fontFamily: FONT.medium, fontSize: TYPE.label.fontSize },
   lockedCta: {
     alignItems: 'center',
     backgroundColor: PLANNING_COLOR,

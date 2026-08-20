@@ -25,6 +25,7 @@ import { PressableScale } from '@/shared/components/PressableScale';
 import { ActivityContent } from './markerDetail/ActivityContent';
 import { ActivityParticipantsContent } from './markerDetail/ActivityParticipantsContent';
 import { PlaceContent } from './markerDetail/PlaceContent';
+import { PlanningContent } from './markerDetail/PlanningContent';
 import { ParticipantProfileSheet } from './markerDetail/ParticipantProfileSheet';
 import { isActivitySelection } from './markerDetail/types';
 import { useKeyboardPadding } from '@/features/chat/utils/useKeyboardHeight';
@@ -59,6 +60,8 @@ export interface MarkerDetailSheetProps {
    * it to centre a selection in the VISIBLE map, not behind the sheet. */
   onHeightChange?: (height: number) => void;
   onClose: () => void;
+  /** A round that just became a real Activity — open it. */
+  onOpenPlannedActivity?: (activityId: string) => void;
 }
 
 export function MarkerDetailSheet({
@@ -79,6 +82,7 @@ export function MarkerDetailSheet({
   instantClose = false,
   onHeightChange,
   onClose,
+  onOpenPlannedActivity,
 }: MarkerDetailSheetProps) {
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
@@ -383,6 +387,12 @@ export function MarkerDetailSheet({
                   onCreateActivity={onCreateActivity}
                   onLeave={onLeave}
                   onCancel={onCancel}
+                />
+              ) : shownSelection.type === 'Planning' ? (
+                <PlanningContent
+                  selection={shownSelection}
+                  onOpenActivity={onOpenPlannedActivity}
+                  onClose={onClose}
                 />
               ) : shownSelection.type === 'Place' ? (
                 <PlaceContent
