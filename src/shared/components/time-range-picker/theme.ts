@@ -59,6 +59,19 @@ export interface TimeRangePickerTheme {
   };
   startHandle: HandleTheme;
   endHandle: HandleTheme;
+  /**
+   * An optional band of read-only blocks ABOVE the bar, on the picker's own
+   * axis. It exists because the axis is private: a caller drawing its own strip
+   * beside the picker would need a second time-to-pixel calculation, and the
+   * two would drift apart the moment an edge expand changes the scale — i.e.
+   * exactly while someone is dragging. The caller supplies WHAT, the picker
+   * decides WHERE.
+   *
+   * `colors` is a ramp indexed by a layer's `level` (1 = colors[0]). Level 0 is
+   * not drawn at all, so an empty stretch stays genuinely empty rather than the
+   * faintest shade of occupied.
+   */
+  layers: { colors: readonly string[]; height: number; gap: number; radius: number };
   ticks: { color: string; width: number; height: number; bottom: number };
   labels: { color: string; fontFamily: string; fontSize: number; bottom: number };
   rangeLabel: { color: string; fontFamily: string; fontSize: number };
@@ -133,6 +146,21 @@ export function defaultTimeRangePickerTheme(
       borderColor: 'transparent',
       borderWidth: 0,
       radius: 3,
+    },
+    layers: {
+      // Deliberately hard steps, not a gradient: the number of people available
+      // jumps at a boundary, so a smooth ramp would assert a continuity the
+      // data does not have.
+      colors: [
+        withAlpha(accent, 0.16),
+        withAlpha(accent, 0.32),
+        withAlpha(accent, 0.5),
+        withAlpha(accent, 0.7),
+        withAlpha(accent, 0.95),
+      ],
+      height: Math.max(5, Math.round(height * 0.15)),
+      gap: 3,
+      radius: 2,
     },
     ticks: { color: 'rgba(255,255,255,0.18)', width: 1, height: 5, bottom: labelZone },
     labels: {

@@ -8,6 +8,7 @@ export type NotificationKind =
   | 'spontaneous_round_invite'
   | 'group_chat_invite'
   | 'time_plan_invite'
+  | 'time_plan_locked'
   | 'chat_message'
   | 'journey_reminder'
   | 'safety_request'

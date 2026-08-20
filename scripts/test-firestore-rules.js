@@ -196,6 +196,30 @@ async function main() {
       expireAt: future,
     }),
   );
+  // The answer surface has to open BEFORE anyone is a member, so an invitee
+  // gets a narrower tier: the round itself, never anyone's availability.
+  await adminDb.doc(`timePlanInvites/private-plan_${bUid}`).set({
+    planId: 'private-plan',
+    inviteeUid: bUid,
+    status: 'pending',
+    createdAt: admin.firestore.Timestamp.now(),
+    expireAt: adminFuture,
+  });
+  await allowed('invited user can read the round they were asked to answer', () =>
+    getDoc(doc(b.db, 'timePlans', 'private-plan')),
+  );
+  await denied("invited user still cannot read anyone else's availability", () =>
+    getDocs(query(collection(b.db, 'timePlans', 'private-plan', 'timePlanMembers'), limit(50))),
+  );
+  await denied('an invitee cannot read the invitation itself', () =>
+    getDoc(doc(b.db, 'timePlanInvites', `private-plan_${bUid}`)),
+  );
+  const stranger = client('rules-stranger');
+  await signInAnonymously(stranger.auth);
+  await denied("someone else's invitation grants nothing", () =>
+    getDoc(doc(stranger.db, 'timePlans', 'private-plan')),
+  );
+
   await adminDb.doc('timePlans/private-plan').update({ memberUids: [aUid, bUid] });
   await allowed('server-joined member can read the time plan', () => getDoc(doc(b.db, 'timePlans', 'private-plan')));
 

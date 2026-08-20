@@ -830,6 +830,106 @@ nebenbei wieder in `MainSurface` oder eine Release-Konfiguration eingehängt wer
 
 ---
 
+## Terminfindung (mehrere Zeitvorschläge)
+
+Der Host schlägt in der Wann-Bench mehrere Tage/Fenster vor (`PlanningOfferFields`);
+daraus wird ein `timePlans/{planId}` mit `sourceWindows`. Das Feature lebt in
+`src/features/time-planning/`. Es ist **keine Activity** — kein Chat, keine Anreise,
+kein fixes Datum, bis der Host einen Slot festzurrt.
+
+- **Beitreten IST Antworten — ein Callable, beides oder nichts.** `joinTimePlan`
+  verlangt `responsesByWindow` und `parseTimePlanResponses` besteht auf einem Eintrag
+  für JEDES Fenster. **Es gibt kein Mitglied ohne Antwort**: Wer das Sheet ohne
+  Antwort schließt, ist einfach nicht dabei, es wird nichts halb gespeichert. Das war
+  vorher zweistufig (erst beitreten, dann fragen) und erzeugte genau den Zustand, auf
+  den der Host ewig wartet — ein Name in der Liste ohne Verfügbarkeit. Nebeneffekt:
+  „kann nicht" und „hat noch nicht geantwortet" können sich in der Auswertung nicht
+  mehr vermischen. **Nicht** über Entfernen-nach-Frist oder eine öffentliche
+  „hat nicht geantwortet"-Markierung lösen: Das ist ein Pranger, und die App
+  verzichtet aus demselben Grund schon beim Heimweg auf so eine Meldung.
+- **Zwei Lese-Stufen in `firestore.rules`.** Die Antwortfläche muss aufgehen, BEVOR
+  jemand Mitglied ist, also darf ein Eingeladener `timePlans/{planId}` lesen (Titel,
+  Ort, Fenster — genau das, was man zum Antworten braucht), die
+  `timePlanMembers`-Subcollection aber NICHT. Wer die eigenen Zeiten nicht geteilt
+  hat, liest auch die fremden nicht. Die Invite-ID ist deterministisch
+  (`{planId}_{uid}`), das Invite-Dokument selbst bleibt clientseitig unlesbar.
+  Folge: Vor dem Beitreten zeigt die Antwortkarte **keine** fremde Verdichtung —
+  dafür bräuchte es eine serverseitig gepflegte Zusammenfassung auf dem Plan-Dokument.
+- **`lockTimePlan` ist der Abschluss, und ohne ihn ist alles andere Deko.** Host-only,
+  Slot muss im gewählten Fenster liegen, client-generierte `activityId` als
+  Idempotenzschlüssel (wie `createActivity`). Erzeugt eine echte Activity + Chat,
+  setzt `status: 'locked'` + `activityId` auf dem Plan und benachrichtigt alle
+  anderen (`time_plan_locked`). **Wer geantwortet hat, dass er zu genau diesem Slot
+  kann, wird als Teilnehmer übernommen** — nochmal fragen hieße eine schon
+  beantwortete Frage stellen. `participantUids[0] == hostId` bleibt gewahrt. Die
+  Audience ist die Runde, nicht die ganze Freundesliste.
+- **Auswertung: `utils/availability.ts`, eine Quelle.** `aggregateWindow` teilt das
+  Fenster an jeder Grenze und zählt Deckung → **harte Kanten**, nie ein Verlauf: Die
+  Zahl der Verfügbaren springt an der Minute, ein Gradient würde eine Stetigkeit
+  behaupten, die die Daten nicht haben. `bestSlot` nimmt den höchsten Zählstand,
+  bei Gleichstand den längeren, dann den früheren; ein Peak unter 15 Minuten verliert
+  gegen einen längeren, niedrigeren Lauf. `availabilityLevel` bildet auf **maximal 5
+  Stufen** ab, unabhängig von der Gruppengröße — mehr unterscheidet das Auge nicht,
+  und eine Runde darf 50 Leute haben. Die genaue Zahl steht immer daneben.
+- **Eine gemeinsame Tageszeit-Achse (`utils/dayAxis.ts`).** Alle Vorschlagstage werden
+  auf DIESELBE Achse gezeichnet (Minuten ab der jeweiligen Mitternacht, Werte > 1440
+  für Fenster über Mitternacht). Würde jeder Tag die volle Zeilenbreite füllen, wäre
+  eine Stunde in jeder Zeile anders breit und der Vergleich, den der Stapel geradezu
+  einlädt, wäre falsch. Der leere Platz ist Information (man SIEHT, dass Samstag ein
+  Nachmittag ist), keine Verschwendung.
+- **Farben: drei, je eine Aufgabe** (`planningTheme.ts`). Violett = Identität („das ist
+  eine Planungsrunde", dasselbe Violett wie `GROUP_CHAT_ACCENT`), Amber = der Rahmen
+  des Hosts (nie Verfügbarkeit), Grün = Verfügbarkeit überall (eigener Balken,
+  Aggregat, Einzelzeilen). „Alle können" wird über die **Form** markiert (kräftiger
+  Rahmen + Wort), nie über eine zweite Farbstufe.
+- **Lesen ist chronologisch, Entscheiden ist sortiert.** Die Übersicht bleibt in
+  Tagesreihenfolge — den besten Tag nach oben zu schieben, bevor jemand geantwortet
+  hat, drückt ihn in eine Richtung. Gerankt wird nur dort, wo das Ranking die Frage
+  IST: am „festlegen"-Knopf des Hosts.
+- **Antippen fächert einen Tag an Ort und Stelle auf** (nur einer offen, wie beim
+  Kalender-Akkordeon). Das Aggregat bleibt als Summenzeile darüber stehen, weil die
+  Verdichtung buchstäblich diese Zeilen gestapelt IST. Ab ~10 Personen wird gruppiert
+  statt aufgelistet — 30 Balken liest niemand, und die Stapel-Metapher trägt dort auch
+  nicht mehr.
+- **Antworten: pro Tag ein Tap.** `[ ✓ | ✕ ]` sitzt in der **Kopfzeile des Tages**,
+  nicht auf oder neben der Schiene: im Balken kollidiert es mit den Griffen und passt
+  bei der 15-Minuten-Mindestdauer (~16 dp) gar nicht hinein, neben der Schiene kostet
+  es ein Viertel Breite und vermischt die Tages- mit der Stundenentscheidung. „Passt"
+  wählt den GANZEN Zeitraum vor; Einschränken ist optional. **Keine Vorbelegung auf
+  „Passt"** — eine Vorbelegung darf eine EINSTELLUNG raten, nie eine AUSSAGE ÜBER DIE
+  WIRKLICHKEIT; ein unüberlegtes „ich kann immer" macht die Runde kaputt.
+- **Der Picker zeichnet die Verdichtung selbst** (`layers`-Prop auf
+  `TimeRangePicker`). Die Achse ist privat und ändert sich beim Ziehen gegen den Rand;
+  ein vom Elternteil danebengemalter Streifen hätte eine zweite Zeit-zu-Pixel-Rechnung
+  und würde genau während einer Geste verrutschen. Der Aufrufer liefert WAS, der
+  Picker entscheidet WO. `core/` bleibt davon unberührt.
+- **Tests:** `npm run test:time-planning` (Aggregation, bester Slot, geteilte Achse),
+  `npm run test:time-plan-functions` (Callables im Emulator: kein Mitglied ohne
+  Antwort, Lock-Regeln, Idempotenz), `npm run test:marker-countdown` (Ringe).
+
+### Marker-Ringe: der Ring ist eine Uhr
+
+`src/features/map/utils/countdown.ts` ist die einzige Quelle. **Kein Ring heißt genau
+eine Sache: keine feste Zeit.**
+
+- **Grün = anteilig** (unverändert): „wie weit ist das schon?". Fast leer heißt „lohnt
+  nicht mehr", fast voll „gerade erst los" — und das liest sich bei 1 h wie bei 6 h
+  gleich. Ein absoluter Maßstab könnte das nicht: Ein sechsstündiges Fest stünde fünf
+  Stunden auf „voll" und sagte nichts.
+- **Amber = absolut**, über `SOON_RING_SCALE_MS` (60 min, passend zu
+  `SOON_LEAD_MINUTES`, damit ein frisch geplanter Termin bei vollem Ring startet und
+  genau zum Beginn leer läuft). Dadurch sind zwei Marker vergleichbar: halber Ring ist
+  auf jedem eine halbe Stunde. Anteilig wäre hier gar nicht definierbar — es gibt
+  keinen natürlichen Startpunkt fürs Warten. Alles jenseits des Maßstabs ist schlicht
+  „voll" = „noch nicht bald".
+- Beide leeren sich, weniger Ring heißt also immer weniger Zeit. Beim Start ist Amber
+  leer und Grün springt auf voll — dieses sichtbare Wiederauffüllen ist gewollt.
+- Quantisiert in 8 Stufen und Teil des `captureKey`, damit gecachte Marker-Bilder nur
+  bei sichtbarer Änderung neu aufgenommen werden. Ein Plan weit in der Zukunft steht
+  dauerhaft auf 1 und erzeugt keine einzige Neuaufnahme.
+
+---
+
 ## Friends Screen
 
 - **Route `/friends`** (reached from Profile via "Freunde verwalten"): the one place to see all friends, mark close friends, and manage Circles — Circles management (`CirclesSection`) lives here now, not in Profile.

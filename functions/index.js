@@ -291,6 +291,24 @@ function pushOutboxItem(item) {
   };
 }
 
+/** Wall-clock label for notification copy (German market → Europe/Berlin).
+ * A push must never make the reader work out which day "19:30" means. */
+function formatGermanDateTime(ms) {
+  if (!Number.isFinite(ms)) return '';
+  try {
+    return new Intl.DateTimeFormat('de-DE', {
+      timeZone: 'Europe/Berlin',
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(ms);
+  } catch {
+    return '';
+  }
+}
+
 async function createNotifications(items, { queuePush = true } = {}) {
   const validItems = items.filter(
     (item) => item.recipientUid && item.recipientUid !== item.actorUid,
@@ -1477,7 +1495,27 @@ exports.joinTimePlan = onCall(CALLABLE_OPTS, async (request) => {
     if (plan.status !== 'collecting' || (plan.expireAt?.toMillis?.() ?? 0) <= Date.now()) {
       throw new HttpsError('failed-precondition', 'Diese Terminfindung ist nicht mehr offen.');
     }
-    if (memberSnapshot.exists) return;
+    // Joining IS answering. A member without an availability is a name in the
+    // list that the host has to wait on forever, so the state is not creatable:
+    // the response is parsed here and written in the same transaction, and
+    // `parseTimePlanResponses` already insists on an entry for EVERY window.
+    const responsesByWindow = parseTimePlanResponses(
+      request.data?.responsesByWindow,
+      Array.isArray(plan.sourceWindows) ? plan.sourceWindows : [],
+    );
+    if (memberSnapshot.exists) {
+      // A retry after a lost response, or a legacy member left pending by the
+      // older two-step flow — repair it rather than stranding them.
+      if (memberSnapshot.data()?.responseStatus !== 'responded') {
+        transaction.update(memberRef, {
+          responseStatus: 'responded',
+          responsesByWindow,
+          basedOnRevision: plan.revision,
+          updatedAt: Timestamp.now(),
+        });
+      }
+      return;
+    }
     if (!inviteSnapshot.exists || inviteSnapshot.data()?.status !== 'pending') {
       throw new HttpsError(
         'permission-denied',
@@ -1502,8 +1540,9 @@ exports.joinTimePlan = onCall(CALLABLE_OPTS, async (request) => {
       displayName: cleanString(profile.displayName, 50, 'Name', true),
       initials: cleanString(profile.initials, 8, 'Initialen', true),
       role: 'member',
-      responseStatus: 'pending',
-      responsesByWindow: {},
+      responseStatus: 'responded',
+      responsesByWindow,
+      basedOnRevision: plan.revision,
       updatedAt: Timestamp.now(),
       expireAt: plan.expireAt,
     });
@@ -1560,6 +1599,213 @@ exports.respondToTimePlan = onCall(CALLABLE_OPTS, async (request) => {
     });
   });
   return { ok: true };
+});
+
+/**
+ * The step that lets a Terminfindung END.
+ *
+ * Without it a plan collects answers and then expires, which is why every
+ * display decision around it was decoration. Locking turns the round into an
+ * ordinary Activity — from that moment the existing machinery (marker, chat,
+ * Anreise, joining) applies and nothing here is special any more.
+ *
+ * Members whose answer COVERS the chosen slot are carried over as participants:
+ * they already said they can, so making them tap again would be asking a
+ * question they have answered. Everyone else is notified and can join normally.
+ */
+exports.lockTimePlan = onCall(CALLABLE_OPTS, async (request) => {
+  const uid = requireVerifiedAuth(request);
+  await enforceRateLimit(uid, 'activities', 20, HOUR_MS);
+  const planId = request.data?.planId;
+  const windowId = request.data?.windowId;
+  const activityId = request.data?.activityId;
+  if (!validActivityId(planId) || !validActivityId(activityId) || typeof windowId !== 'string') {
+    throw new HttpsError('invalid-argument', 'Ungültige Terminfindung.');
+  }
+  const startsAt = cleanString(request.data?.startsAt, 80, 'Startzeit', true);
+  const endsAt = cleanString(request.data?.endsAt, 80, 'Endzeit', true);
+  const startMs = Date.parse(startsAt);
+  const endMs = Date.parse(endsAt);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+    throw new HttpsError('invalid-argument', 'Ungültiger Zeitraum.');
+  }
+
+  const db = getFirestore();
+  const planRef = db.doc(`timePlans/${planId}`);
+  const activityRef = db.doc(`activities/${activityId}`);
+  const roomRef = db.doc(`chats/${activityId}`);
+  const journeyReminderGeneration = randomUUID();
+  const activeActivitiesByHost = db
+    .collection('activities')
+    .where('hostId', '==', uid)
+    .where('status', '==', 'active')
+    .limit(MAX_ACTIVE_ACTIVITIES_PER_HOST);
+
+  const notified = [];
+  let lockedTitle = '';
+  await db.runTransaction(async (transaction) => {
+    const [planSnapshot, activitySnapshot, roomSnapshot, membersSnapshot, activeSnapshot] =
+      await Promise.all([
+        transaction.get(planRef),
+        transaction.get(activityRef),
+        transaction.get(roomRef),
+        transaction.get(planRef.collection('timePlanMembers').limit(TIME_PLAN_MAX_MEMBERS)),
+        transaction.get(activeActivitiesByHost),
+      ]);
+    if (!planSnapshot.exists) throw new HttpsError('not-found', 'Terminfindung nicht gefunden.');
+    const plan = planSnapshot.data();
+    if (plan.hostId !== uid) {
+      throw new HttpsError('permission-denied', 'Nur der Host kann den Termin festlegen.');
+    }
+    if (activitySnapshot.exists) {
+      // The client-generated activity id is the idempotency key, exactly as in
+      // createActivity: a lost response may be retried, nobody else may claim it.
+      if (activitySnapshot.data()?.hostId === uid) return;
+      throw new HttpsError('already-exists', 'Diese Activity existiert bereits.');
+    }
+    if (plan.status !== 'collecting') {
+      throw new HttpsError('failed-precondition', 'Diese Terminfindung ist bereits abgeschlossen.');
+    }
+    if (roomSnapshot.exists) {
+      throw new HttpsError('failed-precondition', 'Der Activity-Chat ist bereits belegt.');
+    }
+    if (activeSnapshot.size >= MAX_ACTIVE_ACTIVITIES_PER_HOST) {
+      throw new HttpsError(
+        'resource-exhausted',
+        `Du kannst maximal ${MAX_ACTIVE_ACTIVITIES_PER_HOST} aktive Activities gleichzeitig hosten.`,
+      );
+    }
+
+    const sourceWindows = Array.isArray(plan.sourceWindows) ? plan.sourceWindows : [];
+    const window = sourceWindows.find((entry) => entry?.id === windowId);
+    if (!window) throw new HttpsError('not-found', 'Dieser Zeitvorschlag existiert nicht.');
+    const windowStart = Date.parse(window.startsAt);
+    const windowEnd = Date.parse(window.endsAt);
+    if (startMs < windowStart || endMs > windowEnd) {
+      throw new HttpsError('invalid-argument', 'Der Termin liegt außerhalb des Vorschlags.');
+    }
+    const now = Date.now();
+    if (endMs <= now) {
+      throw new HttpsError('failed-precondition', 'Dieser Zeitraum liegt bereits in der Vergangenheit.');
+    }
+
+    const members = membersSnapshot.docs
+      .map((snapshot) => snapshot.data())
+      .filter((member) => validUid(member?.uid));
+    const hostMember = members.find((member) => member.uid === uid);
+    // Everyone whose answer covers the whole slot. The host is first because
+    // `participantUids[0] == hostId` is a firestore.rules invariant.
+    const covering = members.filter((member) => {
+      if (member.uid === uid || member.responseStatus !== 'responded') return false;
+      const intervals = member.responsesByWindow?.[windowId];
+      if (!Array.isArray(intervals)) return false;
+      return intervals.some((interval) => {
+        const from = Date.parse(interval?.startsAt);
+        const to = Date.parse(interval?.endsAt);
+        return Number.isFinite(from) && Number.isFinite(to) && from <= startMs && to >= endMs;
+      });
+    });
+    const capacity = Number.isInteger(plan.maxParticipants)
+      ? plan.maxParticipants
+      : TIME_PLAN_MAX_MEMBERS;
+    const carried = covering.slice(0, Math.max(0, capacity - 1));
+
+    const hostName = cleanString(plan.hostName ?? hostMember?.displayName, 50, 'Name', true);
+    const hostInitials = cleanString(
+      plan.hostInitials ?? hostMember?.initials ?? hostName.slice(0, 2).toUpperCase(),
+      8,
+      'Initialen',
+      true,
+    );
+    const participants = [
+      { uid, displayName: hostName, initials: hostInitials },
+      ...carried.map((member) => contactSnapshot(member.uid, member)),
+    ];
+    const participantUids = participants.map((participant) => participant.uid);
+    // Only people who took part in the round. Someone invited who never
+    // answered did not join it, and inheriting them would widen the audience
+    // past what the round actually was.
+    const audienceUids = [...new Set([...participantUids, ...members.map((m) => m.uid)])];
+
+    const title = cleanString(plan.title, 60, 'Titel', true);
+    lockedTitle = title;
+    const chatExpireAt = endMs + ACTIVITY_CHAT_RETENTION_MS;
+    transaction.create(activityRef, {
+      hostId: uid,
+      // A slot that has already begun is genuinely running; anything else is a
+      // plan. `resolveActivityMode` would show it as `now` either way, but the
+      // STORED mode is what decides whether an Anreise exists.
+      mode: startMs <= now ? 'now' : 'soon',
+      title,
+      audienceUids,
+      startsAt,
+      endsAt,
+      ...(plan.place ? { place: plan.place } : {}),
+      ...(Number.isInteger(plan.maxParticipants) ? { maxParticipants: plan.maxParticipants } : {}),
+      ...(plan.category ? { category: plan.category } : {}),
+      ...(plan.guestInvitesEnabled === true ? { guestInvitesEnabled: true } : {}),
+      participants,
+      participantUids,
+      status: 'active',
+      journeyReminderGeneration,
+      timePlanId: planId,
+      createdAt: Timestamp.now(),
+      visibleUntil: Timestamp.fromMillis(endMs),
+      expireAt: Timestamp.fromMillis(chatExpireAt),
+    });
+    transaction.create(roomRef, {
+      type: 'activity',
+      title,
+      memberIds: participantUids,
+      messageCount: 0,
+      readCount: {},
+      createdAt: Timestamp.now(),
+      expireAt: Timestamp.fromMillis(chatExpireAt),
+    });
+    transaction.update(planRef, {
+      status: 'locked',
+      activityId,
+      lockedWindowId: windowId,
+      lockedStartsAt: startsAt,
+      lockedEndsAt: endsAt,
+      updatedAt: Timestamp.now(),
+    });
+
+    members.forEach((member) => {
+      if (member.uid === uid) return;
+      notified.push(member.uid);
+      transaction.create(db.doc(`notifications/timeplanlocked_${planId}_${member.uid}`), {
+        recipientUid: member.uid,
+        kind: 'time_plan_locked',
+        title: 'Der Termin steht',
+        body: `${title} · ${formatGermanDateTime(startMs)}`,
+        activityId,
+        timePlanId: planId,
+        createdAt: Timestamp.now(),
+        expireAt: Timestamp.fromMillis(chatExpireAt),
+      });
+    });
+    if (notified.length) {
+      transaction.create(db.collection('pushOutbox').doc(), {
+        items: notified.map((recipientUid) =>
+          pushOutboxItem({
+            recipientUid,
+            actorUid: uid,
+            kind: 'time_plan_locked',
+            title: 'Der Termin steht',
+            body: `${title} · ${formatGermanDateTime(startMs)}`,
+            activityId,
+            timePlanId: planId,
+          }),
+        ),
+        timePlanId: planId,
+        createdAt: Timestamp.now(),
+        expireAt: Timestamp.fromMillis(chatExpireAt),
+      });
+    }
+  });
+
+  return { ok: true, id: activityId, title: lockedTitle, notified: notified.length };
 });
 
 exports.createActivity = onCall(CALLABLE_OPTS, async (request) => {

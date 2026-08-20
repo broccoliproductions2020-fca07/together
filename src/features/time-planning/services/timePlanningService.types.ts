@@ -17,7 +17,25 @@ export interface TimePlanCreation {
 
 export interface TimePlanningService {
   createTimePlan(actor: TimePlanActor, input: TimePlanCreateInput): TimePlanCreation;
-  joinTimePlan(actor: TimePlanActor, planId: string): Promise<void>;
+  /**
+   * Joining IS answering — one call, both or neither.
+   *
+   * Two calls would leave a window in which a dropped connection produces a
+   * member with no availability: a name the host waits on forever. The server
+   * refuses to create that state, so the client must not be able to ask for it.
+   */
+  joinTimePlan(
+    actor: TimePlanActor,
+    planId: string,
+    responsesByWindow: Record<string, TimePlanInterval[]>,
+  ): Promise<void>;
+  /** Host-only. Turns the round into a real Activity and returns its id. */
+  lockTimePlan(
+    actor: TimePlanActor,
+    planId: string,
+    windowId: string,
+    slot: TimePlanInterval,
+  ): Promise<string>;
   respondToTimePlan(
     actor: TimePlanActor,
     planId: string,

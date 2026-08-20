@@ -1,6 +1,7 @@
 export { TimeRangePicker } from './TimeRangePicker';
 export type {
   HandleSlotState,
+  TimeRangeLayer,
   TimeRangePickerProps,
   TimeRangeValue,
 } from './TimeRangePicker';

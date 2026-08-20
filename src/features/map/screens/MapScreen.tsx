@@ -292,9 +292,6 @@ export function MapScreen({
   const [postfachVisible, setPostfachVisible] = useState(false);
   const [timePlanId, setTimePlanId] = useState<string>();
   const [timePlanPromptOnOpen, setTimePlanPromptOnOpen] = useState(false);
-  const [timePlanJoiningId, setTimePlanJoiningId] = useState<string | null>(null);
-  const timePlanJoinRevisionRef = useRef(0);
-  const timePlanJoinInFlightRef = useRef<string | null>(null);
   // The open chat carries its resolved colour, so the same room looks the same
   // whether it was opened from the Postfach, a push, or the marker sheet.
   const [chatActivity, setChatActivity] = useState<PostfachChatTarget | null>(null);
@@ -1097,31 +1094,15 @@ export function MapScreen({
     );
   }
 
-  async function openJoinedTimePlan(planId: string) {
-    if (timePlanJoinInFlightRef.current === planId) return;
-    const requestRevision = ++timePlanJoinRevisionRef.current;
-    timePlanJoinInFlightRef.current = planId;
-    setTimePlanJoiningId(planId);
-    try {
-      await timePlanningService.joinTimePlan({ uid: currentUid }, planId);
-      if (requestRevision !== timePlanJoinRevisionRef.current) return;
-      setPostfachVisible(false);
-      setTimePlanId(planId);
-      setTimePlanPromptOnOpen(true);
-      haptics.success();
-    } catch (error) {
-      if (requestRevision !== timePlanJoinRevisionRef.current) return;
-      haptics.warning();
-      Alert.alert(
-        'Beitritt nicht möglich',
-        error instanceof Error ? error.message : 'Bitte versuche es gleich noch einmal.',
-      );
-    } finally {
-      if (requestRevision === timePlanJoinRevisionRef.current) {
-        timePlanJoinInFlightRef.current = null;
-        setTimePlanJoiningId(null);
-      }
-    }
+  /**
+   * Opening an invitation must NOT join. Joining is answering, and answering
+   * happens in the sheet — a tap here used to add the person as a member with
+   * an empty availability, which is the one state the round cannot use.
+   */
+  function openTimePlan(planId: string) {
+    setPostfachVisible(false);
+    setTimePlanId(planId);
+    setTimePlanPromptOnOpen(true);
   }
 
   function closeNearbySheet() {
@@ -2132,13 +2113,7 @@ export function MapScreen({
           <PostfachSheet
             visible={postfachVisible}
             covered={chatActivity !== null}
-            timePlanJoiningId={timePlanJoiningId}
-            onClose={() => {
-              timePlanJoinRevisionRef.current += 1;
-              timePlanJoinInFlightRef.current = null;
-              setTimePlanJoiningId(null);
-              setPostfachVisible(false);
-            }}
+            onClose={() => setPostfachVisible(false)}
             onEditActivity={(activity) => {
               if (!openActivityEditor(activity.id)) {
                 Alert.alert(
@@ -2166,7 +2141,7 @@ export function MapScreen({
               }
             }}
             onOpenSpontaneousRoundInvite={openSpontaneousRoundInvite}
-            onOpenTimePlan={(planId) => void openJoinedTimePlan(planId)}
+            onOpenTimePlan={(planId) => openTimePlan(planId)}
           />
 
           <TimePlanningSheet
@@ -2177,6 +2152,7 @@ export function MapScreen({
               setTimePlanPromptOnOpen(false);
               setTimePlanId(undefined);
             }}
+            onOpenActivity={(activityId) => openActivityById(activityId)}
           />
 
           <MarkerDetailSheet

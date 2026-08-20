@@ -294,10 +294,22 @@ service cloud.firestore {
 
     // ---------- timePlans/{planId} ----------
     // A time plan is deliberately not an Activity: it has no marker, no chat
-    // and no fixed date until the host later locks one. Invitations stay
-    // server-private; only people who joined may read availability.
+    // and no fixed date until the host later locks one.
+    //
+    // TWO tiers, because joining IS answering and the answer surface has to
+    // open BEFORE anyone is a member. An invitee may read the ROUND — title,
+    // place and the proposed windows, i.e. exactly what they need in order to
+    // answer — and nothing else. Availability stays members-only: someone who
+    // has not shared their own times does not get to read everyone else's.
+    // The invite id is deterministic (`{planId}_{uid}`, written by
+    // createTimePlan), so this costs one lookup and still lets nobody
+    // enumerate who else was asked.
     match /timePlans/{planId} {
-      allow read: if signedIn() && request.auth.uid in resource.data.memberUids;
+      function invited() {
+        return exists(/databases/$(database)/documents/timePlanInvites/$(planId + '_' + request.auth.uid));
+      }
+      allow read: if signedIn()
+        && (request.auth.uid in resource.data.memberUids || invited());
       allow create, update, delete: if false;
 
       match /timePlanMembers/{uid} {

@@ -42,6 +42,11 @@ export interface TimePlan {
   sourceWindows: TimePlanWindow[];
   revision: number;
   status: 'collecting' | 'locked' | 'cancelled';
+  /** Set once the host locks a slot: from here on the round IS an Activity. */
+  activityId?: string;
+  lockedWindowId?: string;
+  lockedStartsAt?: string;
+  lockedEndsAt?: string;
   memberUids: string[];
   createdAt: number;
   updatedAt: number;

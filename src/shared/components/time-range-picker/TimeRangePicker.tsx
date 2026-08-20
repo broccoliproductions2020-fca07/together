@@ -134,6 +134,19 @@ export interface HandleSlotState {
   height: number;
 }
 
+/**
+ * A read-only block on the picker's own axis, drawn in a band above the bar.
+ *
+ * `level` indexes the theme's colour ramp (0 = not drawn). Blocks are expected
+ * to be non-overlapping and already merged by the caller — the picker only
+ * places them, it does not reason about what they mean.
+ */
+export interface TimeRangeLayer {
+  startMs: number;
+  endMs: number;
+  level: number;
+}
+
 export interface TimeRangePickerProps {
   value: TimeRangeValue;
   /** Earliest selectable time. Defaults to the value's own start, so a picker
@@ -148,6 +161,10 @@ export interface TimeRangePickerProps {
   /** Pointer travel past the safe edge that reaches full edge speed. */
   edgeZonePx?: number;
   safeInsetPx?: number;
+
+  /** Read-only context drawn above the bar, on this picker's axis. See
+   * {@link TimeRangeLayer} — the caller supplies what, the picker where. */
+  layers?: readonly TimeRangeLayer[];
 
   density?: TimeRangePickerDensity;
   accent?: string;
@@ -218,6 +235,7 @@ export function TimeRangePicker({
   maxDurationMinutes = 720,
   edgeZonePx = 52,
   safeInsetPx,
+  layers,
   density = 'default',
   accent = '#41C08D',
   accentSequence,
@@ -681,6 +699,10 @@ export function TimeRangePicker({
 
   const trackHeight = theme.container.height - theme.ticks.bottom;
   const barTop = Math.max(0, Math.round((trackHeight - theme.range.height) / 2));
+  // The band sits directly above the bar. It is clamped to the container rather
+  // than growing it: a caller that wants more room raises `container.height`,
+  // so a picker never silently changes size because of read-only context.
+  const layerTop = Math.max(0, barTop - theme.layers.height - theme.layers.gap);
   const startHandleHeight = handleHeightPx(theme.startHandle, theme.range.height);
   const endHandleHeight = handleHeightPx(theme.endHandle, theme.range.height);
 
@@ -826,6 +848,18 @@ export function TimeRangePicker({
           ]}
         />
 
+        {layers?.map((layer) =>
+          layer.level > 0 ? (
+            <Layer
+              key={`${layer.startMs}-${layer.endMs}`}
+              layer={layer}
+              state={state}
+              top={layerTop}
+              theme={theme}
+            />
+          ) : null,
+        )}
+
         {ticks.map((tickMs) => (
           <Tick
             key={tickMs}
@@ -950,6 +984,53 @@ interface TickProps {
 }
 
 /**
+ * One read-only block, placed by a worklet from its OWN two times.
+ *
+ * Same principle as {@link Tick}: because the node knows the moments it stands
+ * for, panning and zooming cost no React work, and it can never disagree with
+ * the bar about where a given minute is — both read the one transform.
+ */
+function Layer({
+  layer,
+  state,
+  top,
+  theme,
+}: {
+  layer: TimeRangeLayer;
+  state: SharedValue<PickerState>;
+  top: number;
+  theme: TimeRangePickerTheme;
+}) {
+  const style = useAnimatedStyle(() => {
+    const { viewport } = state.value;
+    const left = timeToX(viewport, layer.startMs);
+    return {
+      transform: [{ translateX: left }],
+      width: Math.max(0, timeToX(viewport, layer.endMs) - left),
+    };
+  });
+  const color =
+    theme.layers.colors[Math.min(layer.level, theme.layers.colors.length) - 1] ??
+    theme.layers.colors[theme.layers.colors.length - 1];
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[
+        styles.layer,
+        {
+          top,
+          height: theme.layers.height,
+          borderRadius: theme.layers.radius,
+          backgroundColor: color,
+        },
+        style,
+      ]}
+    />
+  );
+}
+
+/**
  * One hour mark, placed by a worklet from its OWN time.
  *
  * Because each node knows the moment it stands for, panning and zooming need no
@@ -1015,6 +1096,7 @@ const styles = StyleSheet.create({
     left: -TICK_LABEL_WIDTH / 2,
     alignItems: 'center',
   },
+  layer: { position: 'absolute', left: 0 },
   range: { position: 'absolute', left: 0, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   handleHit: { position: 'absolute', left: 0, alignItems: 'center', justifyContent: 'center' },
 });

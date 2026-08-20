@@ -127,7 +127,10 @@
     "dashboard:desktop": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue; & .\\node_modules\\.bin\\electron.cmd admin\\desktop\\main.cjs\"",
     "dashboard:desktop:package": "electron-builder --win nsis",
     "test:audience-selection": "node scripts/test-audience-selection.mjs",
-    "test:time-range-picker": "node scripts/test-time-range-picker.mjs"
+    "test:time-range-picker": "node scripts/test-time-range-picker.mjs",
+    "test:time-planning": "node scripts/test-time-planning.mjs",
+    "test:time-plan-functions": "node scripts/firebase-functions-emulators-exec.js \"node scripts/test-time-plan-functions.js\"",
+    "test:marker-countdown": "node scripts/test-marker-countdown.mjs"
   },
   "private": true,
   "engines": {

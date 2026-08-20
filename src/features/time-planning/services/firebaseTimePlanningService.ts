@@ -68,6 +68,10 @@ function planFromDoc(id: string, data: DocumentData): TimePlan {
     sourceWindows: Array.isArray(data.sourceWindows) ? data.sourceWindows : [],
     revision: Number.isInteger(data.revision) ? data.revision : 1,
     status: data.status === 'locked' || data.status === 'cancelled' ? data.status : 'collecting',
+    activityId: typeof data.activityId === 'string' ? data.activityId : undefined,
+    lockedWindowId: typeof data.lockedWindowId === 'string' ? data.lockedWindowId : undefined,
+    lockedStartsAt: typeof data.lockedStartsAt === 'string' ? data.lockedStartsAt : undefined,
+    lockedEndsAt: typeof data.lockedEndsAt === 'string' ? data.lockedEndsAt : undefined,
     memberUids: stringArray(data.memberUids),
     createdAt: millis(data.createdAt),
     updatedAt: millis(data.updatedAt),
@@ -113,8 +117,22 @@ export const firebaseTimePlanningService: TimePlanningService = {
     };
   },
 
-  async joinTimePlan(_actor, planId) {
-    await httpsCallable(getFirebaseFunctions(), 'joinTimePlan')({ planId });
+  async joinTimePlan(_actor, planId, responsesByWindow) {
+    await httpsCallable(getFirebaseFunctions(), 'joinTimePlan')({ planId, responsesByWindow });
+  },
+
+  async lockTimePlan(_actor, planId, windowId, slot) {
+    // Client-generated id, like createActivity: it is the idempotency key, so a
+    // lost response may be retried without producing a second Activity.
+    const activityId = `activity_${Crypto.randomUUID()}`;
+    await httpsCallable(getFirebaseFunctions(), 'lockTimePlan')({
+      planId,
+      windowId,
+      activityId,
+      startsAt: slot.startsAt,
+      endsAt: slot.endsAt,
+    });
+    return activityId;
   },
 
   async respondToTimePlan(actor, planId, revision, responsesByWindow) {
