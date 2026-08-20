@@ -1,8 +1,8 @@
 /**
  * Contrast-aware foreground for coloured surfaces (buttons, chips, badges).
  *
- * The activity mode accents (`now` #41C08D, `soon` #E0A23E, `open` #6E8BF7) are
- * mid-tone colours: white text on them measures ~2.2–3.1:1, below the WCAG AA
+ * The activity mode accents (`now` #41C08D, `soon` #E0A23E, `open` #3B82F6) are
+ * mid-tone colours: white text on them measures ~2.2–3.7:1, below the WCAG AA
  * threshold (4.5:1 body / 3:1 large text). Picking the foreground by measured
  * luminance instead of hard-coding white keeps every accent button legible —
  * dark ink lands on the light accents, white stays where it genuinely passes.

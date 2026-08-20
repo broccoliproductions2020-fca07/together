@@ -71,31 +71,56 @@ function formatReverseGeocodedAddress(address: Location.LocationGeocodedAddress)
   );
 }
 
-async function reverseGeocodePlaceTitle(coordinate: MapCoordinate) {
+/** Name and street address of a coordinate, kept apart so the UI can show the
+ * address WITHOUT repeating the name it already put in the title. */
+/**
+ * A coordinate as a human address, via the OS geocoder.
+ *
+ * `expo-location`'s reverse geocoding is a platform call, not the Places API —
+ * no key, no billing, works offline on cached tiles. That is why the composer
+ * may resolve an address for the device position without it becoming a cost
+ * question. Returns null rather than throwing: no address is a normal outcome
+ * (mid-field, at sea, permission just revoked) and never worth an error state.
+ */
+export async function describeCoordinate(coordinate: MapCoordinate) {
+  return reverseGeocodePlace(coordinate);
+}
+
+async function reverseGeocodePlace(coordinate: MapCoordinate) {
   try {
     const [address] = await Location.reverseGeocodeAsync(coordinate);
-    return address ? formatReverseGeocodedAddress(address) : null;
+    if (!address) return null;
+    const street = compactAddressParts([address.street, address.streetNumber]);
+    const area = compactAddressParts([address.district, address.city]);
+    const full = address.formattedAddress?.trim() || compactAddressParts([street, area]);
+    const title = formatReverseGeocodedAddress(address);
+    if (!title) return null;
+    return { title, address: full && full !== title ? full : undefined };
   } catch {
     return null;
   }
 }
 
+/**
+ * A tapped or long-pressed point, as a selection.
+ *
+ * The subtitle carries a STREET ADDRESS or nothing at all. It used to explain
+ * where the data came from — "kostenlos aus der Koordinate erkannt, kein
+ * Places-API-Konto nötig", plus the raw lat/lng — which is a note to ourselves
+ * about billing, printed under the place name for every user to read. Whether a
+ * lookup was free is not something anyone choosing a meeting spot needs to know.
+ */
 export async function placeToSelection(place: MapPlaceSelection): Promise<MapSelection> {
-  const coordinate = `${place.coordinate.latitude.toFixed(5)}, ${place.coordinate.longitude.toFixed(5)}`;
   const rawTitle = place.title.trim();
   const hasPoiName = place.source === 'poi' && rawTitle !== UNKNOWN_PLACE_TITLE;
-  const reverseGeocodedTitle = hasPoiName ? null : await reverseGeocodePlaceTitle(place.coordinate);
-  const title = hasPoiName ? rawTitle : reverseGeocodedTitle || UNKNOWN_PLACE_TITLE;
-  const sourceHint = hasPoiName
-    ? 'Von der Karte erkannt. Kostenlose Basisdaten, keine Places-API-Abfrage.'
-    : reverseGeocodedTitle
-      ? 'Kostenlos aus der Koordinate als Adresse erkannt. Kein Places-API-Konto nötig.'
-      : 'Die Karte hat keinen Ortsnamen geliefert. Tippe direkt auf einen Ortsnamen/POI oder öffne Karten.';
+  const geocoded = hasPoiName ? null : await reverseGeocodePlace(place.coordinate);
 
   return {
     type: 'Place',
-    title,
-    subtitle: `${sourceHint} Koordinate: ${coordinate}`,
+    title: hasPoiName ? rawTitle : (geocoded?.title ?? UNKNOWN_PLACE_TITLE),
+    // A POI tap makes no Details call, so no address exists for it — better an
+    // empty line than a filler one.
+    subtitle: hasPoiName ? undefined : geocoded?.address,
     coordinate: place.coordinate,
     placeId: place.placeId,
     source: place.source,

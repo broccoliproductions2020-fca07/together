@@ -88,10 +88,8 @@ export interface OpenStatusValue {
    */
   setFriendPresenceListening: (enabled: boolean) => void;
   /**
-   * Become open. Called ONLY by the form's confirm button — going open sends a
-   * real signal to real friends, so it must never be the side effect of opening
-   * a sheet. Without an argument it uses the defaults (no vibe, +3 h, no
-   * location); the form passes what the user actually chose, in one write.
+   * Become open. The explicit core tap may use the safe defaults (no vibe, +3 h,
+   * no location); refinements use the same write path from the status card.
    */
   goOpen: (input?: GoOpenInput) => void;
   /** Optional refinement while open; pass null to clear the vibe. */
@@ -128,6 +126,31 @@ const OpenStatusContext = createContext<OpenStatusValue | null>(null);
 /** Round to ~3 decimals (~110 m) so the shared location is deliberately coarse. */
 function coarsen(lat: number, lng: number): CoarseLocation {
   return { lat: Math.round(lat * 1000) / 1000, lng: Math.round(lng * 1000) / 1000 };
+}
+
+function presenceSyncErrorMessage(error: unknown, target: PersistedStatus): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  const normalizedCode = typeof code === 'string' ? code.replace(/^functions\//, '') : '';
+  const message = error instanceof Error ? error.message.replace(/^\[[^\]]+\]\s*/, '').trim() : '';
+
+  if (normalizedCode === 'unavailable' || normalizedCode === 'deadline-exceeded') {
+    return 'Keine Verbindung zum Server. Dein Offen-Status wurde nicht veröffentlicht.';
+  }
+  if (normalizedCode === 'resource-exhausted') {
+    return message || 'Zu viele Änderungen. Bitte warte kurz und versuche es erneut.';
+  }
+  if (normalizedCode === 'failed-precondition') {
+    return message || 'Dein Konto ist noch nicht bereit für diesen Schritt.';
+  }
+  if (
+    normalizedCode === 'invalid-argument' &&
+    /^(Name|Initialen) ist ungültig\.$/.test(message)
+  ) {
+    return 'Dein Profil wird noch eingerichtet. Starte die App kurz neu und versuche es erneut.';
+  }
+  return target.isOpen
+    ? 'Dein Offen-Status konnte nicht veröffentlicht werden.'
+    : 'Dein Offen-Status konnte noch nicht beendet werden.';
 }
 
 /**
@@ -332,7 +355,7 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    const fail = () => {
+    const fail = (error: unknown) => {
       if (revision !== statusRevisionRef.current) return;
       const rollback = confirmedStatusRef.current;
       failedTargetRef.current = target;
@@ -342,11 +365,7 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
       setStatus(rollback);
       queueStorageWrite(actor.uid, rollback);
       setSyncing(false);
-      setSyncError(
-        target.isOpen
-          ? 'Dein Offen-Status konnte nicht veröffentlicht werden.'
-          : 'Dein Offen-Status konnte noch nicht beendet werden.',
-      );
+      setSyncError(presenceSyncErrorMessage(error, target));
     };
 
     const complete = () => {
@@ -367,10 +386,14 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
     if (!status.isOpen) {
       if (remotePresenceRef.current || hasIssuedOpenWriteRef.current) {
         submit(() => presenceService.clearPresence(actor));
+      } else {
+        setSyncing(false);
       }
       return;
     }
 
+    const writeDelay =
+      remotePresenceRef.current || hasIssuedOpenWriteRef.current ? PRESENCE_WRITE_DEBOUNCE_MS : 0;
     const timer = setTimeout(() => {
       // No `audienceUids` here on purpose: the `publishPresence` callable
       // derives the audience server-side from the caller's real friend edges
@@ -386,7 +409,7 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
           coarseLocation: status.shareLocation ? coarse : null,
         }),
       );
-    }, PRESENCE_WRITE_DEBOUNCE_MS);
+    }, writeDelay);
 
     return () => clearTimeout(timer);
   }, [hydratedAccountUid, actor, status, coarse, queuePresenceWrite, queueStorageWrite]);
@@ -418,6 +441,9 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
   const goOpen = useCallback(
     (input?: GoOpenInput) => {
       const now = Date.now();
+      // The explicit core tap is a real server-bound action. Show that it is
+      // pending before the first render, while keeping every exit control live.
+      setSyncing(true);
       persist({
         isOpen: true,
         vibe: input?.vibe ?? null,

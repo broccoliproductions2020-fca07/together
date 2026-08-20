@@ -84,10 +84,11 @@ function mapNotification(id: string, data: DocumentData): NotificationDoc {
     id,
     recipientUid: data.recipientUid,
     kind: data.kind,
-    title: data.title ?? 'Como',
+    title: data.title ?? 'Mica',
     body: data.body ?? '',
     activityId: data.activityId,
     roomId: data.roomId,
+    timePlanId: data.timePlanId,
     safetyOwnerUid: data.safetyOwnerUid,
     safetyAlertAt: typeof data.safetyAlertAt === 'number' ? data.safetyAlertAt : undefined,
     createdAt: toMillis(data.createdAt),
@@ -147,7 +148,7 @@ export const firebaseNotificationService: NotificationService = {
   async registerDevice(_actor) {
     if (Device.osName === 'Android') {
       await Notifications.setNotificationChannelAsync('default', {
-        name: 'Como',
+        name: 'Mica',
         importance: Notifications.AndroidImportance.DEFAULT,
       });
       await Notifications.setNotificationChannelAsync(JOURNEY_CHANNEL_ID, {

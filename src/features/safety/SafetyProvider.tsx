@@ -744,7 +744,7 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
           await ensureSafetyNotificationPermission();
           if (safetyBackgroundRequired() && !(await requestSafetyBackgroundPermission())) {
             throw new Error(
-              'Für einen zuverlässigen Heimweg benötigt Como den Standortzugriff „Immer“. Es wird nichts im Hintergrund geteilt, bevor du den Heimweg startest.',
+              'Für einen zuverlässigen Heimweg benötigt Mica den Standortzugriff „Immer“. Es wird nichts im Hintergrund geteilt, bevor du den Heimweg startest.',
             );
           }
           setStartPhase('session');

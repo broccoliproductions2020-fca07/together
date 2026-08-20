@@ -23,7 +23,7 @@ export function openLocationSettings() {
 export function showLocationPermissionAlert() {
   Alert.alert(
     'Standortzugriff benötigt',
-    'Como hat keinen Zugriff auf deinen Standort. Du kannst ihn in den Systemeinstellungen erlauben.',
+    'Mica hat keinen Zugriff auf deinen Standort. Du kannst ihn in den Systemeinstellungen erlauben.',
     [
       { text: 'Abbrechen', style: 'cancel' },
       { text: 'Einstellungen öffnen', onPress: openLocationSettings },

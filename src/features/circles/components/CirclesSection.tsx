@@ -9,7 +9,7 @@ import { AnimatedToggleIcon } from '@/shared/components/AnimatedToggleIcon';
 import { useCircles } from '../CirclesProvider';
 import type { CircleDoc } from '../services/circleService.types';
 
-const ACCENT = '#6E8BF7';
+const ACCENT = '#3B82F6';
 
 function Avatar({ friend, small = false }: { friend: FriendProfile; small?: boolean }) {
   const size = small ? 'h-8 w-8' : 'h-10 w-10';

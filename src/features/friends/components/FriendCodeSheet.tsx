@@ -12,11 +12,13 @@ interface FriendCodeSheetProps {
  * prefilled; the recipient still deliberately sends a normal request. */
 export function FriendCodeSheet({ visible, username, onClose }: FriendCodeSheetProps) {
   const cleanUsername = username.trim().replace(/^@/, '');
-  const link = `como://friends?add=${encodeURIComponent(cleanUsername)}`;
+  // New codes use Together's canonical scheme. The scanner still accepts the
+  // historic mica:// variant so a printed or shared older code does not break.
+  const link = `together://friends?add=${encodeURIComponent(cleanUsername)}`;
 
   async function share() {
     await Share.share({
-      message: `Füge mich bei Como hinzu: @${cleanUsername}\n${link}`,
+      message: `Füge mich bei Mica hinzu: @${cleanUsername}\n${link}`,
     });
   }
 
@@ -39,12 +41,12 @@ export function FriendCodeSheet({ visible, username, onClose }: FriendCodeSheetP
             <Ionicons name="close" size={20} color="#fff" />
           </Pressable>
           <View className="items-center">
-            <View className="h-12 w-12 items-center justify-center rounded-2xl bg-[#6E8BF7]/20">
-              <Ionicons name="qr-code-outline" size={24} color="#AEBFFF" />
+            <View className="h-12 w-12 items-center justify-center rounded-2xl bg-[#3B82F6]/20">
+              <Ionicons name="qr-code-outline" size={24} color="#B6D3FF" />
             </View>
             <Text className="mt-4 text-xl font-extrabold text-white">Mein Freundescode</Text>
             <Text className="mt-2 max-w-[250px] text-center text-sm leading-5 text-white/55">
-              Der Code öffnet Como direkt mit deiner Freundschaftsanfrage. Du bestätigst sie danach
+              Der Code öffnet Mica direkt mit deiner Freundschaftsanfrage. Du bestätigst sie danach
               wie gewohnt.
             </Text>
             <View className="mt-5 rounded-[24px] bg-white p-4">

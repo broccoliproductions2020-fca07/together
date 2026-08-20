@@ -38,7 +38,7 @@ export function JourneyAvatarMarker({
   onPress,
 }: JourneyAvatarMarkerProps) {
   const arrived = participant.status === 'arrived';
-  const color = colorOverride ?? (arrived ? '#41C08D' : '#6E8BF7');
+  const color = colorOverride ?? (arrived ? '#41C08D' : '#3B82F6');
 
   return (
     <Pressable

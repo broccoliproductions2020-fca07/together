@@ -40,7 +40,7 @@ export function CalendarHeader({ viewMode, onToggleViewMode }: CalendarHeaderPro
           <Ionicons
             name={viewMode === 'week' ? 'grid-outline' : 'calendar-outline'}
             size={16}
-            color="#6E8BF7"
+            color="#3B82F6"
           />
           <Text className="text-xs font-bold text-foreground">
             {viewMode === 'week' ? 'Monat' : 'Woche'}

@@ -1,4 +1,4 @@
-# Como roadmap
+# Mica roadmap
 
 The roadmap is constrained by the implemented product and release architecture.
 Development uses the Firebase Emulator Suite; staging is a separate native app

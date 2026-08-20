@@ -35,7 +35,7 @@ import { resolveActivityMode } from './utils/activityMode';
 import { isActivityLive } from './utils/activityLifecycle';
 import { recordCoParticipants } from './inviteHistory';
 import { durationMinutes } from './utils/datetime';
-import { createDefaultVisibility } from './utils/modeDefaults';
+import { createDefaultVisibility, resolveDraftForPublish } from './utils/modeDefaults';
 import type { ActivityDraft } from './types';
 
 // Activities only need minute-level precision: mode transitions, time labels
@@ -74,6 +74,16 @@ export interface ActivityInfo {
   hostId?: string;
 }
 
+/** The one activity that earns a compact summary in the map's personal Core. */
+export interface CoreActivitySummary {
+  id: string;
+  mode: 'now' | 'soon';
+  title: string;
+  startsAt?: string;
+  endsAt?: string;
+  participantCount: number;
+}
+
 export interface ActivityUpdate {
   title?: string;
   mode?: ActivityMode;
@@ -95,6 +105,8 @@ interface ActivityEntityContextValue {
   mapMarkers: MapMarker[];
   markerClusters: MarkerCluster[];
   plans: Plan[];
+  /** Derived from the existing activity feed — never opens another listener. */
+  ownCoreActivity: CoreActivitySummary | null;
   findActivityById: (id: string) => ActivityInfo | null;
   markerToSelection: (marker: MapMarker) => MapSelection;
   clusterToSelection: (cluster: MarkerCluster) => MapSelection;
@@ -116,6 +128,51 @@ const ActivityEntityContext = createContext<ActivityEntityContextValue | null>(n
 
 function planActivityId(plan: Plan) {
   return plan.activityId ?? plan.id;
+}
+
+function validTime(value: string | undefined): number {
+  const parsed = value ? Date.parse(value) : NaN;
+  return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * A person may have several visible activities; the Core names one stable,
+ * relevant plan: a running one first, otherwise the earliest upcoming one.
+ */
+export function selectCoreActivity(
+  docs: ActivityDoc[],
+  actorUid: string,
+  now: number = Date.now(),
+): CoreActivitySummary | null {
+  const candidates = docs.flatMap((doc) => {
+    if (!doc.participantUids.includes(actorUid)) return [];
+    const mode = resolveActivityMode(doc.mode, doc.startsAt, now);
+    if (mode !== 'now' && mode !== 'soon') return [];
+    return [
+      {
+        id: doc.id,
+        mode,
+        title: doc.title,
+        startsAt: doc.startsAt,
+        endsAt: doc.endsAt,
+        participantCount: Math.max(
+          1,
+          new Set([
+            ...doc.participantUids,
+            ...doc.participants.map((participant) => participant.uid),
+          ]).size,
+        ),
+      } satisfies CoreActivitySummary,
+    ];
+  });
+
+  candidates.sort((a, b) => {
+    if (a.mode !== b.mode) return a.mode === 'now' ? -1 : 1;
+    const aTime = a.mode === 'now' ? validTime(a.endsAt) : validTime(a.startsAt);
+    const bTime = b.mode === 'now' ? validTime(b.endsAt) : validTime(b.startsAt);
+    return aTime - bTime || a.id.localeCompare(b.id);
+  });
+  return candidates[0] ?? null;
 }
 
 function planPeopleToAvatars(people: PlanPerson[]): ParticipantPreview[] {
@@ -395,6 +452,10 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
     () => activityDocs.filter((doc) => isActivityLive(doc, now)),
     [activityDocs, now],
   );
+  const ownCoreActivity = useMemo(
+    () => selectCoreActivity(liveDocs, actor.uid, now),
+    [liveDocs, actor.uid, now],
+  );
 
   // Local suggestion data is derived only from actual, still-live
   // co-participants. It stays on this device and never creates a backend read
@@ -588,9 +649,10 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
     [findActivityById],
   );
 
-  // A concrete Activity has exactly one visibility context. Groups are private
-  // shortcuts, never shared group entities; the callable independently derives
-  // and validates the same audience in its server-side callable.
+  // The OPTIMISTIC audience only — the callable independently derives the same
+  // set from trusted server data and that result is what the document keeps.
+  // Every branch intersects with the confirmed friend list, mirroring the
+  // server's own rule that an audience can never exceed your own friendships.
   const resolveAudience = useCallback(
     (visibility: ActivityDraft['visibility']): string[] => {
       const audience = new Set<string>([actor.uid]);
@@ -598,6 +660,8 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
         friendUids.forEach((id) => audience.add(id));
       } else if (visibility.kind === 'close_friends') {
         closeFriendUids.filter((id) => friendUids.includes(id)).forEach((id) => audience.add(id));
+      } else if (visibility.kind === 'selection') {
+        visibility.uids.filter((id) => friendUids.includes(id)).forEach((id) => audience.add(id));
       } else {
         circles
           .find((circle) => circle.id === visibility.groupId)
@@ -610,7 +674,12 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
   );
 
   const createActivityFromDraft = useCallback(
-    (draft: ActivityDraft, preferredId?: string) => {
+    (rawDraft: ActivityDraft, preferredId?: string) => {
+      // "Jetzt" means the instant this ran, not the instant the sheet opened.
+      // The composer's span is provisional so its rail has something to draw;
+      // stamping it here is what keeps a slow form from publishing an activity
+      // that already started. Soon drafts pass through untouched.
+      const draft = resolveDraftForPublish(rawDraft);
       const title = draft.title?.trim() || 'Activity';
       const mode = draft.mode === 'open' ? 'soon' : draft.mode;
       const placeLabel = draftPlaceLabel(draft);
@@ -822,6 +891,7 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
       mapMarkers,
       markerClusters,
       plans,
+      ownCoreActivity,
       findActivityById,
       markerToSelection,
       clusterToSelection,
@@ -840,6 +910,7 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
       mapMarkers,
       markerClusters,
       plans,
+      ownCoreActivity,
       findActivityById,
       markerToSelection,
       clusterToSelection,

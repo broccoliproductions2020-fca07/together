@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Image, Pressable, Share, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, Pressable, Share, Text, TextInput, View } from 'react-native';
 
 import { useAuth } from '@/features/auth';
 import { CirclesSection } from '@/features/circles';
@@ -10,10 +10,14 @@ import {
   useFriends,
   type FriendProfile,
   type FriendRequest,
+  type PeopleSearchProfile,
 } from '@/features/friends';
 import { AppScreen, AppStateView, AppText, ScreenHeader } from '@/shared/components';
 
-const ACCENT = '#6E8BF7';
+const ACCENT = '#3B82F6';
+const MIN_PEOPLE_SEARCH_LENGTH = 3;
+const PEOPLE_SEARCH_CACHE_MS = 5 * 60 * 1000;
+const PEOPLE_SEARCH_CACHE_LIMIT = 20;
 const USERNAME_RE = /^[a-z0-9][a-z0-9._-]{1,29}$/;
 
 function Avatar({ friend, size = 'h-11 w-11' }: { friend: FriendProfile; size?: string }) {
@@ -97,6 +101,60 @@ function RequestRow({
   );
 }
 
+type SearchRelationship =
+  | { state: 'friends' }
+  | { state: 'outgoing' }
+  | { state: 'incoming'; requestId: string }
+  | { state: 'none' };
+
+function PeopleSearchRow({
+  person,
+  relationship,
+  busy,
+  onSend,
+  onAccept,
+}: {
+  person: PeopleSearchProfile;
+  relationship: SearchRelationship;
+  busy: boolean;
+  onSend: () => void;
+  onAccept: () => void;
+}) {
+  const action =
+    relationship.state === 'friends'
+      ? { label: 'Freunde', icon: 'checkmark' as const, disabled: true }
+      : relationship.state === 'outgoing'
+        ? { label: 'Gesendet', icon: 'time-outline' as const, disabled: true }
+        : relationship.state === 'incoming'
+          ? { label: 'Annehmen', icon: 'checkmark' as const, disabled: busy }
+          : { label: 'Anfragen', icon: 'person-add-outline' as const, disabled: busy };
+  return (
+    <View className="flex-row items-center gap-3 rounded-[18px] bg-white/[0.07] px-3 py-2.5">
+      <Avatar friend={person} size="h-10 w-10" />
+      <View className="min-w-0 flex-1">
+        <Text className="text-sm font-extrabold text-white" numberOfLines={1}>
+          {person.displayName}
+        </Text>
+        <Text className="mt-0.5 text-xs text-white/55" numberOfLines={1}>
+          @{person.username}
+        </Text>
+      </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${person.displayName}: ${action.label}`}
+        accessibilityState={{ disabled: action.disabled }}
+        disabled={action.disabled}
+        className="min-h-10 flex-row items-center justify-center gap-1.5 rounded-xl bg-white px-3 active:opacity-80"
+        style={{ opacity: action.disabled ? 0.55 : 1 }}
+        onPress={relationship.state === 'incoming' ? onAccept : onSend}
+      >
+        <Ionicons name={action.icon} size={15} color="#101923" />
+        <Text className="text-xs font-extrabold text-[#101923]">{action.label}</Text>
+      </Pressable>
+    </View>
+  );
+}
+
 function FriendRow({
   friend,
   isClose,
@@ -157,29 +215,97 @@ export function FriendsScreen() {
     closeFriends,
     friendRequestPolicy,
     sendFriendRequest,
+    searchPeople,
     respondToFriendRequest,
     removeFriend,
     toggleCloseFriend,
   } = useFriends();
   const [query, setQuery] = useState('');
-  const [username, setUsername] = useState('');
+  const [peopleQuery, setPeopleQuery] = useState('');
+  const [people, setPeople] = useState<PeopleSearchProfile[]>([]);
+  const [peopleSearchBusy, setPeopleSearchBusy] = useState(false);
+  const [peopleSearchError, setPeopleSearchError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [codeVisible, setCodeVisible] = useState(false);
   const [respondingRequestId, setRespondingRequestId] = useState<string | null>(null);
   const respondingRequestRef = useRef<string | null>(null);
-  const normalizedUsername = username.trim().replace(/^@/, '').toLocaleLowerCase('de-DE');
+  const peopleSearchRequestRef = useRef(0);
+  const peopleSearchCacheRef = useRef<
+    Map<string, { expiresAt: number; people: PeopleSearchProfile[] }>
+  >(new Map());
+  const normalizedPeopleQuery = peopleQuery
+    .trim()
+    .replace(/^@+/, '')
+    .toLocaleLowerCase('de-DE');
+  const explicitHandleSearch = peopleQuery.trim().startsWith('@');
+  const minimumPeopleSearchLength = explicitHandleSearch ? 2 : MIN_PEOPLE_SEARCH_LENGTH;
   const filteredFriends = useMemo(
     () => friends.filter((friend) => matches(query, friend)),
     [friends, query],
   );
+  const peopleRelationships = useMemo(() => {
+    const byUid = new Map<string, SearchRelationship>();
+    friends.forEach((friend) => byUid.set(friend.uid, { state: 'friends' }));
+    outgoingRequests.forEach((request) => byUid.set(request.friend.uid, { state: 'outgoing' }));
+    incomingRequests.forEach((request) =>
+      byUid.set(request.friend.uid, { state: 'incoming', requestId: request.id }),
+    );
+    return byUid;
+  }, [friends, incomingRequests, outgoingRequests]);
 
   useEffect(() => {
-    if (typeof add === 'string' && add.trim()) setUsername(add.trim().replace(/^@/, ''));
+    if (typeof add === 'string' && add.trim()) setPeopleQuery(`@${add.trim().replace(/^@/, '')}`);
   }, [add]);
 
-  async function addFriend() {
-    const value = normalizedUsername;
+  useEffect(() => {
+    const requestId = ++peopleSearchRequestRef.current;
+    if (normalizedPeopleQuery.length < minimumPeopleSearchLength) {
+      setPeople([]);
+      setPeopleSearchBusy(false);
+      setPeopleSearchError(null);
+      return;
+    }
+    const cached = peopleSearchCacheRef.current.get(normalizedPeopleQuery);
+    if (cached && cached.expiresAt > Date.now()) {
+      setPeople(cached.people);
+      setPeopleSearchBusy(false);
+      setPeopleSearchError(null);
+      return;
+    }
+    setPeople([]);
+    setPeopleSearchError(null);
+    const timeout = setTimeout(() => {
+      setPeopleSearchBusy(true);
+      void searchPeople(peopleQuery)
+        .then((next) => {
+          if (requestId !== peopleSearchRequestRef.current) return;
+          const cache = peopleSearchCacheRef.current;
+          cache.set(normalizedPeopleQuery, {
+            expiresAt: Date.now() + PEOPLE_SEARCH_CACHE_MS,
+            people: next,
+          });
+          while (cache.size > PEOPLE_SEARCH_CACHE_LIMIT) {
+            cache.delete(cache.keys().next().value as string);
+          }
+          setPeople(next);
+        })
+        .catch((error) => {
+          if (requestId !== peopleSearchRequestRef.current) return;
+          setPeople([]);
+          setPeopleSearchError(
+            error instanceof Error ? error.message : 'Die Suche ist gerade nicht verfügbar.',
+          );
+        })
+        .finally(() => {
+          if (requestId === peopleSearchRequestRef.current) setPeopleSearchBusy(false);
+        });
+    }, 350);
+    return () => clearTimeout(timeout);
+  }, [minimumPeopleSearchLength, normalizedPeopleQuery, peopleQuery, searchPeople]);
+
+  async function addFriend(username: string) {
+    const value = username.trim().replace(/^@/, '').toLocaleLowerCase('de-DE');
     if (!value || busy) return;
     if (!USERNAME_RE.test(value)) {
       setFeedback('Nutzernamen haben 2–30 Zeichen und verwenden nur Buchstaben, Zahlen, Punkt, _ oder - .');
@@ -189,7 +315,8 @@ export function FriendsScreen() {
     setFeedback(null);
     try {
       const result = await sendFriendRequest(value);
-      setUsername('');
+      setPeopleQuery('');
+      setPeople([]);
       setFeedback(
         result.state === 'sent'
           ? `Anfrage an ${result.friend.displayName} gesendet.`
@@ -247,7 +374,7 @@ export function FriendsScreen() {
 
   async function shareHandle() {
     const handle = user?.username?.trim();
-    if (handle) await Share.share({ message: `Füge mich bei Como hinzu: @${handle}` });
+    if (handle) await Share.share({ message: `Füge mich bei Mica hinzu: @${handle}` });
   }
 
   return (
@@ -271,35 +398,80 @@ export function FriendsScreen() {
             <View className="flex-1">
               <Text className="text-lg font-extrabold text-white">Freunde hinzufügen</Text>
               <Text className="mt-1 text-sm leading-5 text-white/55">
-                Sende eine Anfrage über den eindeutigen Nutzernamen. Erst nach Annahme entstehen
-                Sichtbarkeit und Chat-Zugriff.
+                Suche nach Name oder @Nutzername. Erst nach Annahme entstehen Sichtbarkeit und
+                Chat-Zugriff.
               </Text>
             </View>
           </View>
           <View className="mt-4 flex-row items-center gap-2 rounded-[20px] bg-white/[0.09] p-2">
-            <Text className="pl-2 text-base font-bold text-white/50">@</Text>
+            <Ionicons name="search-outline" size={19} color="rgba(255,255,255,0.52)" />
             <TextInput
               className="min-h-10 flex-1 text-base text-white"
               autoCapitalize="none"
               autoCorrect={false}
-              placeholder="nutzername"
+              placeholder="Name oder @nutzername"
               placeholderTextColor="rgba(255,255,255,0.42)"
-              value={username}
-              onChangeText={(next) => setUsername(next.replace(/^\s*@?/, '').toLocaleLowerCase('de-DE'))}
-              onSubmitEditing={() => void addFriend()}
-              maxLength={30}
+              value={peopleQuery}
+              onChangeText={setPeopleQuery}
+              maxLength={50}
             />
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Freundschaftsanfrage senden"
-              disabled={busy || !normalizedUsername}
-              className="h-10 w-10 items-center justify-center rounded-[14px]"
-              style={{ backgroundColor: normalizedUsername ? '#fff' : 'rgba(255,255,255,0.22)' }}
-              onPress={() => void addFriend()}
-            >
-              <Ionicons name="arrow-forward" size={19} color="#101923" />
-            </Pressable>
+            {peopleSearchBusy ? (
+              <ActivityIndicator size="small" color="#BFCBFF" />
+            ) : peopleQuery ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Personensuche löschen"
+                className="h-10 w-10 items-center justify-center rounded-[14px]"
+                onPress={() => setPeopleQuery('')}
+              >
+                <Ionicons name="close-circle" size={20} color="rgba(255,255,255,0.6)" />
+              </Pressable>
+            ) : null}
           </View>
+          {normalizedPeopleQuery.length > 0 &&
+          normalizedPeopleQuery.length < minimumPeopleSearchLength ? (
+            <Text className="mt-3 text-xs font-semibold text-white/55">
+              {explicitHandleSearch
+                ? 'Ein @Nutzername braucht mindestens zwei Zeichen.'
+                : 'Gib mindestens drei Zeichen ein.'}
+            </Text>
+          ) : null}
+          {people.length ? (
+            <View className="mt-3 gap-2">
+              {people.map((person) => {
+                const relationship = peopleRelationships.get(person.uid) ?? { state: 'none' as const };
+                return (
+                  <PeopleSearchRow
+                    key={person.uid}
+                    person={person}
+                    relationship={relationship}
+                    busy={
+                      busy ||
+                      (relationship.state === 'incoming' &&
+                        respondingRequestId === relationship.requestId)
+                    }
+                    onSend={() => void addFriend(person.username)}
+                    onAccept={() => {
+                      if (relationship.state === 'incoming') {
+                        void respond(relationship.requestId, true);
+                      }
+                    }}
+                  />
+                );
+              })}
+            </View>
+          ) : null}
+          {peopleSearchError ? (
+            <Text className="mt-3 text-sm font-semibold text-white/70">{peopleSearchError}</Text>
+          ) : null}
+          {normalizedPeopleQuery.length >= minimumPeopleSearchLength &&
+          !peopleSearchBusy &&
+          !peopleSearchError &&
+          people.length === 0 ? (
+            <Text className="mt-3 text-sm font-semibold text-white/55">
+              Keine passende Person gefunden.
+            </Text>
+          ) : null}
           {feedback ? (
             <Text className="mt-3 text-sm font-semibold text-white/70">{feedback}</Text>
           ) : null}

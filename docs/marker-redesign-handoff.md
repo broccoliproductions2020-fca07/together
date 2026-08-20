@@ -81,7 +81,7 @@ Der „Herzschlag": aktive Menschen und `now`-Aktivitäten **atmen** und senden 
 ## Werte aus dem Code (für konsistente Umsetzung)
 
 - Ink `#14211C`, warme Fläche `#EFEAE1`, Unread `#FF3B30`.
-- Modus-Farben: `open` `rgb(110,139,247)`, `soon` `rgb(224,162,62)`, `now` `rgb(65,192,141)`.
+- Modus-Farben: `open` `rgb(59,130,246)`, `soon` `rgb(224,162,62)`, `now` `rgb(65,192,141)`.
 - Größen heute: AvatarMarker-Kreis 60 px / Border 3 px, Cluster 68 px, Journey 54 px.
 - `countdownBucket` quantisiert den `now`-Rest auf 8 Steps → Re-Capture nur bei Step-Wechsel (dieselbe Sparlogik in B übernehmen).
 

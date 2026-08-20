@@ -5,7 +5,7 @@ import { Alert, Image, Modal, Pressable, ScrollView, Text, View } from 'react-na
 import { useModeration } from '../ModerationProvider';
 import type { BlockedProfile } from '../services/moderationService.types';
 
-const ACCENT = '#6E8BF7';
+const ACCENT = '#3B82F6';
 
 export interface BlockedUsersSheetProps {
   visible: boolean;

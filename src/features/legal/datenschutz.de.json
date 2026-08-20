@@ -7,7 +7,7 @@
       "blocks": [
         {
           "type": "p",
-          "text": "Verantwortlich für die Datenverarbeitung in der Como-App ist:"
+          "text": "Verantwortlich für die Datenverarbeitung in der Mica-App ist:"
         },
         {
           "type": "list",
@@ -30,7 +30,7 @@
         {
           "type": "list",
           "items": [
-            "Como ist privat: kein öffentlicher Feed, keine öffentliche Profilsuche, keine Sichtbarkeit für Fremde. Deine Inhalte sehen nur bestätigte Freundinnen und Freunde, die du selbst auswählst.",
+            "Mica ist privat: kein öffentlicher Feed und keine frei durchsuchbare Profilübersicht. Deine Inhalte sehen nur bestätigte Freundinnen und Freunde, die du selbst auswählst.",
             "Dein Standort wird nie automatisch geteilt. Jede Standortfreigabe ist eine bewusste Entscheidung, zeitlich begrenzt und endet automatisch.",
             "Chats und Aktivitäten löschen sich von selbst. Es entsteht kein dauerhaftes Archiv über dich.",
             "Wir zeigen keine Werbung, erstellen keine Werbeprofile und verkaufen keine Daten.",
@@ -52,7 +52,7 @@
         },
         {
           "type": "p",
-          "text": "Dein Profil ist nur für bestätigte Freundinnen und Freunde sichtbar. Es gibt keine öffentliche Profilsuche."
+          "text": "Dein vollständiges Profil ist nur für bestätigte Freundinnen und Freunde sichtbar. Wenn du bei Freundschaftsanfragen „Alle“ auswählst, können angemeldete Mica-Nutzerinnen und -Nutzer dich gezielt über deinen Namen oder @Nutzernamen finden. Die Suche zeigt höchstens deinen Anzeigenamen, @Nutzernamen, Initialen und – falls vorhanden – dein Profilbild; niemals E-Mail-Adresse, Standort, Aktivitäten oder Freundschaftsnetzwerk. Du kannst diese Auffindbarkeit jederzeit auf „Gemeinsame Activity“ oder „Niemand“ beschränken."
         }
       ]
     },
@@ -61,7 +61,7 @@
       "blocks": [
         {
           "type": "p",
-          "text": "Freundschaftsanfragen und bestätigte Freundschaften speichern wir, damit die App weiß, wer deine Inhalte sehen darf. Du bestimmst in den Einstellungen selbst, wer dir Anfragen senden kann. Persönliche Listen wie „Enge Freunde“ oder eigene Circles sind ausschließlich für dich sichtbar."
+          "text": "Freundschaftsanfragen und bestätigte Freundschaften speichern wir, damit die App weiß, wer deine Inhalte sehen darf. Du bestimmst in den Einstellungen selbst, wer dir Anfragen senden und dich über die gezielte Personensuche finden kann. Persönliche Listen wie „Enge Freunde“ oder eigene Circles sind ausschließlich für dich sichtbar."
         }
       ]
     },
@@ -161,7 +161,7 @@
       "blocks": [
         {
           "type": "p",
-          "text": "Zum Schutz vor Missbrauch prüft Firebase App Check (Google Play Integrity bzw. Apple App Attest), dass Anfragen aus der echten Como-App stammen. Serverseitige Ratenbegrenzungen speichern dafür kurzzeitig Zähler zu deinem Konto."
+          "text": "Zum Schutz vor Missbrauch prüft Firebase App Check (Google Play Integrity bzw. Apple App Attest), dass Anfragen aus der echten Mica-App stammen. Serverseitige Ratenbegrenzungen speichern dafür kurzzeitig Zähler zu deinem Konto. Die Personensuche ist zusätzlich auf zehn Suchen pro Minute und 50 Suchen pro Berliner Kalendertag begrenzt; Suchbegriffe werden dafür nicht gespeichert."
         },
         {
           "type": "p",
@@ -191,7 +191,7 @@
       "blocks": [
         {
           "type": "p",
-          "text": "Como ist so gebaut, dass Daten sich von selbst löschen:"
+          "text": "Mica ist so gebaut, dass Daten sich von selbst löschen:"
         },
         {
           "type": "list",
@@ -282,7 +282,7 @@
       "blocks": [
         {
           "type": "p",
-          "text": "Como richtet sich an Personen ab 16 Jahren. Wenn du jünger als 16 Jahre bist, darfst du die App nicht nutzen."
+          "text": "Mica richtet sich an Personen ab 16 Jahren. Wenn du jünger als 16 Jahre bist, darfst du die App nicht nutzen."
         }
       ]
     },

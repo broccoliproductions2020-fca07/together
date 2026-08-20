@@ -2,6 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import {
   Alert,
+  ActivityIndicator,
   Image,
   Modal,
   Pressable,
@@ -825,6 +826,7 @@ function notificationVisual(kind: NotificationKind): { icon: IconName; color: st
   if (kind === 'activity_invite') return { icon: 'person-add-outline', color: ACCENT };
   if (kind === 'spontaneous_round_invite') return { icon: 'hand-left-outline', color: ACCENT };
   if (kind === 'group_chat_invite') return { icon: 'people-outline', color: GROUP_CHAT_ACCENT };
+  if (kind === 'time_plan_invite') return { icon: 'calendar-outline', color: WARNING };
   if (kind === 'journey_reminder') return { icon: 'navigate-outline', color: ACCENT };
   if (kind === 'safety_emergency') return { icon: 'warning-outline', color: DANGER };
   if (kind === 'safety_unwell' || kind === 'safety_timed_out' || kind === 'safety_unavailable') {
@@ -847,6 +849,8 @@ function NotificationCard({
   onOpenActivity,
   onOpenSafety,
   onOpenSpontaneousRoundInvite,
+  onOpenTimePlan,
+  timePlanJoiningId,
   safetyAvailable,
 }: {
   group: NotificationGroup;
@@ -855,6 +859,8 @@ function NotificationCard({
   onOpenActivity: (activityId: string) => void;
   onOpenSafety: (ownerUid?: string) => void;
   onOpenSpontaneousRoundInvite: (roundId: string) => void;
+  onOpenTimePlan: (planId: string) => void;
+  timePlanJoiningId: string | null;
   safetyAvailable: boolean;
 }) {
   const colors = useThemeColors();
@@ -867,6 +873,8 @@ function NotificationCard({
   const safety = notification.kind.startsWith('safety_');
   const spontaneousRoundInvite =
     notification.kind === 'spontaneous_round_invite' && Boolean(notification.roomId);
+  const timePlanInvite = notification.kind === 'time_plan_invite' && Boolean(notification.timePlanId);
+  const timePlanJoining = timePlanInvite && timePlanJoiningId === notification.timePlanId;
   const onPress = activityAvailable
     ? () => onOpenActivity(notification.activityId!)
     : safety && safetyAvailable
@@ -877,6 +885,8 @@ function NotificationCard({
           // seen yet. The preview callable fires from there, on this deliberate
           // tap only, never for every card in the list.
           () => onOpenSpontaneousRoundInvite(notification.roomId!)
+        : timePlanInvite
+          ? () => onOpenTimePlan(notification.timePlanId!)
         : undefined;
   const isGroupedJoin = notification.kind === 'activity_joined' && group.count > 1;
   const isGroupedUpdate = notification.kind === 'activity_updated' && group.count > 1;
@@ -896,7 +906,11 @@ function NotificationCard({
         notification.kind === 'journey_reminder' && !activityAvailable
         ? 'Diese Activity ist vorbei.'
         : notification.body;
-  const actionLabel = spontaneousRoundInvite
+  const actionLabel = timePlanInvite
+    ? timePlanJoining
+      ? 'Du trittst bei …'
+      : 'Beitreten'
+    : spontaneousRoundInvite
     ? // The card no longer joins, so it must not promise that it does.
       'Einladung ansehen'
     : safety
@@ -908,7 +922,7 @@ function NotificationCard({
       <PressableScale
         accessibilityRole={onPress ? 'button' : undefined}
         accessibilityLabel={onPress ? `${title} öffnen` : undefined}
-        disabled={!onPress}
+        disabled={!onPress || timePlanJoining}
         haptic={Boolean(onPress)}
         style={[
           styles.messageCard,
@@ -957,7 +971,7 @@ function NotificationCard({
                 >
                   {actionLabel}
                 </Text>
-                <Ionicons name="arrow-forward" size={13} color={visual.color} />
+                {timePlanJoining ? <ActivityIndicator size="small" color={visual.color} /> : <Ionicons name="arrow-forward" size={13} color={visual.color} />}
               </View>
             ) : null}
           </View>
@@ -982,6 +996,8 @@ export interface PostfachSheetProps {
   onOpenActivity: (activityId: string) => void;
   onOpenSafety: (ownerUid?: string) => void;
   onOpenSpontaneousRoundInvite: (roundId: string) => void;
+  onOpenTimePlan: (planId: string) => void;
+  timePlanJoiningId?: string | null;
 }
 
 export function PostfachSheet({
@@ -993,6 +1009,8 @@ export function PostfachSheet({
   onOpenActivity,
   onOpenSafety,
   onOpenSpontaneousRoundInvite,
+  onOpenTimePlan,
+  timePlanJoiningId = null,
 }: PostfachSheetProps) {
   const insets = useSafeAreaInsets();
   const colors = useThemeColors();
@@ -1454,7 +1472,9 @@ export function PostfachSheet({
                               isNew={isGroupNew(group)}
                               onOpenActivity={onOpenActivity}
                               onOpenSafety={onOpenSafety}
-                              onOpenSpontaneousRoundInvite={onOpenSpontaneousRoundInvite}
+                          onOpenSpontaneousRoundInvite={onOpenSpontaneousRoundInvite}
+                          onOpenTimePlan={onOpenTimePlan}
+                          timePlanJoiningId={timePlanJoiningId}
                               safetyAvailable={Boolean(
                                 group.primary.safetyOwnerUid &&
                                 (activeSafetyOwnerUids.has(group.primary.safetyOwnerUid) ||

@@ -73,3 +73,9 @@ ui-debug.log
 
 # private desktop-installer artifacts
 /admin/desktop/release/
+
+# JVM crash dumps (Android emulator / Java tooling)
+hs_err_pid*.log
+replay_pid*.log
+# Metro bundler log
+metro.log

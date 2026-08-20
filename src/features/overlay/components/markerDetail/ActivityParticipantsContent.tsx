@@ -91,7 +91,7 @@ export function ActivityParticipantsContent({
             className="flex-row items-center gap-2.5 py-3 active:opacity-80"
             onPress={() => setInviteOpen((open) => !open)}
           >
-            <Ionicons name="person-add-outline" size={17} color="#6E8BF7" />
+            <Ionicons name="person-add-outline" size={17} color="#3B82F6" />
             <Text className="flex-1 text-sm font-semibold text-foreground">
               Freund:in einladen
             </Text>
@@ -110,8 +110,8 @@ export function ActivityParticipantsContent({
                 const invited = invitedUids.has(friend.uid);
                 return (
                   <View key={friend.uid} className="flex-row items-center gap-3 py-2.5">
-                    <View className="h-9 w-9 items-center justify-center rounded-full bg-[#6E8BF7]/20">
-                      <Text className="text-xs font-bold text-[#6E8BF7]">{friend.initials}</Text>
+                    <View className="h-9 w-9 items-center justify-center rounded-full bg-[#3B82F6]/20">
+                      <Text className="text-xs font-bold text-[#3B82F6]">{friend.initials}</Text>
                     </View>
                     <Text className="flex-1 text-sm text-foreground" numberOfLines={1}>
                       {friend.displayName}
@@ -125,7 +125,7 @@ export function ActivityParticipantsContent({
                       }
                       disabled={invited || busyUid !== null}
                       className={`min-h-[36px] flex-row items-center justify-center rounded-full px-4 ${
-                        invited ? 'bg-transparent' : 'bg-[#6E8BF7] active:opacity-85'
+                        invited ? 'bg-transparent' : 'bg-[#3B82F6] active:opacity-85'
                       }`}
                       onPress={() => void invite(friend.uid)}
                     >

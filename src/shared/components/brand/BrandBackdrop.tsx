@@ -1,138 +1,205 @@
 import { useEffect } from 'react';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, useWindowDimensions, View } from 'react-native';
 import Animated, {
   Easing,
-  useAnimatedProps,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
   withRepeat,
   withTiming,
+  type SharedValue,
 } from 'react-native-reanimated';
-import Svg, { Defs, LinearGradient, Path, Rect, Stop } from 'react-native-svg';
+import Svg, { Circle, Defs, LinearGradient, RadialGradient, Rect, Stop } from 'react-native-svg';
 
 import { TOGETHER_BRAND } from './brandTokens';
-
-const AnimatedPath = Animated.createAnimatedComponent(Path);
+import { MICA_FIGURE_COLORS } from './micaLogo';
 
 /**
- * Abstract route field used by auth and boot surfaces. It references the map
- * and shared journeys without drawing a literal map or reusing the old dots.
+ * Brand stage for auth and boot: a deep ink ground with three very slow
+ * aurora fields in the icon's own green, amber and blue.
+ *
+ * Two constraints shaped it. The colour comes from the mark rather than from
+ * an invented palette, so the first screen and the home-screen icon read as
+ * one thing. And softness is built from radial gradients, never from a blur —
+ * `react-native-svg` has no dependable blur, so a field that "looks blurred"
+ * has to be drawn that way. Each orb is its own layer whose *View* transform
+ * is animated, which keeps the motion off the SVG-prop interop path.
+ *
+ * Deliberately dark in both colour schemes: this is a brand stage, like the
+ * sign-in surfaces of most apps this one is measured against, and every
+ * control mounted on top of it (`EmailAuthForm`, the provider buttons) is
+ * built as dark glass.
  */
+
+const BASE_TOP = '#080B14';
+const BASE_MID = '#0B0F19';
+const BASE_BOTTOM = '#05070E';
+
+type OrbProps = {
+  id: string;
+  color: string;
+  peak: number;
+  diameter: number;
+  left: number;
+  top: number;
+  progress: SharedValue<number>;
+  driftX: number;
+  driftY: number;
+  driftScale?: number;
+  /** Share of the orb's opacity that breathes with `progress`. */
+  driftFade?: number;
+};
+
+function Orb({
+  id,
+  color,
+  peak,
+  diameter,
+  left,
+  top,
+  progress,
+  driftX,
+  driftY,
+  driftScale = 0,
+  driftFade = 0,
+}: OrbProps) {
+  // Built here rather than handed in as a prop: each orb is its own component,
+  // so the hook is legal, and the animated style never has to cross a props
+  // boundary where its type would widen back to a plain style.
+  const style = useAnimatedStyle(() => {
+    const centred = progress.value - 0.5;
+    return {
+      opacity: 1 - driftFade + progress.value * driftFade,
+      transform: [
+        { translateX: centred * driftX },
+        { translateY: centred * driftY },
+        { scale: 1 + progress.value * driftScale },
+      ],
+    };
+  });
+
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[{ height: diameter, left, position: 'absolute', top, width: diameter }, style]}
+    >
+      <Svg height="100%" viewBox="0 0 100 100" width="100%">
+        <Defs>
+          <RadialGradient cx="50" cy="50" gradientUnits="userSpaceOnUse" id={id} r="50">
+            <Stop offset="0" stopColor={color} stopOpacity={peak} />
+            <Stop offset="0.42" stopColor={color} stopOpacity={peak * 0.42} />
+            <Stop offset="0.72" stopColor={color} stopOpacity={peak * 0.12} />
+            <Stop offset="1" stopColor={color} stopOpacity={0} />
+          </RadialGradient>
+        </Defs>
+        <Circle cx="50" cy="50" fill={`url(#${id})`} r="50" />
+      </Svg>
+    </Animated.View>
+  );
+}
+
 export function BrandBackdrop({ quiet = false }: { quiet?: boolean }) {
   const reducedMotion = useReducedMotion();
-  const drift = useSharedValue(0);
-  const route = useSharedValue(0);
+  const { height, width } = useWindowDimensions();
+  const damp = quiet ? 0.55 : 1;
+
+  const t0 = useSharedValue(0);
+  const t1 = useSharedValue(0);
+  const t2 = useSharedValue(0);
 
   useEffect(() => {
     if (reducedMotion) return;
-
-    drift.value = withRepeat(
-      withTiming(1, { duration: 9200, easing: Easing.inOut(Easing.ease) }),
-      -1,
-      true,
-    );
-    route.value = withRepeat(withTiming(1, { duration: 5600, easing: Easing.linear }), -1, false);
-
-    return () => {
-      drift.value = 0;
-      route.value = 0;
+    const cycle = (value: typeof t0, duration: number) => {
+      value.value = withRepeat(
+        withTiming(1, { duration, easing: Easing.inOut(Easing.ease) }),
+        -1,
+        true,
+      );
     };
-  }, [drift, reducedMotion, route]);
-
-  const fieldStyle = useAnimatedStyle(() => ({
-    transform: [
-      { scale: 1.08 },
-      { translateX: (drift.value - 0.5) * 10 },
-      { translateY: (0.5 - drift.value) * 14 },
-    ],
-  }));
-
-  const routeProps = useAnimatedProps(() => ({
-    strokeDashoffset: -route.value * 220,
-  }));
+    // Mutually prime durations: the three fields never return to the same
+    // arrangement twice within a session, so the motion cannot read as a loop.
+    cycle(t0, 23000);
+    cycle(t1, 31000);
+    cycle(t2, 19000);
+    return () => {
+      t0.value = 0;
+      t1.value = 0;
+      t2.value = 0;
+    };
+  }, [reducedMotion, t0, t1, t2]);
 
   return (
-    <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, fieldStyle]}>
-      <Svg height="100%" preserveAspectRatio="xMidYMid slice" viewBox="0 0 390 844" width="100%">
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+      <Svg height="100%" style={StyleSheet.absoluteFill} width="100%">
         <Defs>
-          <LinearGradient id="brandNight" x1="0" y1="0" x2="1" y2="1">
-            <Stop offset="0" stopColor={TOGETHER_BRAND.ink} />
-            <Stop offset="0.56" stopColor="#0A0D18" />
-            <Stop offset="1" stopColor="#12172A" />
-          </LinearGradient>
-          <LinearGradient id="brandBlueRibbon" x1="0" y1="0" x2="1" y2="1">
-            <Stop offset="0" stopColor={TOGETHER_BRAND.indigo} stopOpacity="0" />
-            <Stop offset="0.45" stopColor={TOGETHER_BRAND.indigo} stopOpacity="0.46" />
-            <Stop offset="1" stopColor={TOGETHER_BRAND.violet} stopOpacity="0" />
-          </LinearGradient>
-          <LinearGradient id="brandAquaRibbon" x1="0" y1="1" x2="1" y2="0">
-            <Stop offset="0" stopColor={TOGETHER_BRAND.aqua} stopOpacity="0" />
-            <Stop offset="0.5" stopColor={TOGETHER_BRAND.aqua} stopOpacity="0.38" />
-            <Stop offset="1" stopColor={TOGETHER_BRAND.indigo} stopOpacity="0" />
+          <LinearGradient id="micaGround" x1="0" x2="0.35" y1="0" y2="1">
+            <Stop offset="0" stopColor={BASE_TOP} />
+            <Stop offset="0.52" stopColor={BASE_MID} />
+            <Stop offset="1" stopColor={BASE_BOTTOM} />
           </LinearGradient>
         </Defs>
-
-        <Rect height="844" width="390" fill="url(#brandNight)" />
-
-        <Path
-          d="M-130 200 C36 20 178 258 520 34"
-          fill="none"
-          opacity={quiet ? 0.1 : 0.17}
-          stroke="url(#brandBlueRibbon)"
-          strokeLinecap="round"
-          strokeWidth={74}
-        />
-        <Path
-          d="M-120 704 C68 492 222 818 520 548"
-          fill="none"
-          opacity={quiet ? 0.08 : 0.15}
-          stroke="url(#brandAquaRibbon)"
-          strokeLinecap="round"
-          strokeWidth={68}
-        />
-
-        <Path
-          d="M-90 126 C78 54 120 304 454 168"
-          fill="none"
-          opacity={quiet ? 0.1 : 0.18}
-          stroke="rgba(124,131,255,0.38)"
-          strokeLinecap="round"
-          strokeWidth={1.2}
-        />
-        <Path
-          d="M-70 742 C122 614 250 898 478 650"
-          fill="none"
-          opacity={quiet ? 0.08 : 0.16}
-          stroke="rgba(85,223,194,0.34)"
-          strokeLinecap="round"
-          strokeWidth={1.2}
-        />
-        <Path
-          d="M-44 420 C82 286 214 520 440 350"
-          fill="none"
-          opacity={0.08}
-          stroke="rgba(247,248,252,0.44)"
-          strokeWidth={0.8}
-        />
-
-        <AnimatedPath
-          animatedProps={routeProps}
-          d="M-90 126 C78 54 120 304 454 168"
-          fill="none"
-          opacity={quiet ? 0.22 : 0.42}
-          stroke="rgba(247,248,252,0.76)"
-          strokeDasharray="9 211"
-          strokeLinecap="round"
-          strokeWidth={2.2}
-        />
-
-        <Path d="M48 0 L48 844" opacity={0.035} stroke="#FFFFFF" strokeWidth={0.7} />
-        <Path d="M195 0 L195 844" opacity={0.035} stroke="#FFFFFF" strokeWidth={0.7} />
-        <Path d="M342 0 L342 844" opacity={0.035} stroke="#FFFFFF" strokeWidth={0.7} />
-        <Path d="M0 278 L390 278" opacity={0.03} stroke="#FFFFFF" strokeWidth={0.7} />
-        <Path d="M0 566 L390 566" opacity={0.03} stroke="#FFFFFF" strokeWidth={0.7} />
+        <Rect fill="url(#micaGround)" height="100%" width="100%" />
       </Svg>
-    </Animated.View>
+
+      {/* Blue carries the brand. Its dense centre is deliberately placed ABOVE
+          the wordmark's anchor so the mark lands on the falloff — a white
+          wordmark sitting in the brightest part of a blue field loses its
+          edge, and moving the light is cheaper than dimming it. */}
+      <Orb
+        color={MICA_FIGURE_COLORS.body}
+        diameter={width * 1.55}
+        driftScale={0.12}
+        driftX={46}
+        driftY={-34}
+        id="micaOrbBlue"
+        left={-width * 0.42}
+        peak={0.5 * damp}
+        progress={t0}
+        top={-height * 0.26}
+      />
+      {/* Green answers from the opposite corner so the field has a diagonal. */}
+      <Orb
+        color={MICA_FIGURE_COLORS.arm}
+        diameter={width * 1.3}
+        driftScale={-0.1}
+        driftX={-38}
+        driftY={44}
+        id="micaOrbGreen"
+        left={width * 0.24}
+        peak={0.3 * damp}
+        progress={t1}
+        top={height * 0.42}
+      />
+      {/* Amber is the smallest and faintest on purpose: warmth, not a third
+          competing mass — it is the accent colour of a single activity state
+          and must never look like one here. */}
+      <Orb
+        color={MICA_FIGURE_COLORS.head}
+        diameter={width * 0.86}
+        driftFade={0.28}
+        driftX={28}
+        driftY={22}
+        id="micaOrbAmber"
+        left={-width * 0.2}
+        peak={0.18 * damp}
+        progress={t2}
+        top={height * 0.2}
+      />
+
+      {/* Legibility floor. The action stack and the legal line sit in the lower
+          third; without this the aurora would run straight under the white
+          buttons and cost them their edge. */}
+      <Svg height="100%" style={StyleSheet.absoluteFill} width="100%">
+        <Defs>
+          <LinearGradient id="micaScrim" x1="0" x2="0" y1="0" y2="1">
+            <Stop offset="0" stopColor={BASE_TOP} stopOpacity="0.55" />
+            <Stop offset="0.22" stopColor={BASE_MID} stopOpacity="0" />
+            <Stop offset="0.62" stopColor={BASE_BOTTOM} stopOpacity="0.28" />
+            <Stop offset="1" stopColor={BASE_BOTTOM} stopOpacity="0.86" />
+          </LinearGradient>
+        </Defs>
+        <Rect fill="url(#micaScrim)" height="100%" width="100%" />
+      </Svg>
+    </View>
   );
 }

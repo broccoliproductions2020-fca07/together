@@ -11,7 +11,7 @@ import { AppButton } from '@/shared/components';
 import type { ActivityMode, MapCoordinate } from '../types/map.types';
 
 const MODE_ACCENTS: Record<ActivityMode, string> = {
-  open: '#6E8BF7',
+  open: '#3B82F6',
   soon: '#E0A23E',
   now: '#41C08D',
 };

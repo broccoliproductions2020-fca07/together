@@ -24,6 +24,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const admin = require('./firebase-admin-tools.cjs');
+const { buildFriendSearchFields } = require('../functions/friend-search');
 
 process.env.FIRESTORE_EMULATOR_HOST ??= '127.0.0.1:8080';
 process.env.FIREBASE_AUTH_EMULATOR_HOST ??= '127.0.0.1:9099';
@@ -96,6 +97,86 @@ const PEOPLE = [
     open: false,
     location: at(-0.012, 0.009),
   },
+  {
+    uid: 'seed-amelie',
+    name: 'Amelie Wagner',
+    username: 'amelie',
+    vibe: 'Spaziergang',
+    open: true,
+    location: at(0.002, 0.007),
+  },
+  {
+    uid: 'seed-david',
+    name: 'David Klein',
+    username: 'david',
+    vibe: 'Kaffee',
+    open: true,
+    location: at(-0.003, 0.006),
+  },
+  {
+    uid: 'seed-sofia',
+    name: 'Sofia Neumann',
+    username: 'sofia',
+    vibe: null,
+    open: true,
+    location: at(0.006, -0.002),
+  },
+  {
+    uid: 'seed-elias',
+    name: 'Elias Becker',
+    username: 'elias',
+    vibe: 'Sport',
+    open: true,
+    location: at(-0.006, 0.003),
+  },
+  {
+    uid: 'seed-hannah',
+    name: 'Hannah Vogel',
+    username: 'hannah',
+    vibe: 'Essen',
+    open: true,
+    location: at(0.004, -0.008),
+  },
+  {
+    uid: 'seed-felix',
+    name: 'Felix Brandt',
+    username: 'felix',
+    vibe: null,
+    open: true,
+    location: at(-0.001, -0.009),
+  },
+  {
+    uid: 'seed-lina',
+    name: 'Lina Roth',
+    username: 'lina',
+    vibe: 'Kino',
+    open: true,
+    location: at(0.009, 0.002),
+  },
+  {
+    uid: 'seed-tom',
+    name: 'Tom Richter',
+    username: 'tom',
+    vibe: 'Drink',
+    open: true,
+    location: at(-0.009, -0.003),
+  },
+  {
+    uid: 'seed-marie',
+    name: 'Marie Schulz',
+    username: 'marie',
+    vibe: 'Spiele',
+    open: true,
+    location: at(0.007, 0.008),
+  },
+  {
+    uid: 'seed-noah',
+    name: 'Noah Fischer',
+    username: 'noah',
+    vibe: null,
+    open: true,
+    location: at(-0.008, 0.008),
+  },
 ];
 
 /** Kept outside PEOPLE so this account creates a real incoming request and is
@@ -119,6 +200,11 @@ const profileOf = (person) => ({
   displayName: person.name,
   initials: initialsOf(person.name),
   username: person.username,
+});
+
+const friendSearchOf = (profile) => ({
+  ...buildFriendSearchFields(profile, 'anyone'),
+  updatedAt: ts(now),
 });
 
 /** Activities hosted by seed people. Times are relative so re-seeding always
@@ -200,13 +286,20 @@ async function main() {
   const devProfiles = [];
   for (const user of devUsers) {
     const profileRef = db.doc(`publicProfiles/${user.uid}`);
-    const existing = (await profileRef.get()).data() ?? {};
+    const userRef = db.doc(`users/${user.uid}`);
+    const [profileSnapshot, userSnapshot] = await Promise.all([profileRef.get(), userRef.get()]);
+    const existing = profileSnapshot.data() ?? {};
+    const settings = userSnapshot.data() ?? {};
     const displayName = existing.displayName ?? user.displayName ?? 'Du';
     const profile = {
       uid: user.uid,
       displayName,
       initials: existing.initials ?? initialsOf(displayName),
-      ...(existing.username ? { username: existing.username } : {}),
+      ...(typeof existing.username === 'string'
+        ? { username: existing.username }
+        : typeof settings.username === 'string'
+          ? { username: settings.username }
+          : {}),
     };
     devProfiles.push(profile);
     // Profile darf beim Seeden nie fehlen — joinActivity verlangt es.
@@ -214,6 +307,13 @@ async function main() {
       { displayName: profile.displayName, initials: profile.initials },
       { merge: true },
     );
+    const searchFields = buildFriendSearchFields(
+      profile,
+      settings.friendRequestPolicy ?? 'anyone',
+    );
+    if (searchFields) {
+      await db.doc(`friendSearch/${user.uid}`).set({ ...searchFields, updatedAt: ts(now) });
+    }
   }
   const devUids = devProfiles.map((profile) => profile.uid);
   const mailboxProfiles = devProfiles.slice(0, MAILBOX_ACCOUNT_LIMIT);
@@ -248,6 +348,7 @@ async function main() {
         { displayName: person.name, initials: profile.initials, username: person.username },
         { merge: true },
       );
+    await db.doc(`friendSearch/${person.uid}`).set(friendSearchOf(profile), { merge: true });
     await db
       .doc(`usernames/${person.username}`)
       .set({ uid: person.uid, createdAt: ts(now) }, { merge: true });
@@ -281,6 +382,7 @@ async function main() {
       },
       { merge: true },
     ),
+    db.doc(`friendSearch/${REQUESTER.uid}`).set(friendSearchOf(requesterProfile), { merge: true }),
     db
       .doc(`usernames/${REQUESTER.username}`)
       .set({ uid: REQUESTER.uid, createdAt: ts(now) }, { merge: true }),

@@ -1,4 +1,4 @@
-# Como — Launch-Monitoring & Kosten-Airbags
+# Mica — Launch-Monitoring & Kosten-Airbags
 
 Dieses Dokument ist der produktive Kontrollplan. Es verändert keine Cloud-
 Einstellungen selbst: Budgets, TTL-Policies und Alarmregeln müssen bewusst im

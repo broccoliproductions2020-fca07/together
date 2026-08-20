@@ -15,6 +15,12 @@ export interface FriendProfile {
   avatarUrl?: string;
 }
 
+/** The only identity returned by the private, bounded people search. It never
+ * includes email, location, activities or relationship-graph data. */
+export interface PeopleSearchProfile extends FriendProfile {
+  username: string;
+}
+
 export type FriendshipStatus = 'pending' | 'accepted';
 
 /** Who may send a friend request. Profile details themselves stay friends-only. */
@@ -90,6 +96,8 @@ export interface FriendService {
     actor: FriendActor,
     target: FriendRequestTarget,
   ): Promise<SendFriendRequestResult>;
+  /** One-off, server-filtered lookup. The service never exposes a profile directory. */
+  searchPeople(actor: FriendActor, query: string): Promise<PeopleSearchProfile[]>;
   respondToFriendRequest(actor: FriendActor, friendshipId: string, accept: boolean): Promise<void>;
   removeFriend(actor: FriendActor, uid: string): Promise<void>;
   setCloseFriend(actor: FriendActor, uid: string, isClose: boolean): Promise<void>;

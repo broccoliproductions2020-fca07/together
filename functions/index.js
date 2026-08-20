@@ -17,6 +17,7 @@ const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { onTaskDispatched } = require('firebase-functions/v2/tasks');
 const { defineSecret } = require('firebase-functions/params');
 const { cleanupExpiredSurfaces } = require('./cleanup-expired-surfaces');
+const { buildFriendSearchFields, parseFriendSearchQuery, resultScore } = require('./friend-search');
 
 // Every function runs next to its data. Firestore and Storage live in
 // europe-west3, so leaving the default (us-central1) would send each callable
@@ -215,6 +216,13 @@ const MAX_ACTIVE_GROUP_CHATS_PER_CREATOR = 30;
 const ACTIVITY_RETENTION_MS = 30 * DAY_MS;
 const NOTIFICATION_RETENTION_MS = 30 * DAY_MS;
 const INVITE_RETENTION_MS = 30 * DAY_MS;
+// Time plans are pre-activities. They never become map objects before a host
+// deliberately locks one time; expiry keeps abandoned availability private.
+const TIME_PLAN_MAX_WINDOWS = 50;
+const TIME_PLAN_MAX_MEMBERS = 50;
+const TIME_PLAN_CREATIONS_PER_HOUR = 8;
+const TIME_PLAN_MAX_AHEAD_MS = 180 * DAY_MS;
+const TIME_PLAN_RETENTION_MS = 14 * DAY_MS;
 const HOUR_MS = 60 * 60 * 1000;
 const OPEN_MAX_DURATION_MS = 12 * HOUR_MS;
 // Kept in the backend for a later launch, but deliberately unavailable now.
@@ -275,6 +283,7 @@ function pushOutboxItem(item) {
     body: item.body.slice(0, 500),
     ...(item.activityId ? { activityId: item.activityId } : {}),
     ...(item.roomId ? { roomId: item.roomId } : {}),
+    ...(item.timePlanId ? { timePlanId: item.timePlanId } : {}),
     ...(Number.isSafeInteger(item.messageCount) ? { messageCount: item.messageCount } : {}),
     ...(item.safetyOwnerUid ? { safetyOwnerUid: item.safetyOwnerUid } : {}),
     ...(Number.isFinite(item.safetyAlertAt) ? { safetyAlertAt: item.safetyAlertAt } : {}),
@@ -304,6 +313,7 @@ async function createNotifications(items, { queuePush = true } = {}) {
         body: item.body.slice(0, 500),
         ...(item.activityId ? { activityId: item.activityId } : {}),
         ...(item.roomId ? { roomId: item.roomId } : {}),
+        ...(item.timePlanId ? { timePlanId: item.timePlanId } : {}),
         ...(item.safetyOwnerUid ? { safetyOwnerUid: item.safetyOwnerUid } : {}),
         ...(Number.isFinite(item.safetyAlertAt) ? { safetyAlertAt: item.safetyAlertAt } : {}),
         createdAt: Timestamp.now(),
@@ -479,6 +489,63 @@ async function enforceRateLimit(
   });
 }
 
+function berlinDayKey(now = Date.now()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Berlin',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(now));
+}
+
+/** Search has two server-side caps in one transaction. They are intentionally
+ * separate from request creation: looking somebody up must never create social
+ * pressure or make an unbounded directory query possible. */
+async function enforceFriendSearchRateLimit(uid) {
+  const db = getFirestore();
+  const minuteRef = db.doc(`rateLimits/${uid}_friendSearchMinute`);
+  const dailyRef = db.doc(`rateLimits/${uid}_friendSearchDaily`);
+  const now = Date.now();
+  const minuteStart = Math.floor(now / 60_000) * 60_000;
+  const day = berlinDayKey(now);
+  await db.runTransaction(async (transaction) => {
+    const [minuteSnapshot, dailySnapshot] = await Promise.all([
+      transaction.get(minuteRef),
+      transaction.get(dailyRef),
+    ]);
+    const minuteCount =
+      minuteSnapshot.data()?.windowStart === minuteStart ? (minuteSnapshot.data()?.count ?? 0) : 0;
+    const dailyCount = dailySnapshot.data()?.day === day ? (dailySnapshot.data()?.count ?? 0) : 0;
+    if (minuteCount >= 10) {
+      throw new HttpsError('resource-exhausted', 'Du kannst höchstens zehnmal pro Minute suchen.');
+    }
+    if (dailyCount >= 50) {
+      throw new HttpsError(
+        'resource-exhausted',
+        'Du hast heute bereits 50 Personen gesucht. Bitte probiere es morgen wieder.',
+      );
+    }
+    transaction.set(
+      minuteRef,
+      {
+        windowStart: minuteStart,
+        count: minuteCount + 1,
+        expireAt: Timestamp.fromMillis(minuteStart + 2 * HOUR_MS),
+      },
+      { merge: true },
+    );
+    transaction.set(
+      dailyRef,
+      {
+        day,
+        count: dailyCount + 1,
+        expireAt: Timestamp.fromMillis(now + 2 * DAY_MS),
+      },
+      { merge: true },
+    );
+  });
+}
+
 function pacificDateParts(now = Date.now()) {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: PACIFIC_TIME_ZONE,
@@ -595,6 +662,7 @@ async function deliverPush(items) {
             data: {
               activityId: item.activityId,
               roomId: item.roomId,
+              timePlanId: item.timePlanId,
               messageCount: item.messageCount,
               kind: item.kind,
               safetyOwnerUid: item.safetyOwnerUid,
@@ -730,6 +798,26 @@ function profileInitials(displayName) {
     .join('')
     .slice(0, 2)
     .toUpperCase();
+}
+
+function validProfileText(value, maxLength) {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  return text.length > 0 && text.length <= maxLength ? text : undefined;
+}
+
+function missingProfileFields(profile, displayName, initials, createdAt, includeUserDefaults) {
+  const patch = {};
+  if (!validProfileText(profile?.displayName, 50)) patch.displayName = displayName;
+  if (!validProfileText(profile?.initials, 8)) patch.initials = initials;
+  if (!timestampMillis(profile?.createdAt)) patch.createdAt = createdAt;
+  if (includeUserDefaults) {
+    if (profile?.profileVisibility !== 'friends') patch.profileVisibility = 'friends';
+    if (!['anyone', 'shared_activity', 'nobody'].includes(profile?.friendRequestPolicy)) {
+      patch.friendRequestPolicy = 'anyone';
+    }
+  }
+  return patch;
 }
 
 function timestampMillis(value) {
@@ -929,10 +1017,18 @@ async function directPresenceAudienceUids(db, uid) {
   return friends;
 }
 
+/** Audience cap, mirroring the 201-incl-host limit the invite path enforces. */
+const MAX_SELECTED_AUDIENCE = 200;
+
 /**
- * Activities are published into one social context, never a client-composed
- * recipient list. The function resolves the uid snapshot from trusted server
- * data so an altered client cannot quietly target individual friends.
+ * Activities are published to a context the SERVER can re-derive, never to a
+ * recipient list the client is simply trusted on.
+ *
+ * `selection` widens what a context may be — an explicit set of people — without
+ * widening what it may REACH: `audienceForContext` intersects it with the
+ * caller's confirmed friendships, so the strongest thing a tampered client can
+ * do is address a subset of the friends it could already have reached with
+ * `all_friends`. Never resolve a selection without that intersection.
  */
 function parseAudienceContext(input) {
   if (!input || typeof input !== 'object') {
@@ -948,11 +1044,34 @@ function parseAudienceContext(input) {
   ) {
     return { kind: 'group', groupId: input.groupId };
   }
+  if (input.kind === 'selection') {
+    if (!Array.isArray(input.uids)) {
+      throw new HttpsError('invalid-argument', 'Ungültiger Sichtbarkeitsraum.');
+    }
+    const uids = [...new Set(input.uids)];
+    if (uids.some((candidate) => !validUid(candidate))) {
+      throw new HttpsError('invalid-argument', 'Ungültige Personenauswahl.');
+    }
+    // Empty is rejected here rather than after the friendship filter: an empty
+    // list is a client bug, while an empty RESULT can legitimately happen when a
+    // friendship ends between opening the composer and publishing.
+    if (uids.length === 0) {
+      throw new HttpsError('invalid-argument', 'Wähle mindestens eine Person aus.');
+    }
+    if (uids.length > MAX_SELECTED_AUDIENCE) {
+      throw new HttpsError('invalid-argument', 'Zu viele Personen ausgewählt.');
+    }
+    return { kind: 'selection', uids };
+  }
   throw new HttpsError('invalid-argument', 'Ungültiger Sichtbarkeitsraum.');
 }
 
 async function audienceForContext(db, uid, context, friends) {
   if (context.kind === 'all_friends') return [...friends];
+
+  if (context.kind === 'selection') {
+    return context.uids.filter((friendUid) => friends.has(friendUid));
+  }
 
   if (context.kind === 'close_friends') {
     const userSnapshot = await db.doc(`users/${uid}`).get();
@@ -1028,6 +1147,420 @@ function sameActivityPlace(left, right) {
     left.longitude === right.longitude
   );
 }
+
+function validTimePlanWindowId(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(value);
+}
+
+function parseTimePlanWindows(input) {
+  if (!Array.isArray(input) || input.length < 1 || input.length > TIME_PLAN_MAX_WINDOWS) {
+    throw new HttpsError(
+      'invalid-argument',
+      'Lege mindestens ein und höchstens 50 Zeitfenster fest.',
+    );
+  }
+  const now = Date.now();
+  const ids = new Set();
+  return input
+    .map((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        throw new HttpsError('invalid-argument', 'Ungültiges Zeitfenster.');
+      }
+      if (Object.keys(item).some((key) => !['id', 'groupId', 'startsAt', 'endsAt'].includes(key))) {
+        throw new HttpsError('invalid-argument', 'Ungültige Zeitfensterdaten.');
+      }
+      if (
+        !validTimePlanWindowId(item.id) ||
+        !validTimePlanWindowId(item.groupId) ||
+        ids.has(item.id)
+      ) {
+        throw new HttpsError('invalid-argument', 'Ungültige Zeitfenster-ID.');
+      }
+      ids.add(item.id);
+      const startsAt = cleanString(item.startsAt, 80, 'Startzeit', true);
+      const endsAt = cleanString(item.endsAt, 80, 'Endzeit', true);
+      const startMs = Date.parse(startsAt);
+      const endMs = Date.parse(endsAt);
+      if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+        throw new HttpsError(
+          'invalid-argument',
+          'Jedes Zeitfenster braucht einen gültigen Anfang und ein Ende.',
+        );
+      }
+      if (startMs < now - 5 * 60 * 1000 || startMs > now + TIME_PLAN_MAX_AHEAD_MS) {
+        throw new HttpsError(
+          'failed-precondition',
+          'Ein Zeitfenster liegt zu weit in der Vergangenheit oder Zukunft.',
+        );
+      }
+      if (endMs - startMs < 5 * 60 * 1000 || endMs - startMs > 12 * HOUR_MS) {
+        throw new HttpsError(
+          'invalid-argument',
+          'Ein Zeitfenster muss zwischen 5 Minuten und 12 Stunden lang sein.',
+        );
+      }
+      if (startMs % (5 * 60 * 1000) !== 0 || endMs % (5 * 60 * 1000) !== 0) {
+        throw new HttpsError('invalid-argument', 'Zeiten müssen im 5-Minuten-Raster liegen.');
+      }
+      return { id: item.id, groupId: item.groupId, startsAt, endsAt };
+    })
+    .sort((left, right) => Date.parse(left.startsAt) - Date.parse(right.startsAt));
+}
+
+function parseTimePlanResponses(input, sourceWindows) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new HttpsError('invalid-argument', 'Verfügbarkeiten fehlen.');
+  }
+  const windowsById = new Map(sourceWindows.map((window) => [window.id, window]));
+  const keys = Object.keys(input);
+  if (
+    keys.length !== sourceWindows.length ||
+    keys.some((key) => !windowsById.has(key)) ||
+    sourceWindows.some((window) => !Object.prototype.hasOwnProperty.call(input, window.id))
+  ) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Die Terminvorschläge wurden geändert. Bitte prüfe sie erneut.',
+    );
+  }
+  const result = {};
+  sourceWindows.forEach((window) => {
+    const intervals = input[window.id];
+    if (!Array.isArray(intervals) || intervals.length > 10) {
+      throw new HttpsError('invalid-argument', 'Ungültige Verfügbarkeit.');
+    }
+    const windowStart = Date.parse(window.startsAt);
+    const windowEnd = Date.parse(window.endsAt);
+    let previousEnd = windowStart;
+    result[window.id] = intervals.map((interval) => {
+      if (!interval || typeof interval !== 'object' || Array.isArray(interval)) {
+        throw new HttpsError('invalid-argument', 'Ungültiger Verfügbarkeitsbereich.');
+      }
+      if (Object.keys(interval).some((key) => key !== 'startsAt' && key !== 'endsAt')) {
+        throw new HttpsError('invalid-argument', 'Ungültiger Verfügbarkeitsbereich.');
+      }
+      const startsAt = cleanString(interval.startsAt, 80, 'Startzeit', true);
+      const endsAt = cleanString(interval.endsAt, 80, 'Endzeit', true);
+      const startMs = Date.parse(startsAt);
+      const endMs = Date.parse(endsAt);
+      if (
+        !Number.isFinite(startMs) ||
+        !Number.isFinite(endMs) ||
+        startMs < windowStart ||
+        endMs > windowEnd ||
+        endMs <= startMs ||
+        startMs < previousEnd ||
+        startMs % (5 * 60 * 1000) !== 0 ||
+        endMs % (5 * 60 * 1000) !== 0
+      ) {
+        throw new HttpsError(
+          'invalid-argument',
+          'Ein Verfügbarkeitsbereich liegt nicht im angebotenen Zeitfenster.',
+        );
+      }
+      previousEnd = endMs;
+      return { startsAt, endsAt };
+    });
+  });
+  return result;
+}
+
+function sameTimePlanResponses(left, right, sourceWindows) {
+  if (!left || typeof left !== 'object' || Array.isArray(left)) return false;
+  if (Object.keys(left).length !== sourceWindows.length) return false;
+  return sourceWindows.every((window) => {
+    const leftIntervals = left[window.id];
+    const rightIntervals = right[window.id];
+    return (
+      Array.isArray(leftIntervals) &&
+      Array.isArray(rightIntervals) &&
+      leftIntervals.length === rightIntervals.length &&
+      leftIntervals.every(
+        (interval, index) =>
+          interval?.startsAt === rightIntervals[index]?.startsAt &&
+          interval?.endsAt === rightIntervals[index]?.endsAt,
+      )
+    );
+  });
+}
+
+/**
+ * A plan intentionally has no Activity document or map marker yet. Invited
+ * friends can only join through a private server invitation, then read it.
+ */
+exports.createTimePlan = onCall(CALLABLE_OPTS, async (request) => {
+  const uid = requireVerifiedAuth(request);
+  const payload = request.data;
+  if (
+    !payload ||
+    typeof payload !== 'object' ||
+    Array.isArray(payload) ||
+    Object.keys(payload).some((key) => key !== 'plan' && key !== 'planId')
+  ) {
+    throw new HttpsError('invalid-argument', 'Ungültige Daten für die Terminfindung.');
+  }
+  const input = payload.plan;
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new HttpsError('invalid-argument', 'Daten für die Terminfindung fehlen.');
+  }
+  const requestedPlanId = payload.planId;
+  if (requestedPlanId !== undefined && !validActivityId(requestedPlanId)) {
+    throw new HttpsError('invalid-argument', 'Ungültige Terminfindungs-ID.');
+  }
+  const allowedKeys = new Set([
+    'title',
+    'visibility',
+    'place',
+    'category',
+    'maxParticipants',
+    'guestInvitesEnabled',
+    'sourceWindows',
+  ]);
+  if (Object.keys(input).some((key) => !allowedKeys.has(key))) {
+    throw new HttpsError('invalid-argument', 'Ungültige Daten für die Terminfindung.');
+  }
+  const title = cleanString(input.title, 60, 'Titel', true);
+  const visibility = parseAudienceContext(input.visibility);
+  const sourceWindows = parseTimePlanWindows(input.sourceWindows);
+  let place;
+  if (input.place != null) place = parseActivityPlace(input.place);
+  let category;
+  if (input.category != null) {
+    if (typeof input.category !== 'string' || !ACTIVITY_CATEGORIES.has(input.category)) {
+      throw new HttpsError('invalid-argument', 'Ungültige Kategorie.');
+    }
+    category = input.category;
+  }
+  let maxParticipants;
+  if (input.maxParticipants != null) {
+    if (
+      !Number.isInteger(input.maxParticipants) ||
+      input.maxParticipants < 2 ||
+      input.maxParticipants > TIME_PLAN_MAX_MEMBERS
+    ) {
+      throw new HttpsError('invalid-argument', 'Ungültige Teilnehmergrenze.');
+    }
+    maxParticipants = input.maxParticipants;
+  }
+  if (input.guestInvitesEnabled != null && typeof input.guestInvitesEnabled !== 'boolean') {
+    throw new HttpsError('invalid-argument', 'Ungültige Gäste-Einstellung.');
+  }
+
+  const db = getFirestore();
+  const planRef = requestedPlanId
+    ? db.doc(`timePlans/${requestedPlanId}`)
+    : db.collection('timePlans').doc();
+  if (requestedPlanId) {
+    const existingPlan = await planRef.get();
+    if (existingPlan.exists) {
+      if (existingPlan.data()?.hostId === uid) return { ok: true, id: planRef.id };
+      throw new HttpsError('already-exists', 'Diese Terminfindung existiert bereits.');
+    }
+  }
+  await enforceRateLimit(uid, 'timePlans', TIME_PLAN_CREATIONS_PER_HOUR, HOUR_MS);
+  const [profileSnapshot, friends] = await Promise.all([
+    db.doc(`publicProfiles/${uid}`).get(),
+    directFriendUids(db, uid),
+  ]);
+  const profile = profileSnapshot.data() ?? {};
+  const displayName = cleanString(profile.displayName ?? request.auth.token.name, 50, 'Name', true);
+  const initials = cleanString(
+    profile.initials ?? displayName.slice(0, 2).toUpperCase(),
+    8,
+    'Initialen',
+    true,
+  );
+  const capacity = maxParticipants ?? TIME_PLAN_MAX_MEMBERS;
+  const inviteeUids = [...new Set(await audienceForContext(db, uid, visibility, friends))]
+    .filter((inviteeUid) => inviteeUid !== uid)
+    .slice(0, capacity - 1);
+  const latestWindowEnd = Math.max(...sourceWindows.map((window) => Date.parse(window.endsAt)));
+  const expireAt = Timestamp.fromMillis(latestWindowEnd + TIME_PLAN_RETENTION_MS);
+  const hostResponses = Object.fromEntries(
+    sourceWindows.map((window) => [
+      window.id,
+      [{ startsAt: window.startsAt, endsAt: window.endsAt }],
+    ]),
+  );
+  const pushItems = inviteeUids.map((recipientUid) => ({
+    recipientUid,
+    actorUid: uid,
+    kind: 'time_plan_invite',
+    title: `${displayName} sucht eine gemeinsame Zeit`,
+    body: title,
+    timePlanId: planRef.id,
+  }));
+  await db.runTransaction(async (transaction) => {
+    const existingPlan = await transaction.get(planRef);
+    if (existingPlan.exists) {
+      if (existingPlan.data()?.hostId === uid) return;
+      throw new HttpsError('already-exists', 'Diese Terminfindung existiert bereits.');
+    }
+    transaction.create(planRef, {
+      hostId: uid,
+      hostName: displayName,
+      hostInitials: initials,
+      title,
+      ...(place ? { place } : {}),
+      ...(category ? { category } : {}),
+      ...(maxParticipants ? { maxParticipants } : {}),
+      ...(input.guestInvitesEnabled === true ? { guestInvitesEnabled: true } : {}),
+      sourceWindows,
+      revision: 1,
+      status: 'collecting',
+      memberUids: [uid],
+      createdAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
+      expireAt,
+    });
+    transaction.create(planRef.collection('timePlanMembers').doc(uid), {
+      uid,
+      displayName,
+      initials,
+      role: 'host',
+      responseStatus: 'responded',
+      responsesByWindow: hostResponses,
+      updatedAt: Timestamp.now(),
+      expireAt,
+    });
+    inviteeUids.forEach((inviteeUid, index) => {
+      transaction.create(db.doc(`timePlanInvites/${planRef.id}_${inviteeUid}`), {
+        planId: planRef.id,
+        inviteeUid,
+        status: 'pending',
+        createdAt: Timestamp.now(),
+        expireAt,
+      });
+      transaction.create(db.doc(`notifications/time_plan_${planRef.id}_${inviteeUid}`), {
+        recipientUid: inviteeUid,
+        kind: 'time_plan_invite',
+        title: pushItems[index].title,
+        body: title,
+        timePlanId: planRef.id,
+        createdAt: Timestamp.now(),
+        expireAt,
+      });
+    });
+    if (pushItems.length) {
+      transaction.create(db.collection('pushOutbox').doc(), {
+        items: pushItems.map(pushOutboxItem),
+        timePlanId: planRef.id,
+        createdAt: Timestamp.now(),
+        expireAt,
+      });
+    }
+  });
+  return { ok: true, id: planRef.id };
+});
+
+exports.joinTimePlan = onCall(CALLABLE_OPTS, async (request) => {
+  const uid = requireVerifiedAuth(request);
+  await enforceRateLimit(uid, 'timePlanMembership', 12, 5 * 60 * 1000);
+  const planId = request.data?.planId;
+  if (!validActivityId(planId))
+    throw new HttpsError('invalid-argument', 'Ungültige Terminfindungs-ID.');
+  const db = getFirestore();
+  const planRef = db.doc(`timePlans/${planId}`);
+  const inviteRef = db.doc(`timePlanInvites/${planId}_${uid}`);
+  const memberRef = planRef.collection('timePlanMembers').doc(uid);
+  const profileRef = db.doc(`publicProfiles/${uid}`);
+  await db.runTransaction(async (transaction) => {
+    const [planSnapshot, inviteSnapshot, memberSnapshot, profileSnapshot] = await Promise.all([
+      transaction.get(planRef),
+      transaction.get(inviteRef),
+      transaction.get(memberRef),
+      transaction.get(profileRef),
+    ]);
+    if (!planSnapshot.exists)
+      throw new HttpsError('not-found', 'Diese Terminfindung existiert nicht mehr.');
+    const plan = planSnapshot.data();
+    if (plan.status !== 'collecting' || (plan.expireAt?.toMillis?.() ?? 0) <= Date.now()) {
+      throw new HttpsError('failed-precondition', 'Diese Terminfindung ist nicht mehr offen.');
+    }
+    if (memberSnapshot.exists) return;
+    if (!inviteSnapshot.exists || inviteSnapshot.data()?.status !== 'pending') {
+      throw new HttpsError(
+        'permission-denied',
+        'Du wurdest nicht zu dieser Terminfindung eingeladen.',
+      );
+    }
+    const memberUids = Array.isArray(plan.memberUids) ? plan.memberUids.filter(validUid) : [];
+    const capacity = Number.isInteger(plan.maxParticipants)
+      ? plan.maxParticipants
+      : TIME_PLAN_MAX_MEMBERS;
+    if (memberUids.length >= capacity || memberUids.length >= TIME_PLAN_MAX_MEMBERS) {
+      throw new HttpsError('failed-precondition', 'Diese Terminfindung ist bereits voll.');
+    }
+    if (!profileSnapshot.exists)
+      throw new HttpsError(
+        'failed-precondition',
+        'Dein Profil ist noch nicht vollständig eingerichtet.',
+      );
+    const profile = profileSnapshot.data();
+    transaction.create(memberRef, {
+      uid,
+      displayName: cleanString(profile.displayName, 50, 'Name', true),
+      initials: cleanString(profile.initials, 8, 'Initialen', true),
+      role: 'member',
+      responseStatus: 'pending',
+      responsesByWindow: {},
+      updatedAt: Timestamp.now(),
+      expireAt: plan.expireAt,
+    });
+    transaction.update(planRef, { memberUids: [...memberUids, uid], updatedAt: Timestamp.now() });
+    transaction.update(inviteRef, { status: 'joined', joinedAt: Timestamp.now() });
+  });
+  return { ok: true };
+});
+
+exports.respondToTimePlan = onCall(CALLABLE_OPTS, async (request) => {
+  const uid = requireVerifiedAuth(request);
+  await enforceRateLimit(uid, 'timePlanResponses', 30, HOUR_MS);
+  const planId = request.data?.planId;
+  const revision = request.data?.revision;
+  if (!validActivityId(planId) || !Number.isInteger(revision) || revision < 1) {
+    throw new HttpsError('invalid-argument', 'Ungültige Terminfindung.');
+  }
+  const db = getFirestore();
+  const planRef = db.doc(`timePlans/${planId}`);
+  const memberRef = planRef.collection('timePlanMembers').doc(uid);
+  await db.runTransaction(async (transaction) => {
+    const [planSnapshot, memberSnapshot] = await Promise.all([
+      transaction.get(planRef),
+      transaction.get(memberRef),
+    ]);
+    if (!planSnapshot.exists || !memberSnapshot.exists) {
+      throw new HttpsError('permission-denied', 'Tritt dieser Terminfindung zuerst bei.');
+    }
+    const plan = planSnapshot.data();
+    if (plan.status !== 'collecting' || plan.revision !== revision) {
+      throw new HttpsError(
+        'failed-precondition',
+        'Die Terminvorschläge wurden geändert. Bitte prüfe sie erneut.',
+      );
+    }
+    const sourceWindows = Array.isArray(plan.sourceWindows) ? plan.sourceWindows : [];
+    const responsesByWindow = parseTimePlanResponses(
+      request.data?.responsesByWindow,
+      sourceWindows,
+    );
+    const member = memberSnapshot.data();
+    if (
+      member.responseStatus === 'responded' &&
+      member.basedOnRevision === revision &&
+      sameTimePlanResponses(member.responsesByWindow, responsesByWindow, sourceWindows)
+    ) {
+      return;
+    }
+    transaction.update(memberRef, {
+      responseStatus: 'responded',
+      responsesByWindow,
+      basedOnRevision: revision,
+      updatedAt: Timestamp.now(),
+    });
+  });
+  return { ok: true };
+});
 
 exports.createActivity = onCall(CALLABLE_OPTS, async (request) => {
   const uid = requireVerifiedAuth(request);
@@ -4554,6 +5087,7 @@ exports.updateOwnProfile = onCall(CALLABLE_OPTS, async (request) => {
   const db = getFirestore();
   const userRef = db.doc(`users/${uid}`);
   const publicProfileRef = db.doc(`publicProfiles/${uid}`);
+  const friendSearchRef = db.doc(`friendSearch/${uid}`);
   const rateRef = db.doc(`rateLimits/${uid}_profile`);
   const avatarId = avatarBytes ? randomUUID().replace(/-/g, '') : null;
   const avatarPath = avatarId ? profileAvatarPath(uid, avatarId) : null;
@@ -4668,6 +5202,20 @@ exports.updateOwnProfile = onCall(CALLABLE_OPTS, async (request) => {
 
       transaction.update(userRef, userPatch);
       transaction.update(publicProfileRef, publicProfilePatch);
+      const searchFields = buildFriendSearchFields(
+        {
+          displayName,
+          initials,
+          username,
+          avatarUrl:
+            avatarUrl ??
+            (typeof publicProfile.avatarUrl === 'string' ? publicProfile.avatarUrl : undefined),
+        },
+        user.friendRequestPolicy ?? 'anyone',
+      );
+      if (searchFields) {
+        transaction.set(friendSearchRef, { ...searchFields, updatedAt: Timestamp.now() });
+      }
       transaction.set(
         rateRef,
         {
@@ -4804,16 +5352,18 @@ exports.claimUsername = onCall(CALLABLE_OPTS, async (request) => {
   const claimRef = db.doc(`usernames/${username}`);
   const userRef = db.doc(`users/${uid}`);
   const publicProfileRef = db.doc(`publicProfiles/${uid}`);
+  const friendSearchRef = db.doc(`friendSearch/${uid}`);
   const authRecord = await getAdminAuth().getUser(uid);
   const initialDisplayName =
     typeof authRecord.displayName === 'string' && authRecord.displayName.trim()
       ? authRecord.displayName.trim().slice(0, 50)
       : 'Como-Freund';
+  const claimedAt = Timestamp.now();
   const initialProfile = {
     displayName: initialDisplayName,
     username,
     initials: profileInitials(initialDisplayName),
-    createdAt: Timestamp.now(),
+    createdAt: claimedAt,
   };
 
   await db.runTransaction(async (transaction) => {
@@ -4826,13 +5376,28 @@ exports.claimUsername = onCall(CALLABLE_OPTS, async (request) => {
       throw new HttpsError('already-exists', 'Dieser Nutzername ist bereits vergeben.');
     }
 
+    const userProfile = userSnapshot.data() ?? {};
+    const publicProfile = publicProfileSnapshot.data() ?? {};
+    const displayName =
+      validProfileText(publicProfile.displayName, 50) ??
+      validProfileText(userProfile.displayName, 50) ??
+      initialDisplayName;
+    const initials =
+      validProfileText(publicProfile.initials, 8) ??
+      validProfileText(userProfile.initials, 8) ??
+      profileInitials(displayName);
+
     transaction.set(
       claimRef,
-      { uid, createdAt: existing.exists ? existing.data().createdAt : Timestamp.now() },
+      { uid, createdAt: existing.exists ? existing.data().createdAt : claimedAt },
       { merge: true },
     );
     if (userSnapshot.exists) {
-      transaction.set(userRef, { username }, { merge: true });
+      transaction.set(
+        userRef,
+        { username, ...missingProfileFields(userProfile, displayName, initials, claimedAt, true) },
+        { merge: true },
+      );
     } else {
       transaction.create(userRef, {
         ...initialProfile,
@@ -4841,13 +5406,98 @@ exports.claimUsername = onCall(CALLABLE_OPTS, async (request) => {
       });
     }
     if (publicProfileSnapshot.exists) {
-      transaction.set(publicProfileRef, { username }, { merge: true });
+      transaction.set(
+        publicProfileRef,
+        {
+          username,
+          ...missingProfileFields(publicProfile, displayName, initials, claimedAt, false),
+        },
+        { merge: true },
+      );
     } else {
       transaction.create(publicProfileRef, initialProfile);
     }
+    const searchFields = buildFriendSearchFields(
+      {
+        displayName,
+        initials,
+        username,
+        avatarUrl:
+          typeof publicProfile.avatarUrl === 'string'
+            ? publicProfile.avatarUrl
+            : typeof userProfile.avatarUrl === 'string'
+              ? userProfile.avatarUrl
+              : undefined,
+      },
+      userProfile.friendRequestPolicy ?? 'anyone',
+    );
+    if (searchFields) {
+      transaction.set(friendSearchRef, { ...searchFields, updatedAt: claimedAt });
+    }
   });
 
-  return { ok: true, username };
+  return { ok: true, username, profileReady: true };
+});
+
+/**
+ * A deliberately small, callable-only people search. `friendSearch` is never
+ * readable by clients, so a caller cannot turn the app into a user directory
+ * or ask Firestore for more than this bounded response.
+ */
+exports.searchPeople = onCall(CALLABLE_OPTS, async (request) => {
+  const uid = requireVerifiedAuth(request);
+  const parsedQuery = parseFriendSearchQuery(request.data?.query);
+  if (!parsedQuery.valid) {
+    throw new HttpsError(
+      'invalid-argument',
+      'Gib mindestens drei Zeichen ein, oder einen @Nutzernamen mit mindestens zwei Zeichen.',
+    );
+  }
+  await enforceFriendSearchRateLimit(uid);
+
+  const db = getFirestore();
+  const lookups = await Promise.all(
+    parsedQuery.lookupVariants.slice(0, 2).map((prefix) =>
+      db
+        .collection('friendSearch')
+        .where('discoverable', '==', true)
+        .where('searchPrefixes', 'array-contains', prefix)
+        .limit(8)
+        .get(),
+    ),
+  );
+  const candidates = new Map();
+  lookups.flatMap((snapshot) => snapshot.docs).forEach((snapshot) => {
+    if (snapshot.id !== uid) candidates.set(snapshot.id, snapshot.data());
+  });
+  const blockedUids = await blockedUidsBetweenAny(db, uid, [...candidates.keys()]);
+  const people = [...candidates]
+    .map(([candidateUid, profile]) => ({
+      uid: candidateUid,
+      displayName: typeof profile.displayName === 'string' ? profile.displayName : '',
+      initials: typeof profile.initials === 'string' ? profile.initials : '',
+      username: typeof profile.username === 'string' ? profile.username : '',
+      ...(typeof profile.avatarUrl === 'string' ? { avatarUrl: profile.avatarUrl } : {}),
+      score: resultScore(profile, parsedQuery),
+    }))
+    .filter(
+      (candidate) =>
+        !blockedUids.has(candidate.uid) &&
+        candidate.score >= 0 &&
+        candidate.displayName &&
+        candidate.initials &&
+        candidate.username,
+    )
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        left.displayName.localeCompare(right.displayName, 'de') ||
+        left.username.localeCompare(right.username),
+    )
+    .slice(0, 5)
+    .map(({ score, ...profile }) => profile);
+
+  return { people };
 });
 
 /** Create the only possible relationship document for a pair. The server
@@ -5394,14 +6044,27 @@ exports.setFriendRequestPolicy = onCall(CALLABLE_OPTS, async (request) => {
   if (!['anyone', 'shared_activity', 'nobody'].includes(policy)) {
     throw new HttpsError('invalid-argument', 'Ungültige Einstellung.');
   }
-  const userRef = getFirestore().doc(`users/${uid}`);
-  const snapshot = await userRef.get();
-  if (!snapshot.exists) {
-    throw new HttpsError('failed-precondition', 'Dein Profil ist noch nicht bereit.');
-  }
-  await userRef.update({
-    profileVisibility: 'friends',
-    friendRequestPolicy: policy,
+  const db = getFirestore();
+  const userRef = db.doc(`users/${uid}`);
+  const publicProfileRef = db.doc(`publicProfiles/${uid}`);
+  const friendSearchRef = db.doc(`friendSearch/${uid}`);
+  await db.runTransaction(async (transaction) => {
+    const [userSnapshot, publicProfileSnapshot] = await Promise.all([
+      transaction.get(userRef),
+      transaction.get(publicProfileRef),
+    ]);
+    if (!userSnapshot.exists || !publicProfileSnapshot.exists) {
+      throw new HttpsError('failed-precondition', 'Dein Profil ist noch nicht bereit.');
+    }
+    const searchFields = buildFriendSearchFields(publicProfileSnapshot.data(), policy);
+    if (!searchFields) {
+      throw new HttpsError('failed-precondition', 'Dein Profil ist noch nicht bereit.');
+    }
+    transaction.update(userRef, {
+      profileVisibility: 'friends',
+      friendRequestPolicy: policy,
+    });
+    transaction.set(friendSearchRef, { ...searchFields, updatedAt: Timestamp.now() });
   });
   return { ok: true };
 });
@@ -5816,6 +6479,9 @@ exports.deleteMyAccount = onCall(CALLABLE_OPTS, async (request) => {
     roundOpenings,
     roundInvitesReceived,
     roundInvitesSent,
+    hostedTimePlans,
+    ownTimePlanMemberships,
+    timePlanInvitesReceived,
   ] = await Promise.all([
     db.doc(`users/${uid}`).get(),
     getAllDocuments(db.collection('circles').where('memberIds', 'array-contains', uid)),
@@ -5839,6 +6505,27 @@ exports.deleteMyAccount = onCall(CALLABLE_OPTS, async (request) => {
     getAllDocuments(db.collection('groupOpenings').where('audienceUids', 'array-contains', uid)),
     getAllDocuments(db.collection('spontaneousRoundInvites').where('recipientUid', '==', uid)),
     getAllDocuments(db.collection('spontaneousRoundInvites').where('hostUid', '==', uid)),
+    getAllDocuments(db.collection('timePlans').where('hostId', '==', uid)),
+    getAllDocuments(db.collectionGroup('timePlanMembers').where('uid', '==', uid)),
+    getAllDocuments(db.collection('timePlanInvites').where('inviteeUid', '==', uid)),
+  ]);
+  const [hostedTimePlanCleanup, ownTimePlanMembershipsWithPlans] = await Promise.all([
+    Promise.all(
+      hostedTimePlans.map(async (planSnapshot) => {
+        const [members, invites, outbox] = await Promise.all([
+          getAllDocuments(planSnapshot.ref.collection('timePlanMembers')),
+          getAllDocuments(db.collection('timePlanInvites').where('planId', '==', planSnapshot.id)),
+          getAllDocuments(db.collection('pushOutbox').where('timePlanId', '==', planSnapshot.id)),
+        ]);
+        return { planSnapshot, members, invites, outbox };
+      }),
+    ),
+    Promise.all(
+      ownTimePlanMemberships.map(async (memberSnapshot) => ({
+        memberSnapshot,
+        planSnapshot: await memberSnapshot.ref.parent.parent.get(),
+      })),
+    ),
   ]);
   const accountMessageDeletes = await collectAccountMessageDeletes(chats, socialMatches, uid);
   operations.push(...accountMessageDeletes);
@@ -5939,6 +6626,45 @@ exports.deleteMyAccount = onCall(CALLABLE_OPTS, async (request) => {
     }
   });
 
+  const hostedTimePlanIds = new Set(hostedTimePlans.map((snapshot) => snapshot.id));
+  const deletedTimePlanMemberPaths = new Set();
+  hostedTimePlanCleanup.forEach(({ planSnapshot, members, invites, outbox }) => {
+    operations.push({ type: 'delete', ref: planSnapshot.ref });
+    members.forEach((memberSnapshot) => {
+      deletedTimePlanMemberPaths.add(memberSnapshot.ref.path);
+      operations.push({ type: 'delete', ref: memberSnapshot.ref });
+    });
+    invites.forEach((inviteSnapshot) => {
+      const invite = inviteSnapshot.data();
+      operations.push({ type: 'delete', ref: inviteSnapshot.ref });
+      if (validUid(invite.inviteeUid)) {
+        operations.push({
+          type: 'delete',
+          ref: db.doc(`notifications/time_plan_${planSnapshot.id}_${invite.inviteeUid}`),
+        });
+      }
+    });
+    outbox.forEach((outboxSnapshot) =>
+      operations.push({ type: 'delete', ref: outboxSnapshot.ref }),
+    );
+  });
+  ownTimePlanMembershipsWithPlans.forEach(({ memberSnapshot, planSnapshot }) => {
+    if (deletedTimePlanMemberPaths.has(memberSnapshot.ref.path)) return;
+    operations.push({ type: 'delete', ref: memberSnapshot.ref });
+    if (!planSnapshot.exists || hostedTimePlanIds.has(planSnapshot.id)) return;
+    operations.push({
+      type: 'update',
+      ref: planSnapshot.ref,
+      data: {
+        memberUids: FieldValue.arrayRemove(uid),
+        updatedAt: Timestamp.now(),
+      },
+    });
+  });
+  timePlanInvitesReceived.forEach((snapshot) =>
+    operations.push({ type: 'delete', ref: snapshot.ref }),
+  );
+
   const hostedIds = new Set(hostedActivities.map((snapshot) => snapshot.id));
   hostedActivities.forEach((snapshot) => operations.push({ type: 'delete', ref: snapshot.ref }));
   joinedActivities.forEach((snapshot) => {
@@ -5982,6 +6708,7 @@ exports.deleteMyAccount = onCall(CALLABLE_OPTS, async (request) => {
   operations.push(
     { type: 'delete', ref: db.doc(`users/${uid}`) },
     { type: 'delete', ref: db.doc(`publicProfiles/${uid}`) },
+    { type: 'delete', ref: db.doc(`friendSearch/${uid}`) },
     { type: 'delete', ref: db.doc(`presence/${uid}`) },
     { type: 'delete', ref: db.doc(`socialSessions/${uid}`) },
   );
@@ -6195,6 +6922,33 @@ async function isBlockedBetweenAny(db, uid, targetUids) {
     if (!outgoing.empty || !incoming.empty) return true;
   }
   return false;
+}
+
+/** The same two-query block check used by Safety, but returns every blocked
+ * candidate so private search can omit them without exposing why. */
+async function blockedUidsBetweenAny(db, uid, targetUids) {
+  const blocked = new Set();
+  for (let offset = 0; offset < targetUids.length; offset += 30) {
+    const chunk = targetUids.slice(offset, offset + 30);
+    if (!chunk.length) continue;
+    const [outgoing, incoming] = await Promise.all([
+      db
+        .collection('blocks')
+        .where('blockerUid', '==', uid)
+        .where('blockedUid', 'in', chunk)
+        .limit(chunk.length)
+        .get(),
+      db
+        .collection('blocks')
+        .where('blockedUid', '==', uid)
+        .where('blockerUid', 'in', chunk)
+        .limit(chunk.length)
+        .get(),
+    ]);
+    outgoing.forEach((snapshot) => blocked.add(snapshot.data().blockedUid));
+    incoming.forEach((snapshot) => blocked.add(snapshot.data().blockerUid));
+  }
+  return blocked;
 }
 
 exports.startSocialSession = onCall(CALLABLE_OPTS, async (request) => {

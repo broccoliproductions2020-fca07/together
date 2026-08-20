@@ -58,6 +58,28 @@ Clients use narrowly scoped direct writes only where Rules can prove ownership.
 Cloud Functions run in `europe-west3`. Realtime Database serves only explicitly
 active Anreise and Heimweg sessions; it stores a last point, not a trail.
 
+### Time planning
+
+Time planning is a **pre-Activity**, never an Activity with missing timestamps:
+`timePlans/{planId}` holds host-owned source windows, while
+`timePlanMembers/{uid}` holds one member's submitted interval array. A host
+choice may contain several windows; a member may keep zero or many disjoint
+intervals inside each source window. The backend validates 5-minute snapping,
+ordering and containment, so a client cannot write availability outside an
+offer.
+
+The plan document is readable only after `joinTimePlan`; pending invitations
+live in the private, server-only `timePlanInvites` collection and arrive through
+an actionable `time_plan_invite` notification. This deliberately prevents
+someone from probing invitees or another member's schedule before joining.
+
+The planning sheet owns one plan-document subscription and one bounded (50)
+member subscription only while open. Dragging changes local draft state; one
+`respondToTimePlan` callable publishes the whole response. `expireAt` is set
+on the plan, member and invitation documents so abandoned planning data is
+removed by Firestore TTL. A time plan has no map marker or chat until a future,
+host-authorized lock operation creates a normal fixed-time Activity.
+
 ## Cost controls
 
 - Every live Firestore query has a limit.
@@ -71,6 +93,15 @@ active Anreise and Heimweg sessions; it stores a last point, not a trail.
   the chosen Place ID may be retained). The server-side Places key lives in
   Firebase Secret Manager, while native Maps keys are injected only at build
   time.
+- People lookup is callable-only, starts after a 350 ms client debounce and is
+  held only in the open screen's short-lived memory cache. The private
+  `friendSearch` index is not client-readable; `searchPeople` returns at most
+  five discoverable, non-blocked identity cards and is capped at 10 searches
+  per minute and 50 per Europe/Berlin calendar day.
+- Existing cloud profiles are indexed once with
+  `node scripts/backfill-friend-search.mjs --project dev|prod --apply`; without
+  `--apply` the script is a read-only dry run. Do this only after the rules,
+  composite index and `searchPeople` callable have been deployed together.
 - Activity chats, group chats, presence and notifications carry expiry fields
   and need matching Firebase TTL policies in each cloud project.
 

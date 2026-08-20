@@ -394,9 +394,13 @@ export function MarkerDetailSheet({
               ) : (
                 <>
                   <Text className="text-2xl font-bold text-foreground">{shownSelection.title}</Text>
-                  <Text className="mt-2 text-base text-muted-foreground">
-                    {shownSelection.subtitle}
-                  </Text>
+                  {/* Only when there IS an address — an empty line still carries
+                      its top margin and leaves a gap under the name. */}
+                  {shownSelection.subtitle ? (
+                    <Text className="mt-2 text-base text-muted-foreground">
+                      {shownSelection.subtitle}
+                    </Text>
+                  ) : null}
                 </>
               );
 

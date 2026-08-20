@@ -1,6 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
-import { Image } from 'expo-image';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
@@ -9,7 +8,6 @@ import {
   Pressable,
   ScrollView,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -18,6 +16,7 @@ import { useActivityEntities } from '@/features/activities';
 import { useActivityChat } from '@/features/chat';
 import { useCircles } from '@/features/circles';
 import { useFriends, type FriendProfile } from '@/features/friends';
+import { SearchField, SelectablePersonRow } from '@/shared/components';
 
 import { useSafety } from '../SafetyProvider';
 import { STATUS_COLOR } from '../safetyTheme';
@@ -137,7 +136,7 @@ function IntroStep({ onNext, onClose }: { onNext: () => void; onClose: () => voi
       <View className="mt-3 flex-row items-start gap-2 rounded-2xl bg-white/[0.04] px-3.5 py-3">
         <Ionicons name="call-outline" size={16} color={STATUS_COLOR.red} />
         <Text className="flex-1 text-xs leading-4 text-white/55">
-          Como ist kein Notrufdienst. Die Zustellung von Benachrichtigungen und eine Reaktion deiner
+          Mica ist kein Notrufdienst. Die Zustellung von Benachrichtigungen und eine Reaktion deiner
           Begleiter können nicht garantiert werden. Bei Gefahr rufe direkt 112.
         </Text>
       </View>
@@ -166,49 +165,6 @@ export interface SafetyStartSheetProps {
    * is visible while permissions/backend/native setup continue.
    */
   onStartRequested?: () => void;
-}
-
-function FriendRow({
-  friend,
-  selected,
-  onToggle,
-}: {
-  friend: FriendProfile;
-  selected: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="checkbox"
-      accessibilityState={{ checked: selected }}
-      accessibilityLabel={`${friend.displayName} ${selected ? 'abwählen' : 'auswählen'}`}
-      className="flex-row items-center gap-3 rounded-2xl px-2 py-2 active:bg-white/[0.05]"
-      onPress={onToggle}
-    >
-      {friend.avatarUrl ? (
-        <Image source={{ uri: friend.avatarUrl }} className="h-11 w-11 rounded-full" />
-      ) : (
-        <View className="h-11 w-11 items-center justify-center rounded-full bg-white/10">
-          <Text className="text-sm font-extrabold text-white">{friend.initials}</Text>
-        </View>
-      )}
-      <View className="flex-1">
-        <Text className="text-[15px] font-bold text-white">{friend.displayName}</Text>
-        {friend.username ? (
-          <Text className="mt-0.5 text-xs text-white/45">@{friend.username}</Text>
-        ) : null}
-      </View>
-      <View
-        className="h-6 w-6 items-center justify-center rounded-full border"
-        style={{
-          borderColor: selected ? SAFETY_COLOR : 'rgba(255,255,255,0.22)',
-          backgroundColor: selected ? SAFETY_COLOR : 'transparent',
-        }}
-      >
-        {selected ? <Ionicons name="checkmark" size={15} color="#fff" /> : null}
-      </View>
-    </Pressable>
-  );
 }
 
 /**
@@ -481,28 +437,16 @@ export function SafetyStartSheet({ visible, onClose, onStartRequested }: SafetyS
                     </View>
                   ) : null}
 
-                  <View className="mt-4 flex-row items-center rounded-2xl border border-white/10 bg-white/[0.05] px-3.5">
-                    <Ionicons name="search" size={17} color="rgba(244,245,247,0.45)" />
-                    <TextInput
-                      value={query}
-                      onChangeText={setQuery}
-                      placeholder="Freunde suchen"
-                      placeholderTextColor="rgba(244,245,247,0.35)"
-                      className="h-12 flex-1 px-2.5 text-[15px] text-white"
-                      autoCapitalize="none"
-                      returnKeyType="search"
-                    />
-                    {query ? (
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel="Suche leeren"
-                        hitSlop={8}
-                        onPress={() => setQuery('')}
-                      >
-                        <Ionicons name="close-circle" size={18} color="rgba(244,245,247,0.4)" />
-                      </Pressable>
-                    ) : null}
-                  </View>
+                  <SearchField
+                    accessibilityLabel="Freunde suchen"
+                    clearAccessibilityLabel="Suche leeren"
+                    containerStyle={{ marginTop: 16, minHeight: 48 }}
+                    inputStyle={{ fontSize: 15 }}
+                    placeholder="Freunde suchen"
+                    placeholderTextColor="rgba(244,245,247,0.35)"
+                    value={query}
+                    onChangeText={setQuery}
+                  />
 
                   <View className="mt-4 flex-row items-center justify-between">
                     <Text className="text-xs font-bold uppercase tracking-wide text-white/45">
@@ -519,11 +463,13 @@ export function SafetyStartSheet({ visible, onClose, onStartRequested }: SafetyS
                     showsVerticalScrollIndicator={false}
                   >
                     {visibleFriends.map((friend) => (
-                      <FriendRow
+                      <SelectablePersonRow
                         key={friend.uid}
-                        friend={friend}
+                        person={friend}
                         selected={selectedUids.has(friend.uid)}
-                        onToggle={() => toggleFriend(friend.uid)}
+                        accent={SAFETY_COLOR}
+                        onPress={() => toggleFriend(friend.uid)}
+                        style={{ paddingHorizontal: 8, paddingVertical: 8 }}
                       />
                     ))}
                     {!visibleFriends.length ? (
@@ -549,7 +495,7 @@ export function SafetyStartSheet({ visible, onClose, onStartRequested }: SafetyS
                 <Ionicons name="notifications-outline" size={16} color={SAFETY_COLOR} />
                 <Text className="flex-1 text-xs leading-4 text-white/55">
                   Ausgewählte Personen erhalten eine Anfrage. Erst ihre Bestätigung zeigt dir, wer
-                  erreichbar ist. Como ist kein Notrufdienst. Die Zustellung von Benachrichtigungen
+                  erreichbar ist. Mica ist kein Notrufdienst. Die Zustellung von Benachrichtigungen
                   und eine Reaktion deiner Begleiter können nicht garantiert werden. Bei Gefahr rufe
                   direkt 112.
                 </Text>

@@ -5,7 +5,7 @@ import type { SpontaneousRound } from '@/features/chat';
 import { useThemeColors } from '@/features/theme';
 import { TEXT_CAPPED } from '@/shared/theme';
 
-const OPEN_COLOR = '#6E8BF7';
+const OPEN_COLOR = '#3B82F6';
 const MAX_VISIBLE_MEMBERS = 4;
 
 function Face({

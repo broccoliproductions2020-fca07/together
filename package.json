@@ -90,8 +90,11 @@
     "test:storage-rules": "node scripts/firebase-storage-emulators-exec.js",
     "test:functions": "node scripts/firebase-functions-emulators-exec.js",
     "backfill:activity-visible-until": "node scripts/backfill-activity-visible-until.mjs",
+    "backfill:friend-search": "node scripts/backfill-friend-search.mjs",
     "test:activity-backfill": "node scripts/firebase-firestore-emulators-exec.js node scripts/test-activity-backfill.mjs",
     "test:email-verification-gate": "node scripts/firebase-email-verification-gate-exec.js",
+    "test:core-selection": "node scripts/test-core-selection.mjs",
+    "test:friend-search": "node scripts/test-friend-search.mjs",
     "check:node": "node scripts/check-node-version.cjs",
     "legal:html": "node scripts/generate-legal-html.mjs",
     "update:development": "cross-env APP_VARIANT=development EXPO_PUBLIC_FIREBASE_EMULATORS=true EXPO_PUBLIC_CRASH_REPORTING_ENABLED=false eas update --channel development --environment development --platform all",
@@ -122,7 +125,9 @@
     "android:build": "powershell -ExecutionPolicy Bypass -File scripts/build-android-devclient.ps1",
     "dashboard": "node admin/local-dashboard.cjs",
     "dashboard:desktop": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue; & .\\node_modules\\.bin\\electron.cmd admin\\desktop\\main.cjs\"",
-    "dashboard:desktop:package": "electron-builder --win nsis"
+    "dashboard:desktop:package": "electron-builder --win nsis",
+    "test:audience-selection": "node scripts/test-audience-selection.mjs",
+    "test:time-range-picker": "node scripts/test-time-range-picker.mjs"
   },
   "private": true,
   "engines": {
@@ -136,7 +141,7 @@
   },
   "build": {
     "appId": "com.broccolistudio.together.operations",
-    "productName": "Como Betrieb",
+    "productName": "Mica Betrieb",
     "artifactName": "${productName}-Setup-${version}.${ext}",
     "directories": {
       "output": "admin/desktop/release"
@@ -169,7 +174,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Como Betrieb"
+      "shortcutName": "Mica Betrieb"
     }
   },
   "expo": {

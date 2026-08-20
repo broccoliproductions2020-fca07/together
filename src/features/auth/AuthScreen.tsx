@@ -39,6 +39,9 @@ import type { SignInWithEmailInput } from './types';
 
 const REVEAL_EASE = Easing.bezier(0.22, 1, 0.36, 1);
 const GOOGLE_BLUE = '#4285F4';
+// Matches `BrandBackdrop`'s top stop, so the very first frame — before the
+// backdrop's own gradient paints — is already the right colour.
+const AUTH_GROUND = '#080B14';
 // Failures read as failures. The brand aqua that used to tint this chip looked
 // like an informational note, which is the wrong signal for a rejected sign-in.
 const DANGER = '#FCA5A5';
@@ -64,7 +67,10 @@ export function AuthScreen() {
   const footIn = useSharedValue(reducedMotion ? 1 : 0);
   const chevron = useSharedValue(0);
   const compact = height < 730;
-  const lockupWidth = Math.min(width - 52, compact ? 224 : 268);
+  // The Mica wordmark is 2.91:1 where the old one was 3.93:1 — the figure
+  // makes it taller at equal width, so the hero is narrowed to keep the same
+  // optical weight rather than growing a third taller on small screens.
+  const lockupWidth = Math.min(width - 72, compact ? 196 : 232);
   const showApple =
     Platform.OS === 'ios' && process.env.EXPO_PUBLIC_APPLE_SIGN_IN_ENABLED === 'true';
   const showGoogle =
@@ -201,7 +207,7 @@ export function AuthScreen() {
 
   return (
     <View style={styles.root}>
-      <StatusBar style="light" backgroundColor={TOGETHER_BRAND.ink} />
+      <StatusBar style="light" backgroundColor={AUTH_GROUND} />
       <BrandBackdrop />
 
       <SafeAreaView style={styles.safeArea}>
@@ -465,7 +471,7 @@ const styles = StyleSheet.create({
     ...TYPE.body,
   },
   root: {
-    backgroundColor: TOGETHER_BRAND.ink,
+    backgroundColor: AUTH_GROUND,
     flex: 1,
   },
   safeArea: {

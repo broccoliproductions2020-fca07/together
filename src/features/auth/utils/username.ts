@@ -51,11 +51,11 @@ function fold(input: string): string {
 
 /**
  * Builds a valid handle from a display name, falling back to the e-mail local
- * part and finally to a stable `como` stem. Always returns a string that
+ * part and finally to a stable `mica` stem. Always returns a string that
  * satisfies the server regex.
  */
 export function slugifyUsername(displayName: string, email = ''): string {
-  const candidates = [displayName, email.split('@')[0] ?? '', 'como'];
+  const candidates = [displayName, email.split('@')[0] ?? '', 'mica'];
 
   for (const candidate of candidates) {
     const slug = fold(candidate)
@@ -66,7 +66,7 @@ export function slugifyUsername(displayName: string, email = ''): string {
       .slice(0, MAX);
     if (slug.length >= MIN) return slug;
   }
-  return 'como';
+  return 'mica';
 }
 
 /**
@@ -76,6 +76,6 @@ export function slugifyUsername(displayName: string, email = ''): string {
 export function withUsernameSuffix(base: string, attempt: number): string {
   const suffix = String(attempt);
   const stem = base.slice(0, MAX - suffix.length).replace(/[^a-z0-9]+$/, '');
-  const candidate = `${stem || 'como'}${suffix}`;
+  const candidate = `${stem || 'mica'}${suffix}`;
   return candidate.slice(0, MAX);
 }

@@ -15,7 +15,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack, type ErrorBoundaryProps } from 'expo-router';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useReducedMotion } from 'react-native-reanimated';
@@ -89,24 +89,35 @@ function useBootDataTimeout() {
   return elapsed;
 }
 
-function BootScreen() {
-  return (
-    <>
-      <AppBootScreen />
-      <StatusBar style="light" backgroundColor="#070910" />
-    </>
-  );
+/**
+ * What the boot curtain needs to know, pushed UP from the map-boot phase.
+ *
+ * `prewarming` is computed deep inside `MapBootProvider`, but the curtain is
+ * rendered at the top of `RootNavigator` — see the comment there for why it has
+ * to be one instance. Lifting the state is what lets that single instance
+ * survive the whole boot instead of being torn down and rebuilt when the
+ * authenticated providers mount.
+ */
+interface BootCurtainState {
+  busy: boolean;
+  locationPermissionIntro: boolean;
+  onRequestLocationPermission?: () => void;
+  onSkipLocationPermission?: () => void;
 }
+
+/** Held by default: the map phase must never be assumed finished before it has
+ * reported once, or the curtain would lift for a frame between the two. */
+const CURTAIN_HELD: BootCurtainState = { busy: true, locationPermissionIntro: false };
 
 /** Keeps the prepared app mounted behind the opaque boot curtain. */
 function AuthenticatedBootGate({
   children,
   bootAnimationDone,
-  resolvedScheme,
+  onBootStateChange,
 }: {
   children: ReactNode;
   bootAnimationDone: boolean;
-  resolvedScheme: 'light' | 'dark';
+  onBootStateChange: (state: BootCurtainState) => void;
 }) {
   const { initialFeedReady } = useActivityEntities();
   const { hydrated: syncHydrated } = useSyncOutbox();
@@ -118,19 +129,27 @@ function AuthenticatedBootGate({
 
   return (
     <MapBootProvider baseReady={baseReady}>
-      <AuthenticatedBootContent resolvedScheme={resolvedScheme}>
+      <AuthenticatedBootContent onBootStateChange={onBootStateChange}>
         {children}
       </AuthenticatedBootContent>
     </MapBootProvider>
   );
 }
 
+/**
+ * Reports the map-boot phase upward instead of drawing its own curtain.
+ *
+ * It used to render a second `AppBootScreen` here. That is one screen too many:
+ * the first one lives in `RootNavigator` and is unmounted the moment the
+ * authenticated providers take over, so the app showed the mark, dropped it for
+ * the frames these providers needed to mount, and showed it again.
+ */
 function AuthenticatedBootContent({
   children,
-  resolvedScheme,
+  onBootStateChange,
 }: {
   children: ReactNode;
-  resolvedScheme: 'light' | 'dark';
+  onBootStateChange: (state: BootCurtainState) => void;
 }) {
   const {
     prewarming,
@@ -139,22 +158,26 @@ function AuthenticatedBootContent({
     skipLocationPermission,
   } = useMapBoot();
 
-  return (
-    <>
-      <DeferredAuthenticatedProviders>{children}</DeferredAuthenticatedProviders>
-      {prewarming ? (
-        <AppBootScreen
-          locationPermissionIntro={showLocationPermissionIntro}
-          onRequestLocationPermission={requestLocationPermission}
-          onSkipLocationPermission={skipLocationPermission}
-        />
-      ) : null}
-      <StatusBar
-        backgroundColor={prewarming ? '#070910' : undefined}
-        style={prewarming || resolvedScheme === 'dark' ? 'light' : 'dark'}
-      />
-    </>
-  );
+  useEffect(() => {
+    onBootStateChange({
+      busy: prewarming,
+      locationPermissionIntro: showLocationPermissionIntro,
+      onRequestLocationPermission: requestLocationPermission,
+      onSkipLocationPermission: skipLocationPermission,
+    });
+  }, [
+    onBootStateChange,
+    prewarming,
+    requestLocationPermission,
+    showLocationPermissionIntro,
+    skipLocationPermission,
+  ]);
+
+  // Back to held on unmount, so signing out and back in starts behind the
+  // curtain again rather than showing a cold map for a frame.
+  useEffect(() => () => onBootStateChange(CURTAIN_HELD), [onBootStateChange]);
+
+  return <DeferredAuthenticatedProviders>{children}</DeferredAuthenticatedProviders>;
 }
 
 export default function RootLayout() {
@@ -238,8 +261,12 @@ function RootNavigator() {
   const { ready: themeReady, resolvedScheme } = useThemePreference();
   const reducedMotion = useReducedMotion();
   const bootAnimationDone = useBootAnimationFloor(!reducedMotion);
+  const [mapBoot, setMapBoot] = useState<BootCurtainState>(CURTAIN_HELD);
+  const reportMapBoot = useCallback((state: BootCurtainState) => setMapBoot(state), []);
 
-  if (status === 'loading' || !themeReady) return <BootScreen />;
+  const sessionResolving = status === 'loading' || !themeReady;
+  const unverified = status === 'authenticated' && user != null && user.emailVerified === false;
+  const authenticated = status === 'authenticated' && !unverified;
 
   // Stack.Protected switches routes in the same render pass as the guard flip.
   // This prevents a signed-out route from rendering after its providers unmount.
@@ -259,43 +286,68 @@ function RootNavigator() {
     </Stack>
   );
 
-  // Hard verification gate: an account with an unconfirmed address never
-  // reaches the app. The backend already refuses its writes, so letting it in
-  // only produced unexplained failures — and this is where the address we
-  // mailed is visible, which is what makes a typo fixable. Rendered INSTEAD of
-  // the authenticated stack, so no provider mounts and no listener attaches
-  // for an account that cannot use them. One-time per account.
-  if (status === 'authenticated' && user && user.emailVerified === false) {
-    if (!bootAnimationDone) return <BootScreen />;
-    return (
-      <>
-        <EmailVerificationGate />
-        <StatusBar style="light" />
-      </>
-    );
+  /**
+   * Everything behind the curtain. It is allowed to mount as early as the
+   * session allows — the animation floor holds the CURTAIN, never the work
+   * behind it, so listeners and caches keep warming up while it is still shown.
+   *
+   * Hard verification gate: an account with an unconfirmed address never
+   * reaches the app. The backend already refuses its writes, so letting it in
+   * only produced unexplained failures — and this is where the address we
+   * mailed is visible, which is what makes a typo fixable. Rendered INSTEAD of
+   * the authenticated stack, so no provider mounts and no listener attaches
+   * for an account that cannot use them. One-time per account.
+   */
+  let body: ReactNode = null;
+  if (!sessionResolving) {
+    if (unverified) {
+      body = <EmailVerificationGate />;
+    } else if (authenticated) {
+      body = (
+        <MapBootProviders>
+          <AuthenticatedBootGate
+            bootAnimationDone={bootAnimationDone}
+            onBootStateChange={reportMapBoot}
+          >
+            {stack}
+          </AuthenticatedBootGate>
+        </MapBootProviders>
+      );
+    } else {
+      body = stack;
+    }
   }
 
-  if (status !== 'authenticated') {
-    if (!bootAnimationDone) return <BootScreen />;
-
-    return (
-      <>
-        {stack}
-        <StatusBar style={resolvedScheme === 'dark' ? 'light' : 'dark'} />
-      </>
-    );
-  }
+  /**
+   * ONE curtain, from the first frame to the last — this is the whole point.
+   *
+   * There used to be two `AppBootScreen`s: one here for the session phase and a
+   * second one deeper in, for the map phase. They are different positions in
+   * the tree, so React tore the first down and built the second, and the mark
+   * visibly vanished and came back in between. Rendered at a FIXED position in
+   * this fragment it is the same instance throughout, no matter how `body`
+   * changes underneath it, and it lifts exactly once.
+   */
+  const curtainBusy =
+    sessionResolving || !bootAnimationDone || (authenticated && mapBoot.busy);
+  // The verification gate is a dark surface of its own, so light chrome
+  // outlives the curtain there — it used to hard-code `style="light"`.
+  const darkChrome = curtainBusy || unverified || resolvedScheme === 'dark';
 
   return (
     <>
-      <MapBootProviders>
-        <AuthenticatedBootGate
-          bootAnimationDone={bootAnimationDone}
-          resolvedScheme={resolvedScheme}
-        >
-          {stack}
-        </AuthenticatedBootGate>
-      </MapBootProviders>
+      {body}
+      {curtainBusy ? (
+        <AppBootScreen
+          locationPermissionIntro={authenticated && mapBoot.locationPermissionIntro}
+          onRequestLocationPermission={mapBoot.onRequestLocationPermission}
+          onSkipLocationPermission={mapBoot.onSkipLocationPermission}
+        />
+      ) : null}
+      <StatusBar
+        backgroundColor={curtainBusy ? '#070910' : undefined}
+        style={darkChrome ? 'light' : 'dark'}
+      />
     </>
   );
 }
@@ -319,7 +371,7 @@ export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
             Kurz aus dem Takt
           </Text>
           <Text className="mt-2 max-w-[310px] text-center text-sm leading-5 text-white/50">
-            Como konnte diese Ansicht gerade nicht laden. Deine Daten bleiben sicher.
+            Mica konnte diese Ansicht gerade nicht laden. Deine Daten bleiben sicher.
           </Text>
           {DIAGNOSTICS_VISIBLE ? (
             <Text

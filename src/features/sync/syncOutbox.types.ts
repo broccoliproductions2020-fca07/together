@@ -1,4 +1,5 @@
 import type { ActivityCreateInput } from '@/features/activities/services/activityService.types';
+import type { TimePlanCreateInput, TimePlanInterval } from '@/features/time-planning/types';
 
 export type SyncOperationStatus = 'queued' | 'failed';
 
@@ -27,6 +28,19 @@ export interface ChatMessageSyncPayload {
   clientMessageId: string;
 }
 
+export interface TimePlanCreateSyncPayload {
+  /** The client-generated plan id is also the server-side idempotency key. */
+  planId: string;
+  plan: TimePlanCreateInput;
+}
+
+export interface TimePlanResponseSyncPayload {
+  planId: string;
+  revision: number;
+  /** One response per source window; newer local edits replace an older retry. */
+  responsesByWindow: Record<string, TimePlanInterval[]>;
+}
+
 export type SyncOperation =
   | (SyncOperationBase & {
       kind: 'activity.create';
@@ -35,6 +49,14 @@ export type SyncOperation =
   | (SyncOperationBase & {
       kind: 'chat.message';
       payload: ChatMessageSyncPayload;
+    })
+  | (SyncOperationBase & {
+      kind: 'timePlan.create';
+      payload: TimePlanCreateSyncPayload;
+    })
+  | (SyncOperationBase & {
+      kind: 'timePlan.response';
+      payload: TimePlanResponseSyncPayload;
     });
 
 export type SyncOperationKind = SyncOperation['kind'];

@@ -15,12 +15,20 @@ export interface SelectedPlace {
 }
 
 /**
- * The one social context in which an activity is published. It deliberately
- * contains no person-by-person selection: Together publishes passively inside
- * a trusted context; it does not send invitations.
+ * The context an activity is published into, and the only thing the client
+ * sends — the server re-derives the uid list from it (`audienceForContext`).
+ *
+ * `selection` carries concrete people, which sounds like the recipient list the
+ * earlier design deliberately refused. The difference is where trust sits: the
+ * server intersects it with the caller's confirmed friendships, so a selection
+ * can only ever be a SUBSET of `all_friends`. Publishing stays passive — nobody
+ * is notified by being in the audience; they can merely see it.
  */
 export type ActivityVisibility =
-  { kind: 'all_friends' } | { kind: 'close_friends' } | { kind: 'group'; groupId: string };
+  | { kind: 'all_friends' }
+  | { kind: 'close_friends' }
+  | { kind: 'group'; groupId: string }
+  | { kind: 'selection'; uids: string[] };
 
 export interface ActivityDraft {
   mode: ActivityMode;

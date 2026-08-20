@@ -318,9 +318,9 @@ async function startNativeLocationUpdates() {
     ...(Platform.OS === 'android'
       ? {
           foregroundService: {
-            notificationTitle: 'Como: Anreise vorbereitet',
+            notificationTitle: 'Mica: Anreise vorbereitet',
             notificationBody: 'Dein Standort wird erst bei Bewegung mit Teilnehmern geteilt.',
-            notificationColor: '#6E8BF7',
+            notificationColor: '#3B82F6',
             killServiceOnDestroy: true,
           },
         }

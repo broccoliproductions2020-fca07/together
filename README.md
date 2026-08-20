@@ -1,6 +1,6 @@
-# Como
+# Mica
 
-Como is a native app for spontaneous meetups between confirmed friends. The
+Mica is a native app for spontaneous meetups between confirmed friends. The
 client is built with Expo/React Native and uses Firebase Auth, Firestore,
 Realtime Database, Storage and Cloud Functions.
 
@@ -15,7 +15,7 @@ the same client code against different Firebase targets.
 | Staging     | `com.broccolistudio.together.staging` | Firebase development project | Internal device tests            |
 | Production  | `com.broccolistudio.together`         | Firebase production project  | Store release                    |
 
-Expo Go and the browser are not supported application targets: Como uses
+Expo Go and the browser are not supported application targets: Mica uses
 native Firebase modules. Use the custom development client.
 
 ## Local start

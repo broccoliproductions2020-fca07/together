@@ -15,7 +15,7 @@ const STORAGE_KEY = 'together:welcomeSeen:v2';
 const COLORS = {
   now: '#41C08D',
   soon: '#E0A23E',
-  open: '#6E8BF7',
+  open: '#3B82F6',
 };
 
 function ValueRow({
@@ -51,11 +51,16 @@ function ValueRow({
   );
 }
 
-/** The two open routes from the Together brand weave through one another. */
+/**
+ * The welcome hero is the one in-app surface that shows the figure in the
+ * icon's own three colours: it sits on a plain dark card with nothing behind
+ * it to compete, unlike the auth wordmark, which has to stay white to hold its
+ * edge against the aurora.
+ */
 function BrandGlow() {
   return (
     <View className="items-center justify-center" style={{ height: 190 }}>
-      <TogetherMark animated idle size={158} />
+      <TogetherMark animated idle size={158} tone="brand" />
     </View>
   );
 }
@@ -111,7 +116,7 @@ export function WelcomeIntro() {
         <BrandGlow />
 
         <Animated.View entering={reducedMotion ? undefined : FadeInDown.duration(320)}>
-          <Text className="text-center text-3xl font-bold text-white">Willkommen bei Como</Text>
+          <Text className="text-center text-3xl font-bold text-white">Willkommen bei Mica</Text>
           <Text className="mt-2 text-center text-base leading-6 text-white/60">
             Deine Zeit, deine Leute — ganz ohne Feed.
           </Text>
@@ -122,7 +127,7 @@ export function WelcomeIntro() {
             icon="people-outline"
             tint={COLORS.open}
             title="Freunde"
-            text="Como lebt von deinen Leuten — nur bestätigte Freunde sehen dich."
+            text="Mica lebt von deinen Leuten — nur bestätigte Freunde sehen dich."
             delay={120}
           />
           <ValueRow

@@ -27,7 +27,7 @@ export const DIAGNOSTICS_VISIBLE =
   process.env.EXPO_PUBLIC_STAGING_DIAGNOSTICS === 'true' ||
   Constants.expoConfig?.ios?.bundleIdentifier === 'com.broccolistudio.together.staging' ||
   Constants.expoConfig?.android?.package === 'com.broccolistudio.together.staging' ||
-  Constants.expoConfig?.name === 'Como Staging';
+  Constants.expoConfig?.name === 'Mica Staging';
 
 /**
  * Which native map renderer is actually live. Mirrors MAP_PROVIDER in

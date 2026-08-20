@@ -7,6 +7,7 @@ export type NotificationKind =
   | 'activity_invite'
   | 'spontaneous_round_invite'
   | 'group_chat_invite'
+  | 'time_plan_invite'
   | 'chat_message'
   | 'journey_reminder'
   | 'safety_request'
@@ -31,6 +32,7 @@ export interface NotificationDoc {
   body: string;
   activityId?: string;
   roomId?: string;
+  timePlanId?: string;
   safetyOwnerUid?: string;
   safetyAlertAt?: number;
   createdAt: number;

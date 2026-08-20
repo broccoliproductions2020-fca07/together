@@ -1,47 +1,15 @@
 import * as Location from 'expo-location';
-import * as Crypto from 'expo-crypto';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert } from 'react-native';
 
 import type { ActivityMode, SelectedPlace } from '@/features/activities';
-import { placeService, type PlaceSuggestion } from '@/features/places';
+import { usePlaceSearch, type PlaceSuggestion } from '@/features/places';
 import { showLocationPermissionAlert } from '@/shared/utils/locationPermission';
 
 import type { MapCoordinate, MapPlaceSelection } from '../types/map.types';
 import { DEFAULT_MAP_REGION } from '../utils/defaultRegion';
 
 const CANDIDATE_CLEAR_DISTANCE = 0.00025;
-const PLACE_SEARCH_MIN_QUERY_LENGTH = 3;
-/** Must mirror the callable's `cleanString(..., 120, 'Suchtext')` boundary.
- * Keeping it here (rather than only on the TextInput) also covers pasted or
- * future programmatic search input before it can create a rejected request. */
-const PLACE_SEARCH_MAX_QUERY_LENGTH = 120;
-const PLACE_SEARCH_DEBOUNCE_MS = 300;
-
-function placeSearchFailureMessage(error: unknown) {
-  const code = (error as { code?: unknown } | null)?.code;
-  const message = error instanceof Error ? error.message.trim() : '';
-  // Callables return German, user-safe copy for expected configuration and
-  // quota states. Transport/provider errors remain a stable local message.
-  if (
-    typeof code === 'string' &&
-    (code === 'failed-precondition' ||
-      code === 'resource-exhausted' ||
-      code === 'invalid-argument' ||
-      code === 'permission-denied') &&
-    message
-  ) {
-    return message.replace(/^\[[^\]]+\]\s*/, '');
-  }
-  return 'Die Ortssuche ist gerade nicht erreichbar. Bitte versuche es gleich noch einmal.';
-}
-
-function createPlaceSearchSessionToken() {
-  // Google bills Autocomplete as a session only when its token is unique and
-  // reused once for the selected Place Details request. Expo Crypto produces
-  // an RFC 4122 v4 UUID: URL-safe and exactly within Google's 36-char limit.
-  return Crypto.randomUUID();
-}
 
 function compactAddressParts(parts: (string | null | undefined)[]) {
   const uniqueParts = parts
@@ -73,12 +41,13 @@ async function reverseGeocodePlaceTitle(coordinate: MapCoordinate) {
 
 async function coordinateToComposerPlace(coordinate: MapCoordinate): Promise<SelectedPlace> {
   const title = await reverseGeocodePlaceTitle(coordinate);
-  const coordinateLabel = `${coordinate.latitude.toFixed(5)}, ${coordinate.longitude.toFixed(5)}`;
 
   return {
     id: `map-center-${coordinate.latitude.toFixed(5)}-${coordinate.longitude.toFixed(5)}`,
     name: title || 'Markierter Ort',
-    address: title ? `${title} · ${coordinateLabel}` : `Koordinate: ${coordinateLabel}`,
+    // No raw coordinates and no repeat of the name: this line is the place's
+    // address to a person, not a debug readout.
+    address: undefined,
     latitude: coordinate.latitude,
     longitude: coordinate.longitude,
     source: 'map',
@@ -109,11 +78,6 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
   const [resolving, setResolving] = useState(false);
   const [currentLocationLoading, setCurrentLocationLoading] = useState(false);
   const [mode, setMode] = useState<ActivityMode>('open');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<PlaceSuggestion[]>([]);
-  const [searchLoading, setSearchLoading] = useState(false);
-  const [searchError, setSearchError] = useState<string>();
-  const [searchCompleted, setSearchCompleted] = useState(false);
   const [searchMode, setSearchMode] = useState(false);
   const [selectedPlaceCandidate, setSelectedPlaceCandidate] = useState<SelectedPlace>();
   const [coordinate, setCoordinate] = useState<MapCoordinate>({
@@ -121,16 +85,8 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
     longitude: DEFAULT_MAP_REGION.longitude,
   });
   const [focusCoordinate, setFocusCoordinate] = useState<MapCoordinate>();
-  const [searchRequestVersion, setSearchRequestVersion] = useState(0);
-  const coordinateRef = useRef(coordinate);
+  const placeSearch = usePlaceSearch({ enabled: active, center: coordinate });
   const pendingPickRef = useRef<((place: SelectedPlace) => void) | null>(null);
-  const searchRequestRef = useRef(0);
-  const searchSignatureRef = useRef<string | undefined>(undefined);
-  const skipSearchRef = useRef(false);
-  const submitSearchRef = useRef(false);
-  const searchSessionRef = useRef(createPlaceSearchSessionToken());
-  const searchSessionHasInputRef = useRef(false);
-  const searchSessionResolvedRef = useRef(false);
   /** Every open/cancel/selection gets a new ticket. Async GPS and Places work
    * must prove it still belongs to the visible picker before touching state. */
   const pickerSessionRef = useRef(0);
@@ -149,97 +105,8 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
   const autoConfirmRef = useRef(false);
 
   useEffect(() => {
-    coordinateRef.current = coordinate;
-  }, [coordinate]);
-
-  useEffect(() => {
     onActiveChange?.(active);
   }, [active, onActiveChange]);
-
-  useEffect(() => {
-    const query = searchQuery.trim();
-    if (!active || query.length < PLACE_SEARCH_MIN_QUERY_LENGTH) {
-      skipSearchRef.current = false;
-      searchSignatureRef.current = undefined;
-      setSearchResults([]);
-      setSearchLoading(false);
-      setSearchError(undefined);
-      setSearchCompleted(false);
-      return;
-    }
-
-    if (selectedPlaceCandidate || skipSearchRef.current) {
-      skipSearchRef.current = false;
-      searchSignatureRef.current = undefined;
-      setSearchResults([]);
-      setSearchLoading(false);
-      setSearchError(undefined);
-      setSearchCompleted(false);
-      return;
-    }
-
-    const center = coordinateRef.current;
-    const normalizedQuery = query.replace(/\s+/g, ' ').toLocaleLowerCase('de-DE');
-    const signature = `${normalizedQuery}:${center.latitude.toFixed(3)}:${center.longitude.toFixed(3)}`;
-    // Google Places content must not be cached. This only suppresses a repeat
-    // request while the same live result list is already on screen (for
-    // example, pressing the keyboard Search key twice); typing away and back
-    // deliberately performs a fresh request.
-    if (searchSignatureRef.current === signature) {
-      setSearchLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-    const requestId = ++searchRequestRef.current;
-    const runImmediately = submitSearchRef.current;
-    submitSearchRef.current = false;
-    setSearchLoading(true);
-    setSearchError(undefined);
-    setSearchCompleted(false);
-    const timer = setTimeout(
-      () => {
-        searchSignatureRef.current = signature;
-        void placeService
-          .search({
-            query,
-            sessionToken: searchSessionRef.current,
-            center,
-            // Establishments rank more reliably with a nearby bias. The map
-            // already has the user's local foreground position when available;
-            // this only changes ranking, never restricts the world search.
-            radiusMeters: 5_000,
-          })
-          .then((results) => {
-            if (!cancelled && requestId === searchRequestRef.current) {
-              setSearchResults(results);
-              setSearchLoading(false);
-              setSearchCompleted(true);
-            }
-          })
-          .catch((error: unknown) => {
-            if (!cancelled && requestId === searchRequestRef.current) {
-              searchSignatureRef.current = undefined;
-              setSearchResults([]);
-              setSearchLoading(false);
-              setSearchError(placeSearchFailureMessage(error));
-              setSearchCompleted(true);
-            }
-          });
-      },
-      runImmediately ? 0 : PLACE_SEARCH_DEBOUNCE_MS,
-    );
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [active, searchQuery, searchRequestVersion, selectedPlaceCandidate]);
-
-  const resetSearchSession = useCallback(() => {
-    searchSessionRef.current = createPlaceSearchSessionToken();
-    searchSessionHasInputRef.current = false;
-    searchSessionResolvedRef.current = false;
-  }, []);
 
   /** The single exit: hand the place to whoever opened the picker and tear the
    * session down. Both `confirm` and every auto-confirm path go through here so
@@ -256,42 +123,26 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
       pendingPickRef.current?.(place);
       pendingPickRef.current = null;
       autoConfirmRef.current = false;
-      resetSearchSession();
+      placeSearch.reset();
       setResolving(false);
       setCurrentLocationLoading(false);
-      setSearchQuery('');
-      setSearchResults([]);
-      setSearchLoading(false);
-      setSearchError(undefined);
-      setSearchCompleted(false);
       setSearchMode(false);
       setSelectedPlaceCandidate(undefined);
       setActive(false);
     },
-    [resetSearchSession],
+    [placeSearch.reset],
   );
 
-  const updateSearchQuery = useCallback((rawQuery: string) => {
-    const query = rawQuery.slice(0, PLACE_SEARCH_MAX_QUERY_LENGTH);
-    const hasInput = query.trim().length > 0;
-    if (hasInput && (!searchSessionHasInputRef.current || searchSessionResolvedRef.current)) {
-      searchSessionRef.current = createPlaceSearchSessionToken();
-      searchSessionResolvedRef.current = false;
-    }
-    searchSessionHasInputRef.current = hasInput;
-    skipSearchRef.current = false;
-    submitSearchRef.current = false;
-    setSelectedPlaceCandidate(undefined);
-    setSearchResults([]);
-    setSearchError(undefined);
-    setSearchCompleted(false);
-    setSearchQuery(query);
-  }, []);
+  const updateSearchQuery = useCallback(
+    (query: string) => {
+      // Typing is a newer decision than a map candidate.
+      setSelectedPlaceCandidate(undefined);
+      placeSearch.updateQuery(query);
+    },
+    [placeSearch.updateQuery],
+  );
 
-  const submitSearch = useCallback(() => {
-    submitSearchRef.current = true;
-    setSearchRequestVersion((version) => version + 1);
-  }, []);
+  const submitSearch = placeSearch.submit;
 
   const updateCenter = useCallback((nextCoordinate: MapCoordinate) => {
     setCoordinate(nextCoordinate);
@@ -308,7 +159,6 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
         return candidate;
       }
 
-      skipSearchRef.current = true;
       return undefined;
     });
   }, []);
@@ -353,11 +203,7 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
       // move is what makes "use my position" visible as a place rather than as
       // a label, and the composer reopens over a map already showing it.
       setFocusCoordinate(nextCoordinate);
-      setSearchQuery('');
-      setSearchResults([]);
-      setSearchLoading(false);
-      setSearchError(undefined);
-      setSearchCompleted(false);
+      placeSearch.reset();
 
       if (autoConfirmRef.current) {
         finishWith(place);
@@ -370,7 +216,7 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
         setCurrentLocationLoading(false);
       }
     }
-  }, [finishWith]);
+  }, [finishWith, placeSearch.reset]);
 
   const open = useCallback(
     (
@@ -385,13 +231,8 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
       pendingPickRef.current = onPick;
       autoConfirmRef.current = options.autoConfirm ?? false;
       setMode(nextMode);
-      resetSearchSession();
+      placeSearch.reset();
       if (options.initialCoordinate) setCoordinate(options.initialCoordinate);
-      setSearchQuery('');
-      setSearchResults([]);
-      setSearchLoading(false);
-      setSearchError(undefined);
-      setSearchCompleted(false);
       setSearchMode(options.searchMode ?? false);
       setSelectedPlaceCandidate(undefined);
       setResolving(false);
@@ -399,7 +240,7 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
       setActive(true);
       if (options.focusCurrentLocation !== false) void focusCurrentLocation();
     },
-    [focusCurrentLocation, resetSearchSession],
+    [focusCurrentLocation, placeSearch.reset],
   );
 
   const cancel = useCallback(() => {
@@ -409,18 +250,13 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
     confirmInFlightRef.current = false;
     pendingPickRef.current = null;
     autoConfirmRef.current = false;
-    resetSearchSession();
+    placeSearch.reset();
     setResolving(false);
     setCurrentLocationLoading(false);
-    setSearchQuery('');
-    setSearchResults([]);
-    setSearchLoading(false);
-    setSearchError(undefined);
-    setSearchCompleted(false);
     setSearchMode(false);
     setSelectedPlaceCandidate(undefined);
     setActive(false);
-  }, [resetSearchSession]);
+  }, [placeSearch.reset]);
 
   const selectSearchResult = useCallback(
     async (suggestion: PlaceSuggestion) => {
@@ -431,27 +267,12 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
       const session = ++pickerSessionRef.current;
       placeResolutionInFlightRef.current = true;
       currentLocationInFlightRef.current = false;
-      searchRequestRef.current += 1;
       setResolving(true);
       try {
-        const place = await placeService.resolve({
-          placeId: suggestion.id,
-          sessionToken: searchSessionRef.current,
-          name: suggestion.name,
-        });
-        if (session !== pickerSessionRef.current) return;
-        if (place.latitude == null || place.longitude == null) {
-          throw new Error('Der Ort hat keine Kartenkoordinate.');
-        }
+        const resolved = await placeSearch.resolve(suggestion);
+        if (session !== pickerSessionRef.current || !resolved) return;
 
-        const nextCoordinate = { latitude: place.latitude, longitude: place.longitude };
-        const resolved: SelectedPlace = { ...place, source: 'map' };
-        searchSessionResolvedRef.current = true;
-        setSearchQuery('');
-        setSearchResults([]);
-        setSearchLoading(false);
-        setSearchError(undefined);
-        setSearchCompleted(false);
+        const nextCoordinate = { latitude: resolved.latitude!, longitude: resolved.longitude! };
         // Move the camera before handing over, so the sheet that opens next is
         // already sitting on the right place instead of sliding up over the
         // old one and catching up afterwards.
@@ -473,7 +294,7 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
         }
       }
     },
-    [finishWith],
+    [finishWith, placeSearch.resolve],
   );
 
   const selectMapPlace = useCallback(
@@ -484,14 +305,7 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
       currentLocationInFlightRef.current = false;
       confirmInFlightRef.current = false;
       const nextCoordinate = place.coordinate;
-      searchRequestRef.current += 1;
-      searchSignatureRef.current = undefined;
-      resetSearchSession();
-      setSearchQuery('');
-      setSearchResults([]);
-      setSearchLoading(false);
-      setSearchError(undefined);
-      setSearchCompleted(false);
+      placeSearch.reset();
       setSelectedPlaceCandidate({
         id: place.placeId ?? place.id,
         name: place.title.trim() || 'Markierter Ort',
@@ -502,7 +316,7 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
       setCoordinate(nextCoordinate);
       setFocusCoordinate(nextCoordinate);
     },
-    [resetSearchSession],
+    [placeSearch.reset],
   );
 
   const confirm = useCallback(async () => {
@@ -535,12 +349,12 @@ export function useMapLocationPicker({ onActiveChange }: UseMapLocationPickerOpt
     mode,
     open,
     resolving,
-    searchCompleted,
-    searchError,
-    searchLoading,
+    searchCompleted: placeSearch.completed,
+    searchError: placeSearch.error,
+    searchLoading: placeSearch.loading,
     searchMode,
-    searchQuery,
-    searchResults,
+    searchQuery: placeSearch.query,
+    searchResults: placeSearch.results,
     selectMapPlace,
     selectSearchResult,
     selectedPlaceCandidate,

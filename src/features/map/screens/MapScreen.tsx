@@ -3,6 +3,7 @@ import * as Notifications from 'expo-notifications';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Keyboard, Modal, Platform, useWindowDimensions, View } from 'react-native';
+import { useSharedValue } from 'react-native-reanimated';
 
 import {
   ActivityComposerSheet,
@@ -35,11 +36,20 @@ import { PostfachSheet, type PostfachChatTarget } from '@/features/mailbox';
 import { usePushNudge } from '@/features/notifications';
 import { claimNotificationResponse } from '@/features/notifications/notificationResponse';
 import {
+  TimePlanningSheet,
+  timePlanCreateInputFromDraft,
+  timePlanningService,
+  type TimePlanCreation,
+  type TimePlanOfferGroup,
+} from '@/features/time-planning';
+import {
   MapOverlay,
   MarkerDetailSheet,
   NearbySheet,
+  OpenStatusSheet,
   SpontaneousRoundInviteSheet,
   SpontaneousRoundSheet,
+  type CoreJourneyIndicator,
 } from '@/features/overlay';
 import { presenceToMapMarkers, presenceToNearby, useOpenStatus } from '@/features/presence';
 import {
@@ -218,6 +228,7 @@ export function MapScreen({
     leaveActivity: leaveActivityEntity,
     mapMarkers,
     markerClusters,
+    ownCoreActivity,
   } = useActivityEntities();
   const {
     activeJourney,
@@ -267,8 +278,23 @@ export function MapScreen({
     participantId?: string;
   } | null>(null);
   const [nearbySheetVisible, setNearbySheetVisible] = useState(false);
+  /**
+   * The pill the Nearby sheet morphs out of, and the single value both sides
+   * of that morph run on: the sheet grows on it, the pill fades on its
+   * inverse. Shared rather than signalled, so neither can be on screen without
+   * the other having made room for it.
+   */
+  const nearbyPillRef = useRef<View | null>(null);
+  const nearbyMorph = useSharedValue(0);
+  /** The core's own personal status sheet — your open window, not the friends list. */
+  const [openStatusSheetVisible, setOpenStatusSheetVisible] = useState(false);
   const nearbyActionRevisionRef = useRef(0);
   const [postfachVisible, setPostfachVisible] = useState(false);
+  const [timePlanId, setTimePlanId] = useState<string>();
+  const [timePlanPromptOnOpen, setTimePlanPromptOnOpen] = useState(false);
+  const [timePlanJoiningId, setTimePlanJoiningId] = useState<string | null>(null);
+  const timePlanJoinRevisionRef = useRef(0);
+  const timePlanJoinInFlightRef = useRef<string | null>(null);
   // The open chat carries its resolved colour, so the same room looks the same
   // whether it was opened from the Postfach, a push, or the marker sheet.
   const [chatActivity, setChatActivity] = useState<PostfachChatTarget | null>(null);
@@ -291,6 +317,7 @@ export function MapScreen({
   // The list comes from the signed-in user's live presence subscription.
   const {
     isOpen,
+    goOpen,
     shareLocation,
     openFriends,
     setFriendPresenceListening,
@@ -590,7 +617,7 @@ export function MapScreen({
                 ? '#FF5A5A'
                 : signal === 'unwell' || signal === 'data_gap' || signal === 'timed_out'
                   ? '#E0A23E'
-                  : '#6E8BF7',
+                  : '#3B82F6',
             subLabel: staleMinutes ? `vor ${staleMinutes} Min.` : undefined,
           };
         }),
@@ -744,12 +771,12 @@ export function MapScreen({
     ).length;
     return `${journeyFocus.activity.title} · ${underwayCount} unterwegs`;
   }, [journeyFocus, journeyFocusParticipants]);
-  const activeJourneyLabel =
-    activeJourney && !journeyFocus
-      ? activeJourney.status === 'armed'
-        ? `Anreise vorbereitet · ${activeJourney.title}`
-        : `Du teilst · ${activeJourney.title}`
-      : undefined;
+  // Suppressed during journey focus: that surface has its own focus pill, and
+  // the Core would repeat what the screen is already entirely about.
+  const coreJourney: CoreJourneyIndicator | null =
+    activeJourney && !journeyFocus && activeJourney.status !== 'stopped'
+      ? { title: activeJourney.title, status: activeJourney.status }
+      : null;
 
   const openActivityById = useCallback(
     (activityId: string) => {
@@ -964,15 +991,12 @@ export function MapScreen({
       setLocationPermissionGranted(true);
       setLocationBootstrapActive(true);
       reportLocationBootState('locating');
-      bootLocationRevealTimerRef.current = setTimeout(
-        () => {
-          bootLocationRevealTimerRef.current = null;
-          if (!bootLocationAttemptRunningRef.current || didCenterOnOwnLocationRef.current) return;
-          setLocationBootstrapActive(false);
-          reportLocationBootState('location-pending');
-        },
-        BOOT_LOCATION_REVEAL_DELAY_MS,
-      );
+      bootLocationRevealTimerRef.current = setTimeout(() => {
+        bootLocationRevealTimerRef.current = null;
+        if (!bootLocationAttemptRunningRef.current || didCenterOnOwnLocationRef.current) return;
+        setLocationBootstrapActive(false);
+        reportLocationBootState('location-pending');
+      }, BOOT_LOCATION_REVEAL_DELAY_MS);
       try {
         const cached = await Location.getLastKnownPositionAsync();
         if (cached && bootLocationAttemptRunningRef.current) {
@@ -985,11 +1009,7 @@ export function MapScreen({
         // The native map source below still obtains the first live position.
       }
     },
-    [
-      acceptInitialLocation,
-      finishInitialLocationBoot,
-      reportLocationBootState,
-    ],
+    [acceptInitialLocation, finishInitialLocationBoot, reportLocationBootState],
   );
 
   useEffect(() => {
@@ -1028,13 +1048,33 @@ export function MapScreen({
     shareLocation,
   ]);
 
-  // The pill ONLY opens the sheet — in both states. It must never go open by
-  // itself: becoming open is a real signal to real friends, so it takes the
-  // explicit confirm button inside the sheet (OpenStatusCard). Tapping the pill
-  // while already open is the way back in to refine or end the status.
+  // Opens the friends list from the dedicated Nearby pill or the row inside the
+  // own-status sheet.
   const handleOpenPresencePress = useCallback(() => {
     setNearbySheetVisible(true);
   }, []);
+
+  /**
+   * The core's tap — and the ONE deliberate exception to the old
+   * "goOpen has exactly one call site" rule.
+   *
+   * That rule existed because the surface which announced you used to be the
+   * map pill, i.e. something a thumb could hit while panning. The core is the
+   * opposite: a labelled, fixed personal control whose whole purpose is this
+   * status, and its own gesture layer guarantees a drag or a hold can never
+   * reach here (see TogetherCore — a touch past the tap slop, or one that
+   * matured into the orbit, never calls `onTap`).
+   *
+   * Publishing first and refining after is the same order the OpenStatusCard
+   * already used: every field is optional, so a form in front of "I have time"
+   * would be friction in front of the one thing the app exists for. Going open
+   * on the defaults requests NO location — `shareLocation` starts false, and
+   * only the explicit toggle in the sheet asks the OS for a position.
+   */
+  const handleCoreStatusTap = useCallback(() => {
+    if (!isOpen) goOpen();
+    setOpenStatusSheetVisible(true);
+  }, [goOpen, isOpen]);
 
   function openComposer(
     mode: ActivityMode,
@@ -1042,11 +1082,46 @@ export function MapScreen({
     title?: string,
     activityId?: string,
   ) {
+    Keyboard.dismiss();
     setComposerMode(mode);
     setComposerPlace(place);
     setComposerTitle(title);
     setComposerActivityId(activityId);
     setComposerVisible(true);
+  }
+
+  function startTimePlan(draft: ActivityDraft, offers: TimePlanOfferGroup[]): TimePlanCreation {
+    return timePlanningService.createTimePlan(
+      { uid: currentUid },
+      timePlanCreateInputFromDraft(draft, offers),
+    );
+  }
+
+  async function openJoinedTimePlan(planId: string) {
+    if (timePlanJoinInFlightRef.current === planId) return;
+    const requestRevision = ++timePlanJoinRevisionRef.current;
+    timePlanJoinInFlightRef.current = planId;
+    setTimePlanJoiningId(planId);
+    try {
+      await timePlanningService.joinTimePlan({ uid: currentUid }, planId);
+      if (requestRevision !== timePlanJoinRevisionRef.current) return;
+      setPostfachVisible(false);
+      setTimePlanId(planId);
+      setTimePlanPromptOnOpen(true);
+      haptics.success();
+    } catch (error) {
+      if (requestRevision !== timePlanJoinRevisionRef.current) return;
+      haptics.warning();
+      Alert.alert(
+        'Beitritt nicht möglich',
+        error instanceof Error ? error.message : 'Bitte versuche es gleich noch einmal.',
+      );
+    } finally {
+      if (requestRevision === timePlanJoinRevisionRef.current) {
+        timePlanJoinInFlightRef.current = null;
+        setTimePlanJoiningId(null);
+      }
+    }
   }
 
   function closeNearbySheet() {
@@ -1716,6 +1791,7 @@ export function MapScreen({
     onPick: (place: SelectedPlace) => void,
     options: MapLocationPickerOpenOptions = {},
   ) {
+    Keyboard.dismiss();
     setSelection(null);
     // Every place that comes back out of the picker also moves the camera, from
     // whichever entry point it was chosen. Otherwise the composer reopens saying
@@ -1724,6 +1800,7 @@ export function MapScreen({
     mapLocationPicker.open(
       mode,
       (place) => {
+        Keyboard.dismiss();
         if (options.focusMapOnPick !== false && place.latitude != null && place.longitude != null) {
           focusMapOn({ latitude: place.latitude, longitude: place.longitude });
         }
@@ -1752,9 +1829,9 @@ export function MapScreen({
         setSelection({
           type: 'Place',
           title: place.name,
-          subtitle:
-            place.address ??
-            `Koordinate: ${place.latitude.toFixed(5)}, ${place.longitude.toFixed(5)}`,
+          // No coordinate fallback: a lat/lng pair under a place name is a
+          // developer readout, not something a person picking a spot can use.
+          subtitle: place.address,
           coordinate: { latitude: place.latitude, longitude: place.longitude },
           placeId: place.id,
           source: 'poi',
@@ -1933,13 +2010,20 @@ export function MapScreen({
         <>
           <MapOverlay
             isOpen={isOpen}
+            coreActivity={ownCoreActivity}
             journeyFocusLabel={journeyFocusLabel}
             journeyParticipants={journeyFocusParticipants}
-            activeJourneyLabel={activeJourneyLabel}
-            onCreatePress={() => openComposer('now')}
+            activeJourney={coreJourney}
+            onCreateActivity={(mode) => openComposer(mode)}
             onSearchPress={openPlaceSearch}
             onRecenter={recenterMap}
             recentering={recentering}
+            onOpenStatusPress={handleCoreStatusTap}
+            onCoreActivityPress={openActivityById}
+            nearbyCount={nearbyFriends.length}
+            nearbyPillRef={nearbyPillRef}
+            nearbyPillProgress={nearbyMorph}
+            nearbyPillInert={nearbySheetVisible}
             onNearbyPress={handleOpenPresencePress}
             onPostfachPress={() => setPostfachVisible(true)}
             onCalendarPress={() => onOpenCalendar?.()}
@@ -1967,6 +2051,19 @@ export function MapScreen({
 
           <SafetyStatusPill />
 
+          {/* Your own open window. Deliberately a separate surface from the
+              NearbySheet below: one is about you, the other about your
+              friends, and the row inside it links across rather than merging
+              the two. */}
+          <OpenStatusSheet
+            visible={openStatusSheetVisible}
+            onClose={() => setOpenStatusSheetVisible(false)}
+            onOpenNearby={() => {
+              setOpenStatusSheetVisible(false);
+              setNearbySheetVisible(true);
+            }}
+          />
+
           <NearbySheet
             visible={nearbySheetVisible}
             focusFriendId={openPresenceFocusId}
@@ -1979,6 +2076,8 @@ export function MapScreen({
               router.push('/friends');
             }}
             onClose={closeNearbySheet}
+            originRef={nearbyPillRef}
+            morphProgress={nearbyMorph}
             onStartSpontaneousRound={handleStartSpontaneousRound}
             onJoinOpening={handleJoinOpening}
           />
@@ -2033,7 +2132,13 @@ export function MapScreen({
           <PostfachSheet
             visible={postfachVisible}
             covered={chatActivity !== null}
-            onClose={() => setPostfachVisible(false)}
+            timePlanJoiningId={timePlanJoiningId}
+            onClose={() => {
+              timePlanJoinRevisionRef.current += 1;
+              timePlanJoinInFlightRef.current = null;
+              setTimePlanJoiningId(null);
+              setPostfachVisible(false);
+            }}
             onEditActivity={(activity) => {
               if (!openActivityEditor(activity.id)) {
                 Alert.alert(
@@ -2061,6 +2166,17 @@ export function MapScreen({
               }
             }}
             onOpenSpontaneousRoundInvite={openSpontaneousRoundInvite}
+            onOpenTimePlan={(planId) => void openJoinedTimePlan(planId)}
+          />
+
+          <TimePlanningSheet
+            visible={Boolean(timePlanId)}
+            planId={timePlanId}
+            promptOnOpen={timePlanPromptOnOpen}
+            onClose={() => {
+              setTimePlanPromptOnOpen(false);
+              setTimePlanId(undefined);
+            }}
           />
 
           <MarkerDetailSheet
@@ -2111,6 +2227,11 @@ export function MapScreen({
         editing={Boolean(editingActivityId)}
         suspended={mapLocationPicker.active}
         visible={composerVisible}
+        // Ranking bias for the inline place search. Without it a fresh composer
+        // — whose default place carries no coordinate on purpose — would rank
+        // "Prater" worldwide, while the full-screen picker always has the map
+        // centre to lean on.
+        searchCenter={myLocation ?? undefined}
         onClose={() => {
           setComposerVisible(false);
           setComposerActivityId(undefined);
@@ -2120,6 +2241,27 @@ export function MapScreen({
         }}
         onOpenMapPicker={openMapPicker}
         onSubmit={submitComposer}
+        onStartTimePlan={startTimePlan}
+        onTimePlanCreated={(creation) => {
+          setComposerVisible(false);
+          setComposerActivityId(undefined);
+          setComposerTitle(undefined);
+          setComposerPlace(undefined);
+          proposalToMarkRef.current = null;
+          setTimePlanPromptOnOpen(false);
+          setTimePlanId(creation.id);
+          haptics.success();
+          void creation.ready.catch((error: unknown) => {
+            setTimePlanId((current) => (current === creation.id ? undefined : current));
+            haptics.warning();
+            Alert.alert(
+              'Terminfindung nicht angelegt',
+              error instanceof Error
+                ? error.message
+                : 'Die Zeitvorschläge konnten nicht gespeichert werden. Bitte versuche es erneut.',
+            );
+          });
+        }}
       />
 
       <Modal

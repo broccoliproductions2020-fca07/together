@@ -8,7 +8,7 @@ import { useThemeColors } from '@/features/theme';
 import { SquircleButton, TogetherLoader } from '@/shared/components';
 import { TEXT_CAPPED, TEXT_FLEXIBLE } from '@/shared/theme';
 
-const ACCENT = '#6E8BF7';
+const ACCENT = '#3B82F6';
 /** How many faces are shown before the rest collapse into "+ N weitere". The
  * backend already caps `memberPreview`; this is the visual guard, not the
  * privacy one. */

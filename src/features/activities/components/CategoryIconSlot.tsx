@@ -7,7 +7,7 @@ import { ACTIVITY_CATEGORIES } from '@/features/map/utils/activityCategories';
 import type { ActivityCategory } from '../types';
 
 const MODE_ACCENTS = {
-  open: '#6E8BF7',
+  open: '#3B82F6',
   soon: '#E0A23E',
   now: '#41C08D',
 };
@@ -19,6 +19,8 @@ export interface CategoryIconSlotProps {
   onPick: (category: ActivityCategory | null) => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** `inline` sits INSIDE the name field; `block` is the standalone tile. */
+  variant?: 'block' | 'inline';
 }
 
 /**
@@ -37,30 +39,44 @@ export function CategoryIconSlot({
   onPick,
   open,
   onOpenChange,
+  variant = 'block',
 }: CategoryIconSlotProps) {
   const insets = useSafeAreaInsets();
   const meta = ACTIVITY_CATEGORIES.find((item) => item.value === category);
+  const inline = variant === 'inline';
+  const size = inline ? 38 : 58;
 
   return (
     <>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={
-          meta ? `Kategorie ${meta.label}, ändern` : 'Kategorie wählen'
-        }
-        className="h-[58px] w-[58px] items-center justify-center rounded-3xl border active:opacity-70"
+        accessibilityLabel={meta ? `Kategorie ${meta.label}, ändern` : 'Kategorie wählen'}
+        hitSlop={inline ? 8 : 0}
         style={{
-          backgroundColor: meta ? `${accent}1F` : 'rgba(255,255,255,0.06)',
+          alignItems: 'center',
+          // Inline it lives inside the name field's own border, so it carries a
+          // fill but no second outline — two nested borders read as a control
+          // that fell into another control.
+          backgroundColor: meta ? `${accent}24` : 'rgba(255,255,255,0.07)',
           borderColor: meta ? accent : 'rgba(255,255,255,0.12)',
+          borderRadius: inline ? 12 : 24,
+          borderWidth: inline ? 0 : 1,
+          height: size,
+          justifyContent: 'center',
+          width: size,
         }}
         onPress={() => onOpenChange(true)}
       >
         {meta ? (
-          <Ionicons name={meta.icon} size={25} color={accent} />
+          <Ionicons name={meta.icon} size={inline ? 19 : 25} color={accent} />
         ) : (
           // Empty state is a quiet placeholder, not a prompt: an unrecognised
           // title must never read as an error the person has to fix.
-          <Ionicons name="ellipse-outline" size={20} color="rgba(244,245,247,0.28)" />
+          <Ionicons
+            name="ellipse-outline"
+            size={inline ? 16 : 20}
+            color="rgba(244,245,247,0.3)"
+          />
         )}
       </Pressable>
 

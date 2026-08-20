@@ -131,20 +131,20 @@ export function ParticipantProfileSheet({
             <Ionicons name="close" size={20} color="#FFFFFF" />
           </Pressable>
 
-          <View className="h-16 w-16 items-center justify-center rounded-[24px] bg-[#6E8BF7]/20">
-            <Text className="text-xl font-extrabold text-[#C5D0FF]">{participant.initials}</Text>
+          <View className="h-16 w-16 items-center justify-center rounded-[24px] bg-[#3B82F6]/20">
+            <Text className="text-xl font-extrabold text-[#C9DCFF]">{participant.initials}</Text>
           </View>
           <Text className="mt-4 pr-10 text-xl font-extrabold text-white">
             {participant.displayName}
           </Text>
           <View className="mt-3 flex-row items-center gap-2 rounded-2xl bg-white/[0.08] px-3 py-2.5">
-            <Ionicons name="calendar-outline" size={16} color="#AEBFFF" />
+            <Ionicons name="calendar-outline" size={16} color="#B6D3FF" />
             <Text className="flex-1 text-sm font-semibold text-white/75" numberOfLines={2}>
               Ihr seid beide bei {activityTitle}
             </Text>
           </View>
           <Text className="mt-4 text-sm leading-5 text-white/55">
-            Profildetails sind bei Como nur für bestätigte Freunde sichtbar.
+            Profildetails sind bei Mica nur für bestätigte Freunde sichtbar.
           </Text>
 
           {cta ? (
@@ -153,7 +153,7 @@ export function ParticipantProfileSheet({
               accessibilityState={{ disabled: cta.disabled, busy }}
               disabled={cta.disabled}
               className="mt-5 min-h-12 flex-row items-center justify-center gap-2 rounded-[18px] active:opacity-85"
-              style={{ backgroundColor: cta.disabled ? 'rgba(255,255,255,0.12)' : '#6E8BF7' }}
+              style={{ backgroundColor: cta.disabled ? 'rgba(255,255,255,0.12)' : '#3B82F6' }}
               onPress={cta.onPress}
             >
               <Ionicons name={cta.icon} size={18} color="#FFFFFF" />

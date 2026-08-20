@@ -135,7 +135,7 @@ export function RadiusSlider({ compact = false }: RadiusSliderProps) {
                 top: 0,
                 bottom: 0,
                 borderRadius: TRACK_H / 2,
-                backgroundColor: '#6E8BF7',
+                backgroundColor: '#3B82F6',
               },
               fillStyle,
             ]}

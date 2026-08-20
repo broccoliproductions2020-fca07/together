@@ -131,7 +131,7 @@ export function ProfileEditSheet({
 
       if (!permission.granted) {
         const label = source === 'camera' ? 'Kamera' : 'Fotos';
-        const message = `Erlaube Como den Zugriff auf ${label} in den Systemeinstellungen, um ein Profilbild zu wählen.`;
+        const message = `Erlaube Mica den Zugriff auf ${label} in den Systemeinstellungen, um ein Profilbild zu wählen.`;
         if (sessionRevision === sessionRevisionRef.current) {
           setError(message);
           if (!permission.canAskAgain) Alert.alert(`${label}-Zugriff fehlt`, message);
@@ -370,7 +370,7 @@ export function ProfileEditSheet({
                     Mit deiner Frontkamera
                   </Text>
                 </View>
-                <Ionicons name="chevron-forward" size={18} color="#6E8BF7" />
+                <Ionicons name="chevron-forward" size={18} color="#3B82F6" />
               </Pressable>
 
               <Pressable
@@ -382,7 +382,7 @@ export function ProfileEditSheet({
                 }}
               >
                 <View className="h-11 w-11 items-center justify-center rounded-2xl bg-background">
-                  <Ionicons name="images-outline" size={21} color="#6E8BF7" />
+                  <Ionicons name="images-outline" size={21} color="#3B82F6" />
                 </View>
                 <View className="flex-1">
                   <Text className="text-[15px] font-extrabold text-foreground">
@@ -392,7 +392,7 @@ export function ProfileEditSheet({
                     Ausschnitt und Drehung anpassen
                   </Text>
                 </View>
-                <Ionicons name="chevron-forward" size={18} color="#6E8BF7" />
+                <Ionicons name="chevron-forward" size={18} color="#3B82F6" />
               </Pressable>
 
               <Pressable

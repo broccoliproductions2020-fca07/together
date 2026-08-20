@@ -101,7 +101,7 @@ export function MonthGrid({
               >
                 <View
                   className={`h-8 w-8 items-center justify-center rounded-full ${isSelected ? 'bg-primary' : ''}`}
-                  style={isActive ? { backgroundColor: 'rgba(110,139,247,0.18)' } : undefined}
+                  style={isActive ? { backgroundColor: 'rgba(59,130,246,0.18)' } : undefined}
                 >
                   <Text
                     className={`text-sm font-semibold ${

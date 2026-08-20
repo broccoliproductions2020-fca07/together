@@ -1,4 +1,4 @@
-# Como data model
+# Mica data model
 
 This is a compact map of the persisted model. The executable authorities are
 [`firestore.rules`](../firestore.rules), [`functions/index.js`](../functions/index.js)
@@ -11,6 +11,7 @@ validation limits.
 | --- | --- | --- |
 | `users/{uid}` | Private account settings, notification state and close-friend ids | User profile fields; trusted functions own server fields |
 | `publicProfiles/{uid}` | Minimal contact snapshot | Created and synchronized by authenticated account flows |
+| `friendSearch/{uid}` | Private lookup index for an opt-in name/@username search | Cloud Functions only; client access is always denied |
 | `friendships/{uidA__uidB}` | Accepted and pending one-to-one friendships | Cloud Functions |
 | `circles/{circleId}` | Private lists of confirmed friends | Cloud Functions |
 | `activities/{activityId}` | A concrete `soon` or `now` meetup | Cloud Functions |
@@ -56,3 +57,9 @@ The app does not grant clients direct authority to create activities, change
 membership, mutate room summaries, resolve audiences or send notifications.
 Those operations go through callable Cloud Functions, which validate input,
 apply rate limits and write the authoritative document shape.
+
+`friendSearch` is not a readable directory. `searchPeople` is the only access
+path: it requires a verified account, applies block and discoverability checks,
+limits the response to five minimal identity cards, and enforces 10 lookups per
+minute and 50 per Europe/Berlin calendar day. The index contains no email,
+location, activity or friendship-graph data.

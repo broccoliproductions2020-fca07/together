@@ -59,6 +59,7 @@ async function main() {
   const aUid = aCredential.user.uid;
   const bUid = bCredential.user.uid;
   const future = Timestamp.fromMillis(Date.now() + 60 * 60 * 1000);
+  const adminFuture = admin.firestore.Timestamp.fromMillis(Date.now() + 60 * 60 * 1000);
 
   await allowed('owner can write private profile', () =>
     setDoc(doc(a.db, 'users', aUid), {
@@ -148,6 +149,55 @@ async function main() {
   await denied('former audience cannot read a server-expired activity', () =>
     getDoc(doc(a.db, 'activities', 'expired-activity')),
   );
+
+  // Time plans have a stricter boundary than activities: an invitation alone
+  // never exposes source windows or other people's availability. Membership is
+  // callable-only, then the bounded member subcollection becomes readable.
+  await adminDb.doc('timePlans/private-plan').set({
+    hostId: aUid,
+    hostName: 'Alice',
+    hostInitials: 'AL',
+    title: 'Termin finden',
+    sourceWindows: [],
+    revision: 1,
+    status: 'collecting',
+    memberUids: [aUid],
+    createdAt: admin.firestore.Timestamp.now(),
+    updatedAt: admin.firestore.Timestamp.now(),
+    expireAt: adminFuture,
+  });
+  await adminDb.doc(`timePlans/private-plan/timePlanMembers/${aUid}`).set({
+    uid: aUid,
+    displayName: 'Alice',
+    initials: 'AL',
+    role: 'host',
+    responseStatus: 'responded',
+    responsesByWindow: {},
+    updatedAt: admin.firestore.Timestamp.now(),
+    expireAt: adminFuture,
+  });
+  await allowed('joined host can read their time plan', () => getDoc(doc(a.db, 'timePlans', 'private-plan')));
+  await allowed('joined host can list time-plan members', () =>
+    getDocs(query(collection(a.db, 'timePlans', 'private-plan', 'timePlanMembers'), limit(50))),
+  );
+  await denied('unjoined user cannot read a private time plan', () => getDoc(doc(b.db, 'timePlans', 'private-plan')));
+  await denied('unjoined user cannot list private time-plan members', () =>
+    getDocs(query(collection(b.db, 'timePlans', 'private-plan', 'timePlanMembers'), limit(50))),
+  );
+  await denied('client cannot forge a time-plan member', () =>
+    setDoc(doc(b.db, 'timePlans', 'private-plan', 'timePlanMembers', bUid), {
+      uid: bUid,
+      displayName: 'Bob',
+      initials: 'BO',
+      role: 'member',
+      responseStatus: 'pending',
+      responsesByWindow: {},
+      updatedAt: Timestamp.now(),
+      expireAt: future,
+    }),
+  );
+  await adminDb.doc('timePlans/private-plan').update({ memberUids: [aUid, bUid] });
+  await allowed('server-joined member can read the time plan', () => getDoc(doc(b.db, 'timePlans', 'private-plan')));
 
   await denied('client cannot create a private circle directly', () =>
     setDoc(doc(a.db, 'users', aUid, 'privateCircles', 'circle-a'), {

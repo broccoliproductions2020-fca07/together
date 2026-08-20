@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Together Core — Positionsindikator, 5 Varianten ohne Zusatzfläche</title>
+<style>
+  :root{
+    --bg:#080C11; --panel:#0D141B; --line:rgba(232,246,255,.10);
+    --ink:#F2EFE9; --muted:rgba(242,239,233,.58); --dim:rgba(242,239,233,.38);
+    --accent:#41C08D; --neutral:#9FB3C9;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:"Schibsted Grotesk",-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  header{padding:28px 24px 4px;max-width:1180px;margin:0 auto}
+  h1{font-size:24px;font-weight:700;letter-spacing:-.2px;margin:0 0 6px}
+  .lede{color:var(--muted);font-size:14px;line-height:1.55;max-width:70ch;margin:0}
+  .bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;
+    max-width:1180px;margin:18px auto 0;padding:0 24px}
+  button{font:inherit;font-size:13px;font-weight:600;color:var(--ink);cursor:pointer;
+    background:rgba(255,255,255,.06);border:1px solid var(--line);
+    border-radius:999px;padding:9px 16px;transition:background .15s,border-color .15s}
+  button:hover{background:rgba(255,255,255,.11)}
+  button[aria-pressed="true"]{background:rgba(65,192,141,.16);border-color:rgba(65,192,141,.5);color:#B7F0D8}
+  .hint{color:var(--dim);font-size:12px;margin-left:4px}
+  .grid{display:grid;gap:18px;padding:22px 24px 64px;max-width:1180px;margin:0 auto;
+    grid-template-columns:repeat(auto-fill,minmax(330px,1fr))}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:20px;
+    overflow:hidden;display:flex;flex-direction:column}
+  .card h2{font-size:15px;font-weight:700;margin:0;display:flex;align-items:baseline;gap:8px}
+  .card h2 .n{font-size:11px;font-weight:700;color:var(--accent);
+    letter-spacing:.10em;font-variant-numeric:tabular-nums}
+  .card .why{color:var(--muted);font-size:12.5px;line-height:1.5;margin:7px 0 0}
+  .card .cost{color:var(--dim);font-size:11.5px;line-height:1.45;margin:8px 0 0}
+  .head{padding:16px 16px 13px;border-bottom:1px solid var(--line)}
+  canvas{display:block;width:100%;height:auto;touch-action:none;cursor:grab}
+  canvas:active{cursor:grabbing}
+  footer{max-width:1180px;margin:0 auto;padding:0 24px 72px;color:var(--dim);
+    font-size:12.5px;line-height:1.6}
+  footer b{color:var(--muted);font-weight:600}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Positionsindikator — fünf Varianten, null Zusatzfläche</h1>
+  <p class="lede">
+    Jede Variante zeigt dieselbe Information: wo der Daumen gerade hinzeigt (kontinuierlich)
+    und was ein Loslassen auslösen würde (gerastet). Keine davon belegt einen Pixel, den die
+    Karte vorher hatte — sie leben im Core-Pad, auf seinem Rand, in der ohnehin abgedunkelten
+    Linse oder in den Chips selbst. Selektionsmathematik, Deadzone und Hysterese sind aus der
+    App übernommen, damit sich das Rasten gleich anfühlt.
+  </p>
+</header>
+
+<div class="bar">
+  <button id="demo" aria-pressed="true">Demo läuft</button>
+  <button id="link" aria-pressed="true">Verbunden</button>
+  <button id="rm" aria-pressed="false">Reduced Motion</button>
+  <button id="chips" aria-pressed="true">Chips zeigen</button>
+  <span class="hint">Auf einer Karte ziehen übernimmt die Steuerung · Demo startet nach 3 s wieder</span>
+</div>
+
+<div class="grid" id="grid"></div>
+
+<footer>
+  <b>Gemeinsame Geometrie:</b> Core-Pad 172 px, Chips auf Radius 124, Fächer 132° mit vier Zielen,
+  Deadzone 24 px, Sektorgrenzen nach den Oblique-Gewichten, Rast-Hysterese 0,17.
+  Alles auf 0,78 skaliert dargestellt. Der gerastete Winkel läuft auf einer Feder mit Überschwingen,
+  der kontinuierliche folgt dem Daumen direkt — der Abstand zwischen beiden ist die Hysterese.
+</footer>
+
+<script>
+"use strict";
+
+/* ---------- Selektion: 1:1 aus coreSelection.ts ---------- */
+const DEG = Math.PI / 180;
+const ANGLES = [-66, -22, 22, 66].map(d => d * DEG);
+const EDGE_MARGIN = 0.52, DEAD_ZONE = 24, SLOT_HYST = 0.17;
+const WEIGHTS = ANGLES.map(a => { const s = Math.sin(2 * a); return 1 + 0.3 * s * s; });
+const BOUNDS = ANGLES.slice(0, -1).map((a, i) => {
+  const wa = WEIGHTS[i], wb = WEIGHTS[i + 1];
+  return a + (ANGLES[i + 1] - a) * (wa / (wa + wb));
+});
+const KNOTS = [ANGLES[0] - EDGE_MARGIN, ...BOUNDS, ANGLES[3] + EDGE_MARGIN];
+const VALS = [-0.5, 0.5, 1.5, 2.5, 3.5];
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+function positionFromAngle(ang) {
+  const l = clamp(ang, KNOTS[0], KNOTS[4]);
+  for (let i = 0; i < 4; i++) {
+    if (l <= KNOTS[i + 1]) {
+      const p = (l - KNOTS[i]) / (KNOTS[i + 1] - KNOTS[i]);
+      return clamp(VALS[i] + (VALS[i + 1] - VALS[i]) * p, 0, 3);
+    }
+  }
+  return 3;
+}
+function angleFromPosition(pos) {
+  const p = clamp(pos, 0, 3), lo = Math.floor(p), hi = Math.min(3, lo + 1);
+  return ANGLES[lo] + (ANGLES[hi] - ANGLES[lo]) * (p - lo);
+}
+function armWithHysteresis(pos, prev) {
+  const cand = clamp(Math.ceil(pos - 0.5), 0, 3);
+  if (prev == null || prev === cand) return cand;
+  const b = cand > prev ? prev + 0.5 : prev - 0.5;
+  const cleared = cand > prev ? pos > b + SLOT_HYST : pos < b - SLOT_HYST;
+  return cleared ? cand : prev;
+}
+
+/* ---------- Ziele ---------- */
+const TARGETS = [
+  { id: 'search',   glyph: 'search' },
+  { id: 'activity', glyph: 'bolt' },
+  { id: 'postfach', glyph: 'chat' },
+  { id: 'calendar', glyph: 'calendar' },
+];
+
+/* ---------- geteilter Eingabezustand ---------- */
+const input = { x: 0, y: 0, down: false, owner: null };
+const opts = { demo: true, link: true, reduced: false, chips: true };
+let demoResume = 0;
+
+/* Demo-Pfad in App-Koordinaten: ruhen, links raus, quer nach rechts,
+   auf der Mitte verweilen, heim. Zeiten in Sekunden. */
+const DEMO = [
+  { t: 0.0,  x: 0,   y: 0 },
+  { t: 0.5,  x: 0,   y: 0 },
+  { t: 1.3,  x: -66, y: -30 },
+  { t: 2.0,  x: -66, y: -30 },
+  { t: 3.4,  x: 66,  y: -30 },
+  { t: 4.1,  x: 66,  y: -30 },
+  { t: 5.0,  x: -26, y: -64 },
+  { t: 6.2,  x: -26, y: -64 },
+  { t: 7.0,  x: 30,  y: -62 },
+  { t: 7.9,  x: 30,  y: -62 },
+  { t: 8.7,  x: 0,   y: 0 },
+  { t: 9.6,  x: 0,   y: 0 },
+];
+const DEMO_LEN = DEMO[DEMO.length - 1].t;
+const easeIO = u => u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2;
+function demoAt(time) {
+  const t = time % DEMO_LEN;
+  for (let i = 0; i < DEMO.length - 1; i++) {
+    const a = DEMO[i], b = DEMO[i + 1];
+    if (t <= b.t) {
+      const u = b.t === a.t ? 1 : easeIO((t - a.t) / (b.t - a.t));
+      return { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u };
+    }
+  }
+  return DEMO[0];
+}
+
+/* ---------- Feder ---------- */
+function spring(state, target, dt, stiffness, zeta) {
+  const c = 2 * Math.sqrt(stiffness) * zeta;
+  state.v += (target - state.x) * stiffness * dt - state.v * c * dt;
+  state.x += state.v * dt;
+  return state.x;
+}
+
+/* ---------- Zeichen-Grundlagen ---------- */
+const S = 0.78;                       // Darstellungsmaßstab
+const CORE_R = 86 * S;                // Pad-Radius
+const CHIP_R = 124 * S;               // Zielring
+const ITEM = 52 * S;                  // Chip-Durchmesser
+const ACCENT = '#41C08D', NEUTRAL = '#9FB3C9';
+
+/* Meniskus-Parameter — identisch zu MENISCUS in TogetherCore.tsx.
+   Farbe ist KONSTANT: ein Wechsel beim Rasten wäre nochmal derselbe Snap, und
+   den machen die Icons. */
+const MEN_LIGHT = '#41C08D';
+/* Ein einziger Radialverlauf, dessen Mittelpunkt AUF dem Rand sitzt. Die
+   Helligkeit eines Randpunkts haengt nur von seinem Abstand zu diesem Punkt ab
+   — stufenlos, per Definition. Genau wie MENISCUS_* in TogetherCore.tsx. */
+const MEN_FOOT = 84, MEN_BLUR = 3.4;
+/* Eine Glocke, deren flache Seite die Kurve des Buttons IST. Flach gefuellt,
+   Rand weichgezeichnet — identisch zu MENISCUS_* in TogetherCore.tsx. */
+const MEN_REST  = { height:  6, sigma: 1.30, opacity: 0.42 };
+const MEN_FOCUS = { height: 12, sigma: 0.62, opacity: 0.98 };
+
+function meniscusBell(g, cx, cy, angle, shape) {
+  const span = Math.min(Math.PI * 0.95,
+    shape.sigma * Math.sqrt(Math.log(Math.max(1.2, shape.height / 0.4)) / 2.2));
+  const steps = 64;
+  const at = (phi, r) => [cx + Math.sin(angle + phi) * r * S, cy - Math.cos(angle + phi) * r * S];
+  g.beginPath();
+  for (let i = 0; i <= steps; i++) {
+    const phi = -span + (i / steps) * span * 2;
+    const r = MEN_FOOT + shape.height * Math.exp(-((phi / shape.sigma) ** 2) * 2.2);
+    const [x, y] = at(phi, r);
+    i ? g.lineTo(x, y) : g.moveTo(x, y);
+  }
+  for (let i = steps; i >= 0; i--) {
+    const [x, y] = at(-span + (i / steps) * span * 2, MEN_FOOT);
+    g.lineTo(x, y);
+  }
+  g.closePath();
+}
+
+function rgba(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return 'rgba(' + (n >> 16 & 255) + ',' + (n >> 8 & 255) + ',' + (n & 255) + ',' + a + ')';
+}
+function polar(cx, cy, ang, r) {
+  return [cx + Math.sin(ang) * r, cy - Math.cos(ang) * r];
+}
+
+function drawGlyph(g, kind, x, y, s, color) {
+  g.save(); g.translate(x, y); g.scale(s, s);
+  g.strokeStyle = color; g.fillStyle = color;
+  g.lineWidth = 1.7; g.lineCap = 'round'; g.lineJoin = 'round';
+  if (kind === 'search') {
+    g.beginPath(); g.arc(-1.5, -1.5, 5.2, 0, 7); g.stroke();
+    g.beginPath(); g.moveTo(2.4, 2.4); g.lineTo(6.4, 6.4); g.stroke();
+  } else if (kind === 'bolt') {
+    g.beginPath(); g.moveTo(1.6, -8); g.lineTo(-4.4, 1); g.lineTo(0, 1);
+    g.lineTo(-1.6, 8); g.lineTo(4.4, -1); g.lineTo(0, -1); g.closePath(); g.fill();
+  } else if (kind === 'chat') {
+    g.beginPath();
+    if (g.roundRect) g.roundRect(-7, -6, 14, 10.5, 3); else g.rect(-7, -6, 14, 10.5);
+    g.stroke();
+    g.beginPath(); g.moveTo(-3, 4.5); g.lineTo(-3, 7.6); g.lineTo(0.4, 4.5); g.stroke();
+  } else {
+    g.beginPath();
+    if (g.roundRect) g.roundRect(-7, -5.5, 14, 13, 2.6); else g.rect(-7, -5.5, 14, 13);
+    g.stroke();
+    g.beginPath(); g.moveTo(-7, -1.4); g.lineTo(7, -1.4); g.stroke();
+    g.beginPath(); g.moveTo(-3.6, -8.4); g.lineTo(-3.6, -4.2); g.stroke();
+    g.beginPath(); g.moveTo(3.6, -8.4); g.lineTo(3.6, -4.2); g.stroke();
+  }
+  g.restore();
+}
+
+/* Chips. `weightFn` liefert je Ziel 0..1 Extra-Betonung (nur Variante 5 nutzt das). */
+function drawChips(g, cx, cy, st, weightFn) {
+  if (!opts.chips) return;
+  for (let i = 0; i < 4; i++) {
+    const w = weightFn ? weightFn(i) : 0;
+    const armed = st.armed === i;
+    const [x, y] = polar(cx, cy, ANGLES[i], CHIP_R);
+    const r = ITEM / 2 * (1 + w * 0.13);
+    if (w > 0.02) {
+      g.beginPath(); g.arc(x, y, r + 9 + w * 7, 0, 7);
+      g.fillStyle = rgba(ACCENT, 0.05 + w * 0.13); g.fill();
+    }
+    const fill = armed ? st.armFill : 0;
+    g.beginPath(); g.arc(x, y, r, 0, 7);
+    g.fillStyle = fill > 0.01
+      ? `rgba(${20 + 45 * fill},${28 + 164 * fill},${26 + 115 * fill},${0.74 + 0.26 * fill})`
+      : 'rgba(14,20,26,.80)';
+    g.fill();
+    g.strokeStyle = fill > 0.01 ? rgba(ACCENT, 0.35 + 0.65 * fill)
+                                : `rgba(255,255,255,${0.13 + w * 0.30})`;
+    g.lineWidth = 1.2; g.stroke();
+    const ink = fill > 0.5 ? '#08110D' : `rgba(242,239,233,${0.52 + w * 0.48})`;
+    drawGlyph(g, TARGETS[i].glyph, x, y, 1.28, ink);
+  }
+}
+
+/* Der Core-Körper. `deform` gibt eine Radiusfunktion für Variante 4. */
+function drawCore(g, cx, cy, st, deform) {
+  const grd = g.createRadialGradient(cx - CORE_R * .3, cy - CORE_R * .45, 2, cx, cy, CORE_R * 1.1);
+  grd.addColorStop(0, 'rgba(231,244,255,.13)');
+  grd.addColorStop(.42, 'rgba(37,72,93,.30)');
+  grd.addColorStop(1, 'rgba(3,7,10,.80)');
+  g.beginPath();
+  if (deform) {
+    for (let i = 0; i <= 96; i++) {
+      const a = (i / 96) * Math.PI * 2 - Math.PI;
+      const [x, y] = polar(cx, cy, a, deform(a));
+      i ? g.lineTo(x, y) : g.moveTo(x, y);
+    }
+    g.closePath();
+  } else {
+    g.arc(cx, cy, CORE_R, 0, 7);
+  }
+  g.fillStyle = grd; g.fill();
+  g.strokeStyle = 'rgba(232,246,255,.20)'; g.lineWidth = 1; g.stroke();
+}
+
+/* Die abgedunkelte Linse, die es ohnehin schon gibt. */
+function drawLens(g, cx, cy) {
+  const R = CHIP_R + ITEM / 2 + 26 * S;
+  const grd = g.createRadialGradient(cx, cy, 4, cx, cy, R);
+  grd.addColorStop(0, 'rgba(5,8,10,.62)');
+  grd.addColorStop(.62, 'rgba(8,13,18,.26)');
+  grd.addColorStop(1, 'rgba(8,13,18,0)');
+  g.beginPath(); g.arc(cx, cy, R, 0, 7); g.fillStyle = grd; g.fill();
+}
+
+/* ================= Die fünf Varianten ================= */
+
+const VARIANTS = [
+
+/* 1 ────────────────────────────────────────────────── */
+{
+  name: 'Kometenrand',
+  why: 'Der Live-Marker sitzt wieder auf dem Rand des Core — aber er verdient sich seinen Platz: '
+     + 'der Schweif zeigt Tempo, und beim Rasten wächst der Punkt zu einem Bogen, der genau so '
+     + 'breit ist wie der Sicherheitsabstand zur nächsten Grenze. Schiebst du gegen die Grenze, '
+     + 'schrumpft der Bogen zum Punkt — dann kippt er und wächst auf der anderen Seite wieder.',
+  cost: 'Fläche: der Rand des Pads. Null neue Pixel.',
+  draw(g, cx, cy, st) {
+    drawLens(g, cx, cy); drawChips(g, cx, cy, st); drawCore(g, cx, cy, st);
+    const R = CORE_R;
+
+    // Sicherheitsbreite: 1 in der Sektormitte, 0 direkt an der Grenze.
+    if (st.armed != null && st.armFill > .01) {
+      const safety = clamp(1 - Math.abs(st.pos - st.armed) * 2, 0, 1);
+      const half = (0.10 + 0.30 * safety) * (st.armFill);
+      g.beginPath();
+      g.arc(cx, cy, R, st.arm - half - Math.PI / 2, st.arm + half - Math.PI / 2);
+      g.strokeStyle = rgba(ACCENT, .30 + .35 * safety);
+      g.lineWidth = 7; g.lineCap = 'round'; g.stroke();
+    }
+    // Schweif aus der Winkelhistorie.
+    const h = st.hist;
+    for (let i = 1; i < h.length; i++) {
+      const u = i / h.length;
+      g.beginPath();
+      g.arc(cx, cy, R, h[i - 1] - Math.PI / 2, h[i] - Math.PI / 2);
+      g.strokeStyle = rgba(ACCENT, .40 * u * u * st.commit);
+      g.lineWidth = 2 + 4 * u; g.lineCap = 'round'; g.stroke();
+    }
+    const [px, py] = polar(cx, cy, st.track, R);
+    g.beginPath(); g.arc(px, py, 8 * st.commit + 2, 0, 7);
+    g.fillStyle = rgba(ACCENT, .16 * st.commit); g.fill();
+    g.beginPath(); g.arc(px, py, 3.2 + 2.2 * st.commit, 0, 7);
+    g.fillStyle = st.commit > .5 ? '#F7FBFF' : NEUTRAL; g.fill();
+  }
+},
+
+/* 2 ────────────────────────────────────────────────── */
+{
+  name: 'Meniskus — wie implementiert',
+  why: 'Kein Marker, kein Objekt: der Rand leuchtet dort, wo der Daumen hinzeigt. Er zeigt '
+     + 'ausschließlich LIVE-BEWEGUNG — das Rasten machen die Icons, hier wird es bewusst nicht '
+     + 'wiederholt. Ein einziger Radialverlauf mit Mittelpunkt auf dem Rand, deshalb stufenlos '
+     + 'ohne mögliche Nähte. Entschiedene Bewegung bündelt das Licht zum Punkt; auf Tempo '
+     + 'reagiert bewusst nichts.',
+  cost: 'Fläche: die Randlinie des Pads, die es ohnehin gibt.',
+  draw(g, cx, cy, st) {
+    drawLens(g, cx, cy); drawChips(g, cx, cy, st); drawCore(g, cx, cy, st);
+    // Zwei Verlaeufe, gekreuzt: einer ENTLANG des Randes (Mitte auf dem Rand),
+    // einer QUER dazu als Maske. Nur so wird es in beide Richtungen weich —
+    // feste Ringe zeigen ihre Kanten, Striche und Tupfen zeigen ihre Stueckelung.
+    // Nur Entschiedenheit sammelt das Licht; auf Tempo reagiert bewusst nichts.
+    // Eine Glocke, flach gefuellt, Rand weichgezeichnet. Der Blur ist die
+    // einzige Operation, die per Definition keine Stufen hat.
+    g.save();
+    g.filter = 'blur(' + (MEN_BLUR * S).toFixed(2) + 'px)';
+    for (const [shape, weight] of [[MEN_REST, 1 - st.commit], [MEN_FOCUS, st.commit]]) {
+      if (weight < .004) continue;
+      g.globalAlpha = weight * shape.opacity;
+      meniscusBell(g, cx, cy, st.track, shape);
+      g.fillStyle = MEN_LIGHT;
+      g.fill();
+    }
+    g.restore();
+  }
+},
+
+/* 3 ────────────────────────────────────────────────── */
+{
+  name: 'Lichtkegel',
+  why: 'Die Linse ist schon dunkel — also wird sie zur Bühne. Ein Kegel aus dem Core beleuchtet, '
+     + 'wohin der Daumen zeigt; das angeleuchtete Ziel IST das gearmte, es braucht keine eigene '
+     + 'Füllung. Der Kegel bündelt sich beim Zielen von 50° auf 16°, das Rasten ist der Moment, '
+     + 'in dem er scharf steht.',
+  cost: 'Fläche: nur der bereits abgedunkelte Bereich. Nichts wächst nach außen.',
+  draw(g, cx, cy, st) {
+    drawLens(g, cx, cy);
+    const halfW = (50 - 34 * st.commit) * DEG;
+    const inner = CORE_R * .74, outer = CHIP_R + ITEM / 2 + 6;
+    const N = 46;
+    g.save(); g.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < N; i++) {
+      const u = (i / (N - 1)) * 2 - 1;
+      const a = st.track + u * halfW;
+      const fall = Math.exp(-u * u * 2.6);
+      const grd = g.createLinearGradient(...polar(cx, cy, a, inner), ...polar(cx, cy, a, outer));
+      grd.addColorStop(0, rgba(ACCENT, .17 * fall * st.commit));
+      grd.addColorStop(.55, rgba(ACCENT, .09 * fall * st.commit));
+      grd.addColorStop(1, rgba(ACCENT, 0));
+      g.beginPath();
+      g.arc(cx, cy, inner, a - halfW / N - Math.PI / 2, a + halfW / N * 2.4 - Math.PI / 2);
+      g.arc(cx, cy, outer, a + halfW / N * 2.4 - Math.PI / 2, a - halfW / N - Math.PI / 2, true);
+      g.closePath(); g.fillStyle = grd; g.fill();
+    }
+    g.restore();
+    // Chips werden vom Kegel beleuchtet statt gefüllt.
+    drawChips(g, cx, cy, { ...st, armFill: 0 }, i => {
+      const d = Math.abs(ANGLES[i] - st.track);
+      return clamp(Math.exp(-(d / halfW) * (d / halfW) * 1.5) * st.commit, 0, 1);
+    });
+    drawCore(g, cx, cy, st);
+  }
+},
+
+/* 4 ────────────────────────────────────────────────── */
+{
+  name: 'Tropfen',
+  why: 'Der Core selbst ist der Indikator: er beult sich in Daumenrichtung aus wie ein Tropfen, '
+     + 'der gezogen wird. Beim Rasten schnürt sich die Beule ab, fliegt als Tropfen ins Ziel und '
+     + 'der Körper federt zurück. Die Richtung liest man an der Form, die Entschiedenheit an der '
+     + 'Länge — ganz ohne zusätzliches Element.',
+  cost: 'Fläche: der Core-Körper. Die Beule bleibt innerhalb des Pads.',
+  draw(g, cx, cy, st) {
+    drawLens(g, cx, cy); drawChips(g, cx, cy, st);
+    const stretch = .30 * st.commit;
+    drawCore(g, cx, cy, st, a => {
+      let d = Math.abs(((a - st.track + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
+      return CORE_R * (1 + stretch * Math.exp(-(d / .62) * (d / .62)) - stretch * .12);
+    });
+    // Der abgelöste Tropfen fliegt zum Ziel und wird geschluckt.
+    if (st.drop > 0 && st.dropTo != null) {
+      const u = 1 - st.drop, e = u * u * (3 - 2 * u);
+      const r = CORE_R + (CHIP_R - CORE_R) * e;
+      const [x, y] = polar(cx, cy, st.dropAngle, r);
+      g.beginPath(); g.arc(x, y, 7 * (1 - e * .55), 0, 7);
+      g.fillStyle = rgba(ACCENT, .28 + .62 * st.drop); g.fill();
+    }
+    const [tx, ty] = polar(cx, cy, st.track, CORE_R * (1 + stretch * .88));
+    g.beginPath(); g.arc(tx, ty, 2.6 + 1.8 * st.commit, 0, 7);
+    g.fillStyle = rgba('#F7FBFF', .35 + .55 * st.commit); g.fill();
+  }
+},
+
+/* 5 ────────────────────────────────────────────────── */
+{
+  name: 'Zielgewichtung',
+  why: 'Der radikale Fall: gar kein Indikator. Die vier Chips tragen die Information selbst — '
+     + 'jeder wird heller und größer, je näher die Daumenrichtung an ihm liegt. Zwischen zwei '
+     + 'Zielen sind beide gleich hell, und genau das ist die Zwischenposition. Das Rasten ist der '
+     + 'Moment, in dem einer voll durchfüllt.',
+  cost: 'Fläche: keine. Es gibt nichts, was nicht schon da war.',
+  draw(g, cx, cy, st) {
+    drawLens(g, cx, cy);
+    drawChips(g, cx, cy, st, i => {
+      const d = Math.abs(ANGLES[i] - st.track);
+      return clamp(Math.exp(-(d / .46) * (d / .46)) * st.commit, 0, 1);
+    });
+    drawCore(g, cx, cy, st);
+  }
+},
+];
+
+/* ---------- Karten aufbauen ---------- */
+const grid = document.getElementById('grid');
+const cards = VARIANTS.map((v, idx) => {
+  const el = document.createElement('section');
+  el.className = 'card';
+  el.innerHTML =
+    `<div class="head"><h2><span class="n">0${idx + 1}</span>${v.name}</h2>` +
+    `<p class="why">${v.why}</p><p class="cost">${v.cost}</p></div>`;
+  const cv = document.createElement('canvas');
+  el.appendChild(cv); grid.appendChild(el);
+
+  const st = {
+    track: 0, arm: 0, armed: null, pos: 1.5, commit: 0, armFill: 0, lag: 0,
+    ta: { x: 0, v: 0 }, aa: { x: 0, v: 0 }, cm: { x: 0, v: 0 }, af: { x: 0, v: 0 },
+    lg: { x: 0, v: 0 },
+    hist: [], drop: 0, dropTo: null, dropAngle: 0,
+  };
+  return { el, cv, g: cv.getContext('2d'), st, v };
+});
+
+function resize() {
+  const dpr = Math.min(2.5, window.devicePixelRatio || 1);
+  for (const c of cards) {
+    const w = c.cv.clientWidth || 330, h = Math.round(w * 0.84);
+    c.cv.width = w * dpr; c.cv.height = h * dpr;
+    c.cv.style.height = h + 'px';
+    c.g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    c.w = w; c.h = h;
+  }
+}
+window.addEventListener('resize', resize);
+
+/* ---------- Eingabe ---------- */
+function centreOf(c) { return [c.w / 2, c.h - 74]; }
+function pointerTo(c, ev) {
+  const r = c.cv.getBoundingClientRect(), [cx, cy] = centreOf(c);
+  input.x = ((ev.clientX - r.left) - cx) / S;
+  input.y = ((ev.clientY - r.top) - cy) / S;
+}
+for (const c of cards) {
+  c.cv.addEventListener('pointerdown', e => {
+    c.cv.setPointerCapture(e.pointerId);
+    input.down = true; input.owner = c; setDemo(false); pointerTo(c, e);
+  });
+  c.cv.addEventListener('pointermove', e => { if (input.down && input.owner === c) pointerTo(c, e); });
+  const up = () => {
+    if (!input.down) return;
+    input.down = false; input.owner = null; input.x = 0; input.y = 0;
+    demoResume = performance.now() + 3000;
+  };
+  c.cv.addEventListener('pointerup', up);
+  c.cv.addEventListener('pointercancel', up);
+}
+
+/* ---------- Schalter ---------- */
+function bind(id, key, after) {
+  const b = document.getElementById(id);
+  b.addEventListener('click', () => {
+    opts[key] = !opts[key];
+    b.setAttribute('aria-pressed', String(opts[key]));
+    if (after) after();
+  });
+  return b;
+}
+const demoBtn = document.getElementById('demo');
+function setDemo(on) {
+  opts.demo = on; demoBtn.setAttribute('aria-pressed', String(on));
+  demoBtn.textContent = on ? 'Demo läuft' : 'Demo aus';
+}
+demoBtn.addEventListener('click', () => setDemo(!opts.demo));
+bind('link', 'link');
+bind('rm', 'reduced');
+bind('chips', 'chips');
+
+/* ---------- Schleife ---------- */
+let last = performance.now(), clock = 0;
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  clock += dt;
+  if (!opts.demo && !input.down && demoResume && now > demoResume) { setDemo(true); demoResume = 0; }
+
+  const src = input.down ? input : (opts.demo ? demoAt(clock) : { x: 0, y: 0 });
+
+  for (const c of cards) {
+    // Unverbunden bewegt sich nur die Karte, auf der gezogen wird.
+    const live = opts.link || !input.down || input.owner === c;
+    const p = live ? src : { x: 0, y: 0 };
+    const st = c.st;
+    const radius = Math.hypot(p.x, p.y);
+    const rawAngle = radius > 1 ? Math.atan2(p.x, -p.y) : 0;
+
+    st.pos = positionFromAngle(rawAngle);
+    const prevArmed = st.armed;
+    st.armed = radius < DEAD_ZONE && prevArmed == null ? null : armWithHysteresis(st.pos, prevArmed);
+    if (radius < 3 && !input.down && !opts.demo) st.armed = null;
+
+    const targetTrack = radius < DEAD_ZONE * .35 ? 0 : angleFromPosition(st.pos);
+    const targetCommit = clamp(radius / DEAD_ZONE, 0, 1);
+
+    if (opts.reduced) {
+      st.track = targetTrack; st.commit = targetCommit; st.lag = targetTrack;
+      st.arm = st.armed != null ? ANGLES[st.armed] : 0;
+      st.armFill = st.armed != null ? 1 : 0;
+      st.hist.length = 0; st.drop = 0;
+      st.lg.x = targetTrack; st.lg.v = 0;
+    } else {
+      st.track = spring(st.ta, targetTrack, dt, 900, 1.0);
+      // Nachläufer des Meniskus: damping 20 / mass 0.9 / stiffness 110 in Reanimated
+      // entspricht hier k/m = 122 bei Dämpfungsgrad 1.
+      st.lag = spring(st.lg, st.track, dt, 122, 1.0);
+      st.arm = spring(st.aa, st.armed != null ? ANGLES[st.armed] : 0, dt, 340, 0.52);
+      st.commit = spring(st.cm, targetCommit, dt, 260, 1.0);
+      st.armFill = spring(st.af, st.armed != null ? 1 : 0, dt, 300, 1.0);
+      st.hist.push(st.track);
+      if (st.hist.length > 13) st.hist.shift();
+      // Tropfen wird bei jedem Rastwechsel neu abgeschossen.
+      if (st.armed != null && st.armed !== prevArmed) {
+        st.drop = 1; st.dropTo = st.armed; st.dropAngle = ANGLES[st.armed];
+      }
+      if (st.drop > 0) st.drop = Math.max(0, st.drop - dt * 2.6);
+    }
+
+    const [cx, cy] = centreOf(c);
+    c.g.clearRect(0, 0, c.w, c.h);
+    c.v.draw(c.g, cx, cy, st);
+  }
+  requestAnimationFrame(frame);
+}
+resize();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

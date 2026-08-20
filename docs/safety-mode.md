@@ -1,4 +1,4 @@
-# Como — Safety-Modus „Heimweg“
+# Mica — Safety-Modus „Heimweg“
 
 Stand: Juli 2026 · Status: **technische und visuelle Basis gebaut; nicht releasebereit**.
 
@@ -77,7 +77,7 @@ Karte. Der Mode-Switch (Karte/Socialize-Pille) ist im Fokus ausgeblendet.
    Löschversprechen stecken im Text: „…nur so lange, bis du sicher zu Hause bist. Danach wird er
    gelöscht."), **„Ich fühle mich unsicher"** (orange) und **„Ich bin in Gefahr"** (rot; „Deine
    Freunde werden alarmiert, damit sie dich kontaktieren oder schnell Hilfe rufen können.") — plus
-   Ehrlichkeitszeile „Como ersetzt keinen Notruf — 112", Button „Weiter". Die Ich-Titel sind
+   Ehrlichkeitszeile „Mica ersetzt keinen Notruf — 112", Button „Weiter". Die Ich-Titel sind
    die nutzerseitigen Modusnamen und müssen mit den Konsolen-Buttons übereinstimmen.
    **Formulierungsregel für alle Safety-Texte:** beschreiben, was die Person selbst tut und was
    Freunde sehen können — nie, was deren Gerät tun wird. „Alarmieren" als eigene
@@ -150,7 +150,7 @@ ansonsten läuft sie nur mit dem verbleibenden Empfängerkreis weiter.
 - Orange: 1,5 Sekunden halten.
 - Rot: separate Hilfe-Taste 2,2 Sekunden halten, danach keine Rückfrage.
 - **Rot wird nie automatisch ausgelöst.**
-- Como ruft niemals automatisch 112. Bei Rot ist „112 anrufen“ die erste sichtbare Aktion.
+- Mica ruft niemals automatisch 112. Bei Rot ist „112 anrufen“ die erste sichtbare Aktion.
 - Nach Orange fragt die App diskret nach. Eine ausbleibende Antwort und ein Datenabriss werden
   unterschiedlich dargestellt.
 - „Sicher angekommen“ ist eine bewusste Aktion; es gibt keinen Zuhause-Geofence und keinen

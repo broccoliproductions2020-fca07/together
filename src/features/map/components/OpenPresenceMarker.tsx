@@ -2,7 +2,7 @@ import { Image, StyleSheet, Text, View } from 'react-native';
 
 /** The "offen" colour, same one the map pill and the OpenStatusCard use. A ring
  * in this blue is the entire signal — no pin, no label, no ring animation. */
-const OPEN_COLOR = '#6E8BF7';
+const OPEN_COLOR = '#3B82F6';
 
 /** Visible avatar. The capture box around it is larger so the ring, its shadow
  * and the selected halo are never clipped by the PNG bounds. */
@@ -80,7 +80,7 @@ const styles = StyleSheet.create({
     width: OPEN_PRESENCE_CAPTURE_SIZE,
   },
   halo: {
-    backgroundColor: 'rgba(110,139,247,0.22)',
+    backgroundColor: 'rgba(59,130,246,0.22)',
     borderRadius: OPEN_PRESENCE_CAPTURE_SIZE / 2,
     height: AVATAR_SIZE + 12,
     position: 'absolute',

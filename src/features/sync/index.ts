@@ -1,5 +1,6 @@
 export { SyncProvider, useSyncOutbox } from './SyncProvider';
 export {
+  discardSyncOperation,
   enqueueSyncOperation,
   flushSyncOperations,
   isRetryableSyncError,
@@ -13,4 +14,6 @@ export type {
   SyncOperationKind,
   SyncOperationStatus,
   SyncRunResult,
+  TimePlanCreateSyncPayload,
+  TimePlanResponseSyncPayload,
 } from './syncOutbox.types';

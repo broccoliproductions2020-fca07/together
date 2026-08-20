@@ -15,7 +15,7 @@ export const markerModeStyles: Record<
     ringClassName: 'border-open',
     dotClassName: 'bg-open',
     softClassName: 'bg-open/15',
-    color: 'rgb(110,139,247)',
+    color: 'rgb(59,130,246)',
   },
   soon: {
     label: 'Soon',

@@ -1,5 +1,4 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Image } from 'expo-image';
 import { useKeepAwake } from 'expo-keep-awake';
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -8,13 +7,13 @@ import {
   Pressable,
   ScrollView,
   Text,
-  TextInput,
   useWindowDimensions,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useFriends, type FriendProfile } from '@/features/friends';
+import { PersonAvatar, SearchField, SelectablePersonRow } from '@/shared/components';
 
 import { useSafety } from '../SafetyProvider';
 import { STATUS_COLOR } from '../safetyTheme';
@@ -34,17 +33,6 @@ type CompanionState = 'watching' | 'reachable' | 'unavailable' | 'expired' | 'pe
 function remainingLabel(remainingMs: number): string {
   const minutes = Math.max(1, Math.ceil(remainingMs / 60_000));
   return `noch ${minutes} Min.`;
-}
-
-function Avatar({ friend }: { friend?: FriendProfile }) {
-  if (friend?.avatarUrl) {
-    return <Image source={{ uri: friend.avatarUrl }} className="h-11 w-11 rounded-full" />;
-  }
-  return (
-    <View className="h-11 w-11 items-center justify-center rounded-full bg-white/10">
-      <Text className="text-sm font-extrabold text-white">{friend?.initials ?? '?'}</Text>
-    </View>
-  );
 }
 
 const STATE_META: Record<
@@ -80,7 +68,7 @@ function CompanionRow({
   const meta = STATE_META[state];
   return (
     <View className="flex-row items-center gap-3 rounded-2xl px-1 py-2.5">
-      <Avatar friend={friend} />
+      <PersonAvatar avatarUrl={friend?.avatarUrl} initials={friend?.initials ?? '?'} />
       <View className="flex-1">
         <Text className="text-[15px] font-bold text-white" numberOfLines={1}>
           {friend?.displayName ?? 'Nicht mehr in deiner Freundesliste'}
@@ -108,43 +96,6 @@ function CompanionRow({
         />
       </Pressable>
     </View>
-  );
-}
-
-function AddFriendRow({
-  friend,
-  selected,
-  onToggle,
-}: {
-  friend: FriendProfile;
-  selected: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="checkbox"
-      accessibilityState={{ checked: selected }}
-      accessibilityLabel={`${friend.displayName} ${selected ? 'abwählen' : 'auswählen'}`}
-      onPress={onToggle}
-      className="flex-row items-center gap-3 rounded-2xl px-1 py-2.5 active:bg-white/[0.05]"
-    >
-      <Avatar friend={friend} />
-      <View className="flex-1">
-        <Text className="text-[15px] font-bold text-white">{friend.displayName}</Text>
-        {friend.username ? (
-          <Text className="mt-0.5 text-xs text-white/45">@{friend.username}</Text>
-        ) : null}
-      </View>
-      <View
-        className="h-6 w-6 items-center justify-center rounded-full border"
-        style={{
-          borderColor: selected ? ACCENT : 'rgba(255,255,255,0.22)',
-          backgroundColor: selected ? ACCENT : 'transparent',
-        }}
-      >
-        {selected ? <Ionicons name="checkmark" size={15} color="#fff" /> : null}
-      </View>
-    </Pressable>
   );
 }
 
@@ -415,27 +366,16 @@ export function SafetyAudienceManager({
         </>
       ) : (
         <>
-          <View className="mt-5 flex-row items-center rounded-2xl border border-white/10 bg-white/[0.05] px-3.5">
-            <Ionicons name="search" size={17} color="rgba(244,245,247,0.45)" />
-            <TextInput
-              value={query}
-              onChangeText={setQuery}
-              placeholder="Freunde suchen"
-              placeholderTextColor="rgba(244,245,247,0.35)"
-              className="h-12 flex-1 px-2.5 text-[15px] text-white"
-              autoCapitalize="none"
-              returnKeyType="search"
-            />
-            {query ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Suche leeren"
-                onPress={() => setQuery('')}
-              >
-                <Ionicons name="close-circle" size={18} color="rgba(244,245,247,0.4)" />
-              </Pressable>
-            ) : null}
-          </View>
+          <SearchField
+            accessibilityLabel="Freunde suchen"
+            clearAccessibilityLabel="Suche leeren"
+            containerStyle={{ marginTop: 20, minHeight: 48 }}
+            inputStyle={{ fontSize: 15 }}
+            placeholder="Freunde suchen"
+            placeholderTextColor="rgba(244,245,247,0.35)"
+            value={query}
+            onChangeText={setQuery}
+          />
           <View className="mb-1 mt-4 flex-row items-center justify-between">
             <Text className="text-xs font-bold uppercase tracking-wide text-white/45">
               Verfügbare Freunde
@@ -451,11 +391,13 @@ export function SafetyAudienceManager({
             contentContainerStyle={{ paddingBottom: 12 }}
           >
             {availableFriends.map((friend) => (
-              <AddFriendRow
+              <SelectablePersonRow
                 key={friend.uid}
-                friend={friend}
+                person={friend}
                 selected={selectedUids.has(friend.uid)}
-                onToggle={() => toggleAdd(friend.uid)}
+                accent={ACCENT}
+                onPress={() => toggleAdd(friend.uid)}
+                style={{ paddingHorizontal: 4, paddingVertical: 10 }}
               />
             ))}
             {!availableFriends.length ? (

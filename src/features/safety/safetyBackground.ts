@@ -175,7 +175,7 @@ function locationOptions(status: SafetyStatus): Location.LocationTaskOptions {
     ...(Platform.OS === 'android'
       ? {
           foregroundService: {
-            notificationTitle: 'Como: Heimweg aktiv',
+            notificationTitle: 'Mica: Heimweg aktiv',
             notificationBody,
             notificationColor: color,
             // Keep the explicit Safety service alive when the task switcher is
@@ -336,7 +336,7 @@ export async function startSafetyBackground(
     console.warn('[safety] Nativer Standortdienst konnte nicht starten:', error);
     await writeState(null);
     if (error instanceof Error && error.message === 'APP_NOT_FOREGROUND') {
-      throw new Error('Öffne Como erneut und starte den Heimweg noch einmal.');
+      throw new Error('Öffne Mica erneut und starte den Heimweg noch einmal.');
     }
     throw new Error(
       'Der Standortdienst konnte auf diesem Gerät nicht gestartet werden. Prüfe den Standortzugriff und versuche es erneut.',

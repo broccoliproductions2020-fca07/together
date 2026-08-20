@@ -1,5 +1,5 @@
 /*
- * Como Betrieb Desktop
+ * Mica Betrieb Desktop
  *
  * A private Electron shell for the loopback dashboard. Google OAuth is always
  * completed in the system browser; Google prohibits sign-in through an
@@ -30,7 +30,7 @@ const GOOGLE_SCOPES =
 let dashboardServer = null;
 let dashboardWindow = null;
 
-app.setName('Como Betrieb');
+app.setName('Mica Betrieb');
 
 function vaultPath() {
   return join(app.getPath('userData'), 'google-dashboard-credentials.bin');
@@ -115,7 +115,7 @@ function createWindow() {
     minHeight: 680,
     backgroundColor: '#10131c',
     show: false,
-    title: 'Como Betrieb',
+    title: 'Mica Betrieb',
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -206,7 +206,7 @@ function connectGoogleAccount() {
     title: 'Google-Konto verbinden',
     message: 'Der sichere Google-Login wird jetzt im Standardbrowser geöffnet.',
     detail:
-      'Nach erfolgreicher Anmeldung speichert Como nur die verschlüsselte OAuth-Anmeldung für diesen Windows-Account. Kein Google-Passwort wird gespeichert.',
+      'Nach erfolgreicher Anmeldung speichert Mica nur die verschlüsselte OAuth-Anmeldung für diesen Windows-Account. Kein Google-Passwort wird gespeichert.',
     buttons: ['Login starten', 'Abbrechen'],
     defaultId: 0,
     cancelId: 1,
@@ -255,7 +255,7 @@ function connectGoogleAccount() {
         type: 'info',
         title: 'Google-Konto verbunden',
         message:
-          'Die Anmeldung wurde für diesen Windows-Account verschlüsselt gespeichert. Como startet jetzt neu.',
+          'Die Anmeldung wurde für diesen Windows-Account verschlüsselt gespeichert. Mica startet jetzt neu.',
       });
       restartDesktop();
     } catch (error) {
@@ -270,7 +270,7 @@ function disconnectGoogleAccount() {
     dialog.showMessageBoxSync(dashboardWindow, {
       type: 'info',
       title: 'Keine gespeicherte Anmeldung',
-      message: 'Für Como Betrieb ist aktuell keine Google-Anmeldung gespeichert.',
+      message: 'Für Mica Betrieb ist aktuell keine Google-Anmeldung gespeichert.',
     });
     return;
   }
@@ -303,7 +303,7 @@ app.whenReady().then(async () => {
     createMenu();
     createWindow();
   } catch (error) {
-    showError('Como Betrieb konnte nicht starten', error);
+    showError('Mica Betrieb konnte nicht starten', error);
     app.quit();
   }
 });

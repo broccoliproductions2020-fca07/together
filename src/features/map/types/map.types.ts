@@ -148,7 +148,10 @@ export type MapSelection =
   | {
       type: 'Place';
       title: string;
-      subtitle: string;
+      /** The street address, when one is known. Optional on purpose: a place
+       * whose name IS its address has nothing to add here, and an empty line
+       * beats inventing something to fill it. */
+      subtitle?: string;
       coordinate: MapCoordinate;
       placeId?: string;
       source: 'poi' | 'long-press';

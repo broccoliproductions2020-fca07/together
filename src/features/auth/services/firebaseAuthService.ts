@@ -13,7 +13,7 @@ import {
   updateProfile,
   type User as FirebaseUser,
 } from '@react-native-firebase/auth';
-import { doc, getDoc, serverTimestamp, writeBatch } from '@react-native-firebase/firestore';
+import { doc, getDoc } from '@react-native-firebase/firestore';
 import { httpsCallable } from '@react-native-firebase/functions';
 
 import {
@@ -49,13 +49,17 @@ function deriveDisplayName(username: string, email: string): string {
   return base.charAt(0).toUpperCase() + base.slice(1);
 }
 
-function initialsOf(name: string): string {
-  return name
-    .split(/\s+/)
-    .map((part) => part.charAt(0))
-    .join('')
-    .slice(0, 2)
-    .toUpperCase();
+function hasProfileIdentity(profile: Record<string, unknown> | undefined): boolean {
+  return (
+    typeof profile?.displayName === 'string' &&
+    profile.displayName.trim().length > 0 &&
+    typeof profile?.initials === 'string' &&
+    profile.initials.trim().length > 0
+  );
+}
+
+function isClaimableUsername(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-z0-9][a-z0-9._-]{1,29}$/.test(value);
 }
 
 /**
@@ -128,75 +132,29 @@ async function avatarUriToBase64(uri: string): Promise<string> {
 
 interface EnsuredProfile {
   username: string;
-  /**
-   * The profile existed but carried no handle — the fingerprint of a sign-up
-   * that was interrupted before `claimUsername` succeeded. Such an account is
-   * invisible to friend search until the claim is retried.
-   */
-  usernameWasMissing: boolean;
 }
 
-/**
- * Best-effort profile document (users/{uid}). Auth must keep working even when
- * the Firestore emulator is not running (e.g. Java missing), so failures are
- * swallowed here and the doc is healed on the next sign-in.
- */
+/** Profile provisioning is server-owned so both profile documents are complete
+ * before a session can use social features. */
 async function ensureUserDoc(
   user: FirebaseUser,
   username: string,
-  _isNew: boolean,
 ): Promise<EnsuredProfile> {
-  try {
     const displayName = user.displayName?.trim() || deriveDisplayName(username, user.email ?? '');
     const db = getFirebaseDb();
-    const [existing, publicProfileExisting] = await Promise.all([
-      getDoc(doc(db, 'users', user.uid)),
-      getDoc(doc(db, 'publicProfiles', user.uid)),
-    ]);
+    const existing = await getDoc(doc(db, 'users', user.uid));
     const storedUsername = existing.data()?.username;
-    const hadUsername = typeof storedUsername === 'string' && storedUsername.length > 0;
-    // Whatever we persist must satisfy the same shape `claimUsername` enforces —
-    // otherwise the doc carries a handle nobody can ever claim or search for.
-    const profileUsername = hadUsername
-      ? (storedUsername as string)
+    const profileUsername = isClaimableUsername(storedUsername)
+      ? storedUsername
       : slugifyUsername(username || displayName, user.email ?? '');
-    if (existing.exists() && publicProfileExisting.exists()) {
-      return { username: profileUsername, usernameWasMissing: !hadUsername };
+    if (existing.exists() && isClaimableUsername(storedUsername) && hasProfileIdentity(existing.data())) {
+      return { username: storedUsername };
     }
-    const isNew = true;
-    const publicProfile = {
-      displayName,
-      username: profileUsername,
-      initials: initialsOf(displayName),
-      // publicProfiles is THE source all friend-facing snapshots are built from
-      // (friendships, presence, participants) — without the avatar here,
-      // nobody else would ever see it.
-      ...(user.photoURL ? { avatarUrl: user.photoURL } : {}),
-      // createdAt is immutable after creation (firestore.rules) — only ever
-      // set on the first write, never rewritten on later logins.
-      ...(isNew ? { createdAt: serverTimestamp() } : {}),
-    };
-    const batch = writeBatch(db);
-    batch.set(
-      doc(db, 'users', user.uid),
-      {
-        displayName,
-        username: profileUsername,
-        initials: initialsOf(displayName),
-        ...(user.photoURL ? { avatarUrl: user.photoURL } : {}),
-        ...(isNew ? { profileVisibility: 'friends', friendRequestPolicy: 'anyone' } : {}),
-        ...(isNew ? { createdAt: serverTimestamp() } : {}),
-      },
-      { merge: true },
-    );
-    batch.set(doc(db, 'publicProfiles', user.uid), publicProfile, { merge: true });
-    await batch.commit();
-    return { username: profileUsername, usernameWasMissing: !isNew && !hadUsername };
-  } catch {
-    // Firestore unavailable — the profile doc is not critical for auth, but the
-    // session still needs a usable handle (the caller may pass an empty string).
-    return { username: slugifyUsername(username, user.email ?? ''), usernameWasMissing: false };
-  }
+    if (existing.exists() && isClaimableUsername(storedUsername)) {
+      await claimUsername(storedUsername);
+      return { username: storedUsername };
+    }
+    return { username: await claimAvailableUsername(profileUsername) };
 }
 
 async function claimUsername(username: string): Promise<void> {
@@ -240,7 +198,6 @@ function federatedUsername(user: FirebaseUser): string {
 
 async function provisionFederatedSession(
   user: FirebaseUser,
-  isNewHint: boolean,
   displayName?: string,
 ): Promise<AuthSession> {
   try {
@@ -259,7 +216,7 @@ async function provisionFederatedSession(
     if (isNewProfile) {
       await claimUsername(username);
     }
-    const profile = await ensureUserDoc(user, username, isNewProfile || isNewHint);
+    const profile = await ensureUserDoc(user, username);
     return toSession(user, profile.username);
   } catch (error) {
     await firebaseSignOut(getFirebaseAuth()).catch(() => {});
@@ -278,19 +235,13 @@ async function loginWithEmail(email: string, password: string): Promise<AuthSess
     throw toAuthError(error, 'login');
   }
 
-  const profile = await ensureUserDoc(user, user.displayName ?? '', false);
-  // Heal an account left handle-less by an interrupted sign-up: without a claim
-  // it can never be found by @username. Rare, so the extra callable is cheap.
-  if (profile.usernameWasMissing) {
-    try {
-      const claimed = await claimAvailableUsername(profile.username);
-      await ensureUserDoc(user, claimed, false);
-      return toSession(user, claimed);
-    } catch {
-      // A handle is not worth blocking a valid login on; retried next time.
-    }
+  try {
+    const profile = await ensureUserDoc(user, user.displayName ?? '');
+    return toSession(user, profile.username);
+  } catch (error) {
+    await firebaseSignOut(auth).catch(() => {});
+    throw toAuthError(error, 'login');
   }
-  return toSession(user, profile.username);
 }
 
 /**
@@ -317,7 +268,7 @@ async function signUpWithEmail(
     const name = deriveDisplayName(displayName, email);
     await updateProfile(user, { displayName: name });
     const username = await claimAvailableUsername(slugifyUsername(displayName, email));
-    const profile = await ensureUserDoc(user, username, true);
+    const profile = await ensureUserDoc(user, username);
     // The release gate (FUNCTIONS_ENFORCE_EMAIL_VERIFICATION, docs/backend-plan
     // step 8) rejects writes without a verified address — a fresh account that
     // never received a mail would look broken from the very first tap.
@@ -359,7 +310,13 @@ export const firebaseAuthService: AuthService = {
       }
     }
 
-    return toSession(user);
+    try {
+      const profile = await ensureUserDoc(user, '');
+      return toSession(user, profile.username);
+    } catch {
+      await firebaseSignOut(auth).catch(() => {});
+      return null;
+    }
   },
 
   /**
@@ -393,7 +350,7 @@ export const firebaseAuthService: AuthService = {
     if (!credential.user.displayName) {
       await updateProfile(credential.user, { displayName: 'Gast' });
     }
-    const profile = await ensureUserDoc(credential.user, 'gast', true);
+    const profile = await ensureUserDoc(credential.user, 'gast');
     return toSession(credential.user, profile.username);
   },
 
@@ -414,7 +371,6 @@ export const firebaseAuthService: AuthService = {
       const result = await signInWithCredential(getFirebaseAuth(), credential);
       return await provisionFederatedSession(
         result.user,
-        result.additionalUserInfo?.isNewUser === true,
         identity.displayName,
       );
     } catch (error) {
@@ -435,7 +391,6 @@ export const firebaseAuthService: AuthService = {
       const result = await signInWithCredential(getFirebaseAuth(), credential);
       return await provisionFederatedSession(
         result.user,
-        result.additionalUserInfo?.isNewUser === true,
         identity.displayName,
       );
     } catch (error) {

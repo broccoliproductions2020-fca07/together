@@ -47,6 +47,7 @@ const PERSISTED_PUSH_KINDS = new Set<NotificationKind>([
   'activity_updated',
   'spontaneous_round_invite',
   'group_chat_invite',
+  'time_plan_invite',
   'journey_reminder',
   'safety_request',
   'safety_confirmed',

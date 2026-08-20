@@ -53,9 +53,9 @@ const BY_CONTEXT: Record<AuthErrorContext, Record<string, string>> = {
   },
   social: {
     'auth/account-exists-with-different-credential':
-      'Zu dieser E-Mail gibt es bereits ein Como-Konto. Bitte melde dich mit der ursprünglich verwendeten Methode an.',
+      'Zu dieser E-Mail gibt es bereits ein Mica-Konto. Bitte melde dich mit der ursprünglich verwendeten Methode an.',
     'auth/credential-already-in-use':
-      'Zu dieser E-Mail gibt es bereits ein Como-Konto. Bitte melde dich mit der ursprünglich verwendeten Methode an.',
+      'Zu dieser E-Mail gibt es bereits ein Mica-Konto. Bitte melde dich mit der ursprünglich verwendeten Methode an.',
     'auth/popup-closed-by-user': 'Anmeldung abgebrochen.',
     'auth/cancelled-popup-request': 'Anmeldung abgebrochen.',
   },

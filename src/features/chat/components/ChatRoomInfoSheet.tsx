@@ -2,7 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
-  Image,
   Modal,
   Pressable,
   ScrollView,
@@ -17,6 +16,7 @@ import { useFriends } from '@/features/friends';
 import { SafetyActionsSheet } from '@/features/moderation';
 import { useThemeColors } from '@/features/theme';
 import { AnimatedToggleIcon } from '@/shared/components/AnimatedToggleIcon';
+import { PersonAvatar } from '@/shared/components/PersonAvatar';
 import { FONT, TEXT_CAPPED, TEXT_FLEXIBLE, TYPE } from '@/shared/theme';
 
 import type { RoomMemberProfile } from '../services/chatService.types';
@@ -48,37 +48,16 @@ function Avatar({
   admin?: boolean;
 }) {
   return (
-    <View
-      className={
-        size === 'xl'
-          ? 'h-20 w-20 items-center justify-center overflow-hidden rounded-full'
-          : 'h-11 w-11 items-center justify-center overflow-hidden rounded-full'
-      }
-      style={{
-        backgroundColor: `${accent}22`,
-        borderWidth: admin ? 1.5 : 0,
-        borderColor: `${accent}88`,
-      }}
-    >
-      {avatarUrl ? (
-        <Image
-          accessibilityIgnoresInvertColors
-          source={{ uri: avatarUrl }}
-          className="h-full w-full"
-        />
-      ) : (
-        <Text
-          {...TEXT_CAPPED}
-          style={{
-            ...(size === 'xl' ? TYPE.display : TYPE.label),
-            fontFamily: FONT.bold,
-            color: accent,
-          }}
-        >
-          {initials}
-        </Text>
-      )}
-    </View>
+    <PersonAvatar
+      avatarUrl={avatarUrl}
+      initials={initials}
+      size={size === 'xl' ? 80 : 44}
+      backgroundColor={`${accent}22`}
+      borderColor={`${accent}88`}
+      borderWidth={admin ? 1.5 : 0}
+      initialsColor={accent}
+      initialsFontSize={size === 'xl' ? TYPE.display.fontSize : TYPE.label.fontSize}
+    />
   );
 }
 

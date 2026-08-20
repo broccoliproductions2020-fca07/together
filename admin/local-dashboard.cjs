@@ -1,5 +1,5 @@
 /*
- * Como local operations dashboard
+ * Mica local operations dashboard
  *
  * This process deliberately listens on loopback only. It is an operator tool,
  * not a customer surface: do not expose it with a tunnel, reverse proxy, or
@@ -704,7 +704,7 @@ function startDashboard(options = {}) {
   server.listen(port, HOST, () => {
     const address = server.address();
     const activePort = typeof address === 'object' && address ? address.port : port;
-    console.log(`Como Betrieb läuft nur lokal auf http://${HOST}:${activePort}`);
+    console.log(`Mica Betrieb läuft nur lokal auf http://${HOST}:${activePort}`);
     console.log('Zum Beenden: Strg+C');
   });
   return server;

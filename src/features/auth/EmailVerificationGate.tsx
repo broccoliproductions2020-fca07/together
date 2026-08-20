@@ -8,7 +8,7 @@ import { haptics } from '@/shared/utils/haptics';
 
 import { useAuth } from './hooks/useAuth';
 
-const ACCENT = '#6E8BF7';
+const ACCENT = '#3B82F6';
 
 /**
  * Hard gate between sign-up and the app: an account whose address is not

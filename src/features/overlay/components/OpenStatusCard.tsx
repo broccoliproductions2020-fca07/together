@@ -17,7 +17,7 @@ import { OPEN_MAX_DURATION_MS, useOpenStatus } from '@/features/presence';
 import { AnimatedToggleIcon } from '@/shared/components/AnimatedToggleIcon';
 import { openLocationSettings } from '@/shared/utils/locationPermission';
 
-const OPEN_COLOR = '#6E8BF7';
+const OPEN_COLOR = '#3B82F6';
 /** Mirrors DurationPicker's own floor. Anything shorter is not a window. */
 const MIN_OPEN_MINUTES = 15;
 const DEFAULT_OPEN_MINUTES = 180;
@@ -97,7 +97,19 @@ function DisclosureChevron({ expanded }: { expanded: boolean }) {
  * "open" was deliberately removed from the activity composer (open = presence,
  * not event).
  */
-export function OpenStatusCard({ visible = true }: { visible?: boolean }) {
+export function OpenStatusCard({
+  visible = true,
+  defaultExpanded = false,
+}: {
+  visible?: boolean;
+  /**
+   * Whether the refinement panel is already unfolded when the surface appears.
+   * The NearbySheet keeps it folded (the summary line is what you came to read
+   * there); the core's own status sheet opens it, because editing the status IS
+   * the reason that sheet exists.
+   */
+  defaultExpanded?: boolean;
+}) {
   const {
     isOpen,
     vibe,
@@ -116,14 +128,15 @@ export function OpenStatusCard({ visible = true }: { visible?: boolean }) {
   const reducedMotion = useReducedMotion();
   // Only ever unfolds the refinement controls of an ALREADY open status; there
   // is nothing to unfold before that.
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(defaultExpanded);
 
-  // Each time the sheet appears, start folded — a panel left open from two
-  // visits ago is noise, and the summary line is the thing you came to read.
+  // Each time the surface appears, return to ITS starting state — a panel left
+  // open from two visits ago is noise, and which state that is depends on why
+  // the surface was opened.
   useEffect(() => {
     if (!visible) return;
-    setExpanded(false);
-  }, [visible]);
+    setExpanded(defaultExpanded);
+  }, [visible, defaultExpanded]);
 
   // Local draft for the vibe field: typing only updates this; committing
   // (blur / keyboard "done") is the one point it's written through to the
@@ -217,7 +230,7 @@ export function OpenStatusCard({ visible = true }: { visible?: boolean }) {
       </Pressable>
 
       {syncing ? (
-        <Text className="text-xs text-white/50">Status wird synchronisiert â€¦</Text>
+        <Text className="text-xs text-white/50">Status wird synchronisiert …</Text>
       ) : syncError ? (
         <Pressable
           accessibilityRole="button"

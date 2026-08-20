@@ -6,5 +6,6 @@ export type {
   FriendRequest,
   FriendRequestPolicy,
   FriendshipDoc,
+  PeopleSearchProfile,
   SendFriendRequestResult,
 } from './services/friendService.types';

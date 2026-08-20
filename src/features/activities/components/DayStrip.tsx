@@ -1,7 +1,9 @@
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
-import { Platform, Pressable, ScrollView, Text, View, useColorScheme } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View, useColorScheme } from 'react-native';
+
+import { FONT, TEXT_CAPPED, TYPE } from '@/shared/theme';
 
 /** How far ahead the one-tap chips reach. Anything beyond goes through the
  * calendar button — the strip is a shortcut, never a ceiling. */
@@ -32,7 +34,6 @@ function chipLabel(day: Date, today: Date): { top: string; bottom: string } {
 export interface DayStripProps {
   /** The currently selected start; only its date part matters here. */
   value: Date;
-  accent: string;
   /** Emits the same wall-clock time on the newly chosen day. */
   onChange: (date: Date) => void;
 }
@@ -47,7 +48,22 @@ export interface DayStripProps {
  * capability the datetime field had. Dropping it would quietly turn "plan
  * anything" into "plan within a fortnight".
  */
-export function DayStrip({ value, accent, onChange }: DayStripProps) {
+/**
+ * Selection is a STATE, not a mode.
+ *
+ * The chosen day used to be tinted in the activity's mode colour, which put it
+ * in the same visual class as the span itself — one of nine accent surfaces on
+ * the Wann bench, at which point the colour stopped meaning "mode". A brighter
+ * neutral says "chosen" just as clearly and claims no meaning it does not have.
+ */
+const CHIP_SELECTED_BORDER = 'rgba(255,255,255,0.34)';
+const CHIP_SELECTED_FILL = 'rgba(255,255,255,0.12)';
+const CHIP_SELECTED_TEXT = '#F4F5F7';
+const CHIP_IDLE_BORDER = 'rgba(255,255,255,0.12)';
+const CHIP_IDLE_FILL = 'rgba(255,255,255,0.04)';
+const CHIP_IDLE_TEXT = 'rgba(244,245,247,0.72)';
+
+export function DayStrip({ value, onChange }: DayStripProps) {
   const scheme = useColorScheme() === 'dark' ? 'dark' : 'light';
   const [pickerOpen, setPickerOpen] = useState(false);
   const today = new Date();
@@ -89,18 +105,20 @@ export function DayStrip({ value, accent, onChange }: DayStripProps) {
               onPress={() => applyDate(day)}
               className="min-w-11 items-center justify-center rounded-2xl border px-3 py-1.5 active:opacity-80"
               style={{
-                borderColor: active ? `${accent}99` : 'rgba(255,255,255,0.12)',
-                backgroundColor: active ? `${accent}1f` : 'rgba(255,255,255,0.04)',
+                borderColor: active ? CHIP_SELECTED_BORDER : CHIP_IDLE_BORDER,
+                backgroundColor: active ? CHIP_SELECTED_FILL : CHIP_IDLE_FILL,
               }}
             >
               <Text
-                className="text-xs font-bold"
-                style={{ color: active ? accent : 'rgba(244,245,247,0.72)' }}
+                style={[styles.chipTop, { color: active ? CHIP_SELECTED_TEXT : CHIP_IDLE_TEXT }]}
+                {...TEXT_CAPPED}
               >
                 {label.top}
               </Text>
               {label.bottom ? (
-                <Text className="text-[10px] text-white/40">{label.bottom}</Text>
+                <Text style={styles.chipBottom} {...TEXT_CAPPED}>
+                  {label.bottom}
+                </Text>
               ) : null}
             </Pressable>
           );
@@ -113,14 +131,14 @@ export function DayStrip({ value, accent, onChange }: DayStripProps) {
         onPress={() => setPickerOpen(true)}
         className="h-10 w-10 items-center justify-center rounded-2xl border active:opacity-80"
         style={{
-          borderColor: beyondStrip ? `${accent}99` : 'rgba(255,255,255,0.12)',
-          backgroundColor: beyondStrip ? `${accent}1f` : 'rgba(255,255,255,0.04)',
+          borderColor: beyondStrip ? CHIP_SELECTED_BORDER : CHIP_IDLE_BORDER,
+          backgroundColor: beyondStrip ? CHIP_SELECTED_FILL : CHIP_IDLE_FILL,
         }}
       >
         <Ionicons
           name="calendar-outline"
           size={17}
-          color={beyondStrip ? accent : 'rgba(244,245,247,0.72)'}
+          color={beyondStrip ? CHIP_SELECTED_TEXT : CHIP_IDLE_TEXT}
         />
       </Pressable>
 
@@ -140,3 +158,16 @@ export function DayStrip({ value, accent, onChange }: DayStripProps) {
     </View>
   );
 }
+
+/** The app ships STATIC Schibsted files, so a Tailwind weight class without a
+ * `fontFamily` silently rendered these chips in the system font — next to a
+ * sheet that is Schibsted throughout. Weight comes from the family, never from
+ * `fontWeight`. */
+const styles = StyleSheet.create({
+  chipBottom: {
+    color: 'rgba(244,245,247,0.42)',
+    fontFamily: FONT.medium,
+    fontSize: TYPE.micro.fontSize,
+  },
+  chipTop: { fontFamily: FONT.bold, fontSize: TYPE.caption.fontSize },
+});

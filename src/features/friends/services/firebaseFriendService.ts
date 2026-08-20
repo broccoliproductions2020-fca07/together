@@ -19,6 +19,7 @@ import type {
   FriendService,
   FriendSettings,
   FriendshipDoc,
+  PeopleSearchProfile,
   SendFriendRequestResult,
 } from './friendService.types';
 
@@ -41,6 +42,11 @@ function mapProfile(value: unknown): FriendProfile | null {
     ...(typeof item.username === 'string' ? { username: item.username } : {}),
     ...(typeof item.avatarUrl === 'string' ? { avatarUrl: item.avatarUrl } : {}),
   };
+}
+
+function mapPeopleSearchProfile(value: unknown): PeopleSearchProfile | null {
+  const profile = mapProfile(value);
+  return profile?.username ? { ...profile, username: profile.username } : null;
 }
 
 function mapFriendship(id: string, data: DocumentData): FriendshipDoc {
@@ -134,6 +140,18 @@ export const firebaseFriendService: FriendService = {
       target.kind === 'username' ? { ...target, username: target.username.trim() } : target,
     );
     return result.data;
+  },
+
+  async searchPeople(_actor, queryText) {
+    const result = await httpsCallable<{ query: string }, { people: unknown[] }>(
+      getFirebaseFunctions(),
+      'searchPeople',
+    )({ query: queryText.trim() });
+    return Array.isArray(result.data.people)
+      ? result.data.people
+          .map(mapPeopleSearchProfile)
+          .filter((profile): profile is PeopleSearchProfile => profile !== null)
+      : [];
   },
 
   async respondToFriendRequest(_actor, friendshipId, accept) {

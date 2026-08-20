@@ -4,7 +4,7 @@ const { createRequire } = require('module');
 const functionsRequire = createRequire(path.join(__dirname, '..', 'functions', 'package.json'));
 const adminPackage = (subpath) => functionsRequire(`firebase-admin/${subpath}`);
 
-const { initializeApp: initializeAdminApp, refreshToken } = adminPackage('app');
+const { applicationDefault, initializeApp: initializeAdminApp, refreshToken } = adminPackage('app');
 const { getAuth } = adminPackage('auth');
 const { getDatabase } = adminPackage('database');
 const { FieldPath, FieldValue, getFirestore, Timestamp } = adminPackage('firestore');
@@ -22,7 +22,7 @@ function initializeApp(options, name) {
 }
 
 module.exports = {
-  credential: { refreshToken },
+  credential: { applicationDefault, refreshToken },
   initializeApp,
   firestore: { FieldPath, FieldValue, Timestamp },
 };

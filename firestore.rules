@@ -136,6 +136,13 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Private server-side search index. It is intentionally not a profile
+    // directory: the callable applies discoverability, rate and block checks
+    // before returning at most five minimal identity cards.
+    match /friendSearch/{uid} {
+      allow read, write: if false;
+    }
+
     // ---------- circles/{circleId} ----------
     // Circles ARE the friendship model. Members read; ONLY the owner mutates
     // membership (adds by username) — nobody can add themselves to a circle.
@@ -285,6 +292,27 @@ service cloud.firestore {
       }
     }
 
+    // ---------- timePlans/{planId} ----------
+    // A time plan is deliberately not an Activity: it has no marker, no chat
+    // and no fixed date until the host later locks one. Invitations stay
+    // server-private; only people who joined may read availability.
+    match /timePlans/{planId} {
+      allow read: if signedIn() && request.auth.uid in resource.data.memberUids;
+      allow create, update, delete: if false;
+
+      match /timePlanMembers/{uid} {
+        allow read: if signedIn()
+          && request.auth.uid in get(/databases/$(database)/documents/timePlans/$(planId)).data.memberUids;
+        allow create, update, delete: if false;
+      }
+    }
+
+    // Private server authorization for a notification invitation. A client
+    // cannot enumerate invitees or turn a stale notification into membership.
+    match /timePlanInvites/{inviteId} {
+      allow read, write: if false;
+    }
+
     // ---------- presence/{uid} ----------
     // The user's own "I'm open" status. Readable only by the denormalized
     // audience (their friends). Writable/deletable ONLY by the owner — going
@@ -320,8 +348,7 @@ service cloud.firestore {
       }
 
       allow read: if signedIn()
-        && request.auth.uid in resource.data.audienceUids
-        && resource.data.expireAt > request.time;
+        && request.auth.uid in resource.data.audienceUids;
       // Presence is published through a callable so the server derives the
       // audience from accepted direct friendships. Clients may only clear their
       // own presence immediately.

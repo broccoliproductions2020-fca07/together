@@ -12,7 +12,7 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { TOGETHER_BRAND } from './brandTokens';
-import { ComoMark, ComoWordmark } from './comoLogo';
+import { MicaFigure, MicaWordmark, type MicaFigureTone } from './micaLogo';
 
 const REVEAL_EASE = Easing.bezier(0.22, 1, 0.36, 1);
 
@@ -22,15 +22,17 @@ export type TogetherMarkProps = {
   idle?: boolean;
   accessibilityLabel?: string;
   color?: string;
+  tone?: MicaFigureTone;
 };
 
-/** Compact Como co∞ mark, used for loading and the welcome surface. */
+/** Compact Mica figure, used for loading, the Core rest state and welcome. */
 export function TogetherMark({
   size = 112,
   animated = true,
   idle = false,
-  accessibilityLabel = 'Como',
+  accessibilityLabel = 'Mica',
   color = TOGETHER_BRAND.paper,
+  tone = 'inherit',
 }: TogetherMarkProps) {
   const reducedMotion = useReducedMotion();
   const reveal = useSharedValue(animated && !reducedMotion ? 0 : 1);
@@ -66,7 +68,12 @@ export function TogetherMark({
 
   return (
     <Animated.View style={markStyle}>
-      <ComoMark accessibilityLabel={accessibilityLabel} color={color} height={size} />
+      <MicaFigure
+        accessibilityLabel={accessibilityLabel}
+        color={color}
+        size={size}
+        tone={tone}
+      />
     </Animated.View>
   );
 }
@@ -77,14 +84,16 @@ export type TogetherLockupProps = {
   animated?: boolean;
   idle?: boolean;
   wordColor?: string;
+  figureTone?: MicaFigureTone;
 };
 
-/** Full Como wordmark. The reveal stays intentionally quiet on boot screens. */
+/** Full Mica wordmark. The reveal stays intentionally quiet on boot screens. */
 export function TogetherLockup({
   width = 286,
   animated = true,
   idle = false,
   wordColor = TOGETHER_BRAND.paper,
+  figureTone = 'inherit',
 }: TogetherLockupProps) {
   const reducedMotion = useReducedMotion();
   const reveal = useSharedValue(animated && !reducedMotion ? 0 : 1);
@@ -121,9 +130,14 @@ export function TogetherLockup({
   }));
 
   return (
-    <Animated.View accessibilityLabel="Como" accessibilityRole="image" style={lockupStyle}>
+    <Animated.View accessibilityLabel="Mica" accessibilityRole="image" style={lockupStyle}>
       <View pointerEvents="none">
-        <ComoWordmark accessibilityLabel="" color={wordColor} width={width} />
+        <MicaWordmark
+          accessibilityLabel=""
+          color={wordColor}
+          figureTone={figureTone}
+          width={width}
+        />
       </View>
     </Animated.View>
   );

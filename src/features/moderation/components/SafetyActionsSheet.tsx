@@ -90,7 +90,7 @@ export function SafetyActionsSheet({
                 className="min-h-13 flex-row items-center gap-3 rounded-2xl bg-secondary px-4 active:opacity-70"
                 onPress={() => setReporting(true)}
               >
-                <Ionicons name="flag-outline" size={20} color="#6E8BF7" />
+                <Ionicons name="flag-outline" size={20} color="#3B82F6" />
                 <View className="flex-1">
                   <Text className="text-sm font-bold text-foreground">{targetLabel} melden</Text>
                   <Text className="mt-0.5 text-xs text-muted-foreground">

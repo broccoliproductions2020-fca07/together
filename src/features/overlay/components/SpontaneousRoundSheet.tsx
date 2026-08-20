@@ -8,7 +8,7 @@ import { useThemeColors } from '@/features/theme';
 import { SquircleButton } from '@/shared/components/SquircleButton';
 import { TEXT_CAPPED } from '@/shared/theme';
 
-const OPEN_COLOR = '#6E8BF7';
+const OPEN_COLOR = '#3B82F6';
 
 function untilLabel(expiresAt: number) {
   const date = new Date(expiresAt);

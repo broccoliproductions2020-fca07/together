@@ -17,6 +17,7 @@ process.env.FIREBASE_DATABASE_EMULATOR_HOST = `127.0.0.1:${DATABASE_PORT}`;
 
 const admin = require('./firebase-admin-tools.cjs');
 const { cleanupExpiredSurfaces } = require('../functions/cleanup-expired-surfaces');
+const { buildFriendSearchFields } = require('../functions/friend-search');
 
 function initialsOf(name) {
   return (
@@ -169,6 +170,13 @@ async function main() {
       createdAt: timestamp,
     });
     batch.set(db.doc(`usernames/${person.username}`), { uid: person.uid, createdAt: timestamp });
+    batch.set(db.doc(`friendSearch/${person.uid}`), {
+      ...buildFriendSearchFields(
+        { displayName: person.name, username: person.username, initials },
+        'anyone',
+      ),
+      updatedAt: timestamp,
+    });
   });
   const aliceDaveProfiles = profiles
     .filter((person) => person.uid === alice.uid || person.uid === dave.uid)
@@ -280,15 +288,74 @@ async function main() {
   });
   await batch.commit();
 
+  const peopleSearch = await expectOk('people search returns a bounded matching profile', () =>
+    callFunction(alice.token, 'searchPeople', { query: 'bob' }),
+  );
+  if (
+    peopleSearch.people.length > 5 ||
+    !peopleSearch.people.some((person) => person.uid === bob.uid && person.username === 'bob') ||
+    peopleSearch.people.some(
+      (person) => 'email' in person || 'location' in person || 'friendUids' in person,
+    )
+  ) {
+    throw new Error('People search returned an invalid profile shape.');
+  }
+  console.log('OK people search is bounded and returns minimal identity only');
+  const peopleSearchDailyRateRef = db.doc(`rateLimits/${alice.uid}_friendSearchDaily`);
+  const peopleSearchRate = (await peopleSearchDailyRateRef.get()).data();
+  await peopleSearchDailyRateRef.set({ day: peopleSearchRate?.day, count: 50 }, { merge: true });
+  await expectError('people search enforces the 50-per-day limit', 'RESOURCE_EXHAUSTED', () =>
+    callFunction(alice.token, 'searchPeople', { query: 'bob' }),
+  );
+  await Promise.all([
+    peopleSearchDailyRateRef.delete(),
+    db.doc(`rateLimits/${alice.uid}_friendSearchMinute`).delete(),
+  ]);
+
+  const repairable = await createTestUser();
+  await app.auth().updateUser(repairable.uid, { displayName: 'Rita Repair' });
+  const repairBatch = db.batch();
+  repairBatch.set(db.doc(`users/${repairable.uid}`), { username: 'ritarepair' });
+  repairBatch.set(db.doc(`publicProfiles/${repairable.uid}`), { username: 'ritarepair' });
+  repairBatch.set(db.doc('usernames/ritarepair'), { uid: repairable.uid, createdAt: timestamp });
+  await repairBatch.commit();
+  const repaired = await expectOk('username claim repairs incomplete profile documents', () =>
+    callFunction(repairable.token, 'claimUsername', { username: 'ritarepair' }),
+  );
+  const [repairedUser, repairedContact, repairedSearch] = await Promise.all([
+    db.doc(`users/${repairable.uid}`).get(),
+    db.doc(`publicProfiles/${repairable.uid}`).get(),
+    db.doc(`friendSearch/${repairable.uid}`).get(),
+  ]);
+  if (
+    repaired.profileReady !== true ||
+    repairedUser.data()?.displayName !== 'Rita Repair' ||
+    repairedUser.data()?.initials !== 'RR' ||
+    repairedUser.data()?.profileVisibility !== 'friends' ||
+    repairedUser.data()?.friendRequestPolicy !== 'anyone' ||
+    repairedContact.data()?.displayName !== 'Rita Repair' ||
+    repairedContact.data()?.initials !== 'RR' ||
+    repairedSearch.data()?.username !== 'ritarepair' ||
+    repairedSearch.data()?.discoverable !== true ||
+    !repairedUser.data()?.createdAt ||
+    !repairedContact.data()?.createdAt
+  ) {
+    throw new Error('Incomplete profile documents were not fully repaired.');
+  }
+  console.log('OK username claim repairs incomplete profile documents atomically');
+
   // Places must reject malformed input before it can trigger any paid Google
   // request. The emulator has no Places secret, so the valid-path behaviour is
   // covered by the email-verification gate test without external traffic.
-  await expectError('unified place autocomplete rejects malformed session tokens', 'INVALID_ARGUMENT', () =>
-    callFunction(alice.token, 'places', {
-      action: 'autocomplete',
-      query: 'Kino',
-      sessionToken: 'not valid!',
-    }),
+  await expectError(
+    'unified place autocomplete rejects malformed session tokens',
+    'INVALID_ARGUMENT',
+    () =>
+      callFunction(alice.token, 'places', {
+        action: 'autocomplete',
+        query: 'Kino',
+        sessionToken: 'not valid!',
+      }),
   );
   await expectError('unified place details rejects malformed place IDs', 'INVALID_ARGUMENT', () =>
     callFunction(alice.token, 'places', {
@@ -441,6 +508,64 @@ async function main() {
       },
     }),
   );
+  // A hand-picked audience is the one context the client names people in, so
+  // the friendship intersection on the server is what keeps it from becoming a
+  // way to address strangers. These three cases are that guarantee.
+  const selectionActivityId = `selection-audience-${now}`;
+  await expectOk('selection audience keeps only confirmed friends', () =>
+    callFunction(alice.token, 'createActivity', {
+      activityId: selectionActivityId,
+      activity: {
+        mode: 'soon',
+        title: 'Nur Dave',
+        // charlie is deliberately NOT one of alice's friends here.
+        audienceContext: { kind: 'selection', uids: [dave.uid, charlie.uid] },
+        startsAt: createdStartsAt,
+        endsAt: createdEndsAt,
+      },
+    }),
+  );
+  const selectionAudience =
+    (await db.doc(`activities/${selectionActivityId}`).get()).data()?.audienceUids ?? [];
+  if (!selectionAudience.includes(alice.uid) || !selectionAudience.includes(dave.uid)) {
+    throw new Error('Selection audience dropped the host or the confirmed friend.');
+  }
+  if (selectionAudience.includes(charlie.uid)) {
+    throw new Error('Selection audience leaked a non-friend into the activity.');
+  }
+
+  await expectError(
+    'selection audience rejects an empty person list',
+    'INVALID_ARGUMENT',
+    () =>
+      callFunction(alice.token, 'createActivity', {
+        activityId: `selection-empty-${now}`,
+        activity: {
+          mode: 'soon',
+          title: 'Niemand',
+          audienceContext: { kind: 'selection', uids: [] },
+          startsAt: createdStartsAt,
+          endsAt: createdEndsAt,
+        },
+      }),
+  );
+
+  await expectError(
+    'selection audience rejects malformed uids',
+    'INVALID_ARGUMENT',
+    () =>
+      callFunction(alice.token, 'createActivity', {
+        activityId: `selection-bad-${now}`,
+        activity: {
+          mode: 'soon',
+          title: 'Kaputt',
+          audienceContext: { kind: 'selection', uids: ['../../admin'] },
+          startsAt: createdStartsAt,
+          endsAt: createdEndsAt,
+        },
+      }),
+  );
+
   const journeyReminderGeneration = createdActivity?.journeyReminderGeneration;
   if (typeof journeyReminderGeneration !== 'string' || !journeyReminderGeneration) {
     throw new Error('New activity did not receive a reminder task generation.');
@@ -1479,6 +1604,13 @@ async function main() {
   await expectOk('sets shared-activity request policy', () =>
     callFunction(bob.token, 'setFriendRequestPolicy', { policy: 'shared_activity' }),
   );
+  const hiddenByPolicy = await expectOk('people search respects discoverability policy', () =>
+    callFunction(alice.token, 'searchPeople', { query: 'bob' }),
+  );
+  if (hiddenByPolicy.people.some((person) => person.uid === bob.uid)) {
+    throw new Error('A non-discoverable profile appeared in people search.');
+  }
+  console.log('OK people search hides restricted profiles');
   await expectError('username request respects shared-activity policy', 'PERMISSION_DENIED', () =>
     callFunction(alice.token, 'sendFriendRequest', { username: 'bob' }),
   );
@@ -2187,6 +2319,19 @@ async function main() {
     friendRequestPolicy: 'anyone',
     createdAt: timestamp,
   });
+  await db.doc(`publicProfiles/${eve.uid}`).set({
+    displayName: 'Eve Evans',
+    username: 'eve',
+    initials: 'EE',
+    createdAt: timestamp,
+  });
+  await db.doc(`friendSearch/${eve.uid}`).set({
+    ...buildFriendSearchFields(
+      { displayName: 'Eve Evans', username: 'eve', initials: 'EE' },
+      'anyone',
+    ),
+    updatedAt: timestamp,
+  });
   const eveActivityId = 'eve-journey-activity';
   await db.doc(`activities/${eveActivityId}`).set({
     hostId: eve.uid,
@@ -2219,18 +2364,20 @@ async function main() {
   await expectOk('user deletes their own account', () =>
     callFunction(eve.token, 'deleteMyAccount', {}),
   );
-  const [deletedActivity, deletedJourneyMember, deletedJourneyLocation, deletedPushClaim] =
+  const [deletedActivity, deletedJourneyMember, deletedJourneyLocation, deletedPushClaim, deletedSearch] =
     await Promise.all([
       db.doc(`activities/${eveActivityId}`).get(),
       realtimeDb.ref(`journeys/${eveActivityId}/members/${eve.uid}`).get(),
       realtimeDb.ref(`journeys/${eveActivityId}/locations/${eve.uid}`).get(),
       db.doc(`pushTokenOwners/${pushTokenClaimId(evePushToken)}`).get(),
+      db.doc(`friendSearch/${eve.uid}`).get(),
     ]);
   if (
     deletedActivity.exists ||
     deletedJourneyMember.exists() ||
     deletedJourneyLocation.exists() ||
-    deletedPushClaim.exists
+    deletedPushClaim.exists ||
+    deletedSearch.exists
   ) {
     throw new Error(
       'Account deletion left Activity, live Journey, or push-token ownership behind.',
@@ -2365,6 +2512,160 @@ async function main() {
     throw new Error('Host succession did not create an actionable participant notification.');
   }
   console.log('OK host succession is atomic and the new host is informed');
+
+  // A time plan is a private pre-Activity: only the server invitation grants
+  // membership, and a response must cover every current source window.
+  // Earlier isolation cases intentionally remove friendships, so restore this
+  // one prerequisite locally instead of accidentally testing an empty audience.
+  await db.doc(`friendships/${friendshipId(alice.uid, dave.uid)}`).set({
+    participantUids: [alice.uid, dave.uid].sort(),
+    requesterUid: alice.uid,
+    status: 'accepted',
+    createdAt: admin.firestore.Timestamp.now(),
+    updatedAt: admin.firestore.Timestamp.now(),
+  });
+  const planStart = new Date(Date.now() + 2 * 60 * 60 * 1000);
+  planStart.setSeconds(0, 0);
+  planStart.setMinutes(Math.ceil(planStart.getMinutes() / 5) * 5);
+  const planEnd = new Date(planStart.getTime() + 3 * 60 * 60 * 1000);
+  const timePlanRequest = {
+    planId: `time_plan_${Date.now()}`,
+    plan: {
+      title: 'Kino gemeinsam planen',
+      visibility: { kind: 'all_friends' },
+      maxParticipants: 2,
+      sourceWindows: [
+        {
+          id: 'cinema_tuesday',
+          groupId: 'evenings',
+          startsAt: planStart.toISOString(),
+          endsAt: planEnd.toISOString(),
+        },
+      ],
+    },
+  };
+  const timePlan = await expectOk('a host can create a private time plan', () =>
+    callFunction(alice.token, 'createTimePlan', timePlanRequest),
+  );
+  const timePlanId = timePlan.id;
+  const retriedTimePlan = await expectOk('time-plan creation is idempotent', () =>
+    callFunction(alice.token, 'createTimePlan', timePlanRequest),
+  );
+  if (retriedTimePlan.id !== timePlanId) {
+    throw new Error('A retried time-plan creation produced duplicate server state.');
+  }
+  const [createdTimePlan, hostPlanMember] = await Promise.all([
+    db.doc(`timePlans/${timePlanId}`).get(),
+    db.doc(`timePlans/${timePlanId}/timePlanMembers/${alice.uid}`).get(),
+  ]);
+  const planCandidates = [bob, charlie, dave];
+  const timePlanStranger = await createTestUser();
+  const candidateInvites = await Promise.all(
+    planCandidates.map(async (person) => ({
+      person,
+      invite: await db.doc(`timePlanInvites/${timePlanId}_${person.uid}`).get(),
+    })),
+  );
+  const invitedCandidate = candidateInvites.find((candidate) => candidate.invite.exists)?.person;
+  if (!invitedCandidate) {
+    throw new Error('Time-plan test needs an invited account.');
+  }
+  const createdInvites = await db
+    .collection('timePlanInvites')
+    .where('planId', '==', timePlanId)
+    .get();
+  const invitedTimePlanNotification = await db
+    .doc(`notifications/time_plan_${timePlanId}_${invitedCandidate.uid}`)
+    .get();
+  if (
+    !createdTimePlan.exists ||
+    createdTimePlan.data()?.audienceUids ||
+    createdTimePlan.data()?.memberUids?.join(',') !== alice.uid ||
+    createdInvites.size > 1 ||
+    hostPlanMember.data()?.responseStatus !== 'responded' ||
+    invitedTimePlanNotification.data()?.timePlanId !== timePlanId
+  ) {
+    throw new Error(
+      'Time-plan creation leaked the invite audience or missed its private entry points.',
+    );
+  }
+  await expectError(
+    'an uninvited account cannot join a private time plan',
+    'PERMISSION_DENIED',
+    () => callFunction(timePlanStranger.token, 'joinTimePlan', { planId: timePlanId }),
+  );
+  await expectOk('an invited account can join a private time plan', () =>
+    callFunction(invitedCandidate.token, 'joinTimePlan', { planId: timePlanId }),
+  );
+  await expectOk('joining a time plan is idempotent', () =>
+    callFunction(invitedCandidate.token, 'joinTimePlan', { planId: timePlanId }),
+  );
+  const joinedTimePlan = await db.doc(`timePlans/${timePlanId}`).get();
+  if (
+    joinedTimePlan.data()?.memberUids?.filter((uid) => uid === invitedCandidate.uid).length !== 1
+  ) {
+    throw new Error('Idempotent time-plan join duplicated a member.');
+  }
+  await expectError('a partial time-plan response is rejected', 'FAILED_PRECONDITION', () =>
+    callFunction(invitedCandidate.token, 'respondToTimePlan', {
+      planId: timePlanId,
+      revision: 1,
+      responsesByWindow: {},
+    }),
+  );
+  await expectOk('an invited member can submit a bounded split availability', () =>
+    callFunction(invitedCandidate.token, 'respondToTimePlan', {
+      planId: timePlanId,
+      revision: 1,
+      responsesByWindow: {
+        cinema_tuesday: [
+          {
+            startsAt: planStart.toISOString(),
+            endsAt: new Date(planStart.getTime() + 60 * 60 * 1000).toISOString(),
+          },
+          {
+            startsAt: new Date(planStart.getTime() + 2 * 60 * 60 * 1000).toISOString(),
+            endsAt: planEnd.toISOString(),
+          },
+        ],
+      },
+    }),
+  );
+  const invitedPlanMember = await db
+    .doc(`timePlans/${timePlanId}/timePlanMembers/${invitedCandidate.uid}`)
+    .get();
+  if (
+    invitedPlanMember.data()?.responseStatus !== 'responded' ||
+    invitedPlanMember.data()?.responsesByWindow?.cinema_tuesday?.length !== 2
+  ) {
+    throw new Error('Time-plan response did not preserve a split availability.');
+  }
+  const responseUpdatedAt = invitedPlanMember.data()?.updatedAt?.toMillis?.();
+  await expectOk('an identical time-plan response is a no-op', () =>
+    callFunction(invitedCandidate.token, 'respondToTimePlan', {
+      planId: timePlanId,
+      revision: 1,
+      responsesByWindow: {
+        cinema_tuesday: [
+          {
+            startsAt: planStart.toISOString(),
+            endsAt: new Date(planStart.getTime() + 60 * 60 * 1000).toISOString(),
+          },
+          {
+            startsAt: new Date(planStart.getTime() + 2 * 60 * 60 * 1000).toISOString(),
+            endsAt: planEnd.toISOString(),
+          },
+        ],
+      },
+    }),
+  );
+  const repeatedPlanMember = await db
+    .doc(`timePlans/${timePlanId}/timePlanMembers/${invitedCandidate.uid}`)
+    .get();
+  if (repeatedPlanMember.data()?.updatedAt?.toMillis?.() !== responseUpdatedAt) {
+    throw new Error('An identical time-plan response caused an unnecessary member write.');
+  }
+  console.log('OK time plans are invitation-private, idempotent, and interval-bounded');
 
   const cleanupCutoff = admin.firestore.Timestamp.fromMillis(Date.now());
   await db

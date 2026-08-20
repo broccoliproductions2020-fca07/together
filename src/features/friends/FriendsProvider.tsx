@@ -18,6 +18,7 @@ import type {
   FriendRequestPolicy,
   FriendRequestTarget,
   FriendProfile,
+  PeopleSearchProfile,
   FriendRequest,
   FriendshipDoc,
   SendFriendRequestResult,
@@ -42,6 +43,7 @@ interface FriendsContextValue {
   journeyRemindersEnabled: boolean;
   notificationsSeenAt: number;
   sendFriendRequest: (username: string) => Promise<SendFriendRequestResult>;
+  searchPeople: (query: string) => Promise<PeopleSearchProfile[]>;
   sendActivityFriendRequest: (
     targetUid: string,
     activityId: string,
@@ -222,6 +224,10 @@ export function FriendsProvider({ children }: { children: ReactNode }) {
     },
     [actor, refreshFriendships],
   );
+  const searchPeople = useCallback(
+    (query: string) => friendService.searchPeople(actor, query),
+    [actor],
+  );
   const sendActivityFriendRequest = useCallback(
     async (targetUid: string, activityId: string) => {
       const result = await friendService.sendFriendRequest(actor, {
@@ -313,6 +319,7 @@ export function FriendsProvider({ children }: { children: ReactNode }) {
       journeyRemindersEnabled,
       notificationsSeenAt,
       sendFriendRequest,
+      searchPeople,
       sendActivityFriendRequest,
       respondToFriendRequest,
       removeFriend,
@@ -335,6 +342,7 @@ export function FriendsProvider({ children }: { children: ReactNode }) {
       journeyRemindersEnabled,
       notificationsSeenAt,
       sendFriendRequest,
+      searchPeople,
       sendActivityFriendRequest,
       respondToFriendRequest,
       removeFriend,

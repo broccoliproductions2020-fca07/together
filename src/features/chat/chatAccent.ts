@@ -19,7 +19,7 @@ export const GROUP_CHAT_ACCENT = SEMANTIC_COLOR.action;
  * feature does not depend on the map feature.
  */
 const ACTIVITY_MODE_ACCENT = {
-  open: 'rgb(110,139,247)',
+  open: 'rgb(59,130,246)',
   soon: 'rgb(224,162,62)',
   now: 'rgb(65,192,141)',
 } as const;

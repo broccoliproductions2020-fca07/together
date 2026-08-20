@@ -92,6 +92,14 @@
       ]
     },
     {
+      "collectionGroup": "friendSearch",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "discoverable", "order": "ASCENDING" },
+        { "fieldPath": "searchPrefixes", "arrayConfig": "CONTAINS" }
+      ]
+    },
+    {
       "collectionGroup": "presence",
       "queryScope": "COLLECTION",
       "fields": [
@@ -156,6 +164,24 @@
   "fieldOverrides": [
     {
       "collectionGroup": "activities",
+      "fieldPath": "expireAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "timePlans",
+      "fieldPath": "expireAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "timePlanMembers",
+      "fieldPath": "expireAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "timePlanInvites",
       "fieldPath": "expireAt",
       "ttl": true,
       "indexes": []
@@ -451,6 +477,41 @@
     {
       "collectionGroup": "friendships",
       "fieldPath": "status",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "friendSearch",
+      "fieldPath": "username",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "friendSearch",
+      "fieldPath": "usernameKeys",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "friendSearch",
+      "fieldPath": "displayName",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "friendSearch",
+      "fieldPath": "initials",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "friendSearch",
+      "fieldPath": "avatarUrl",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "friendSearch",
+      "fieldPath": "nameTokens",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "friendSearch",
+      "fieldPath": "updatedAt",
       "indexes": []
     },
     {

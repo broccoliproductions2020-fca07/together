@@ -1,19 +1,19 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useRef, useState } from 'react';
-import { Alert, Image, Modal, Pressable, ScrollView, Text, View } from 'react-native';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useEffect, useRef, useState, type RefObject } from 'react';
+import { Alert, Pressable, ScrollView, Text, View } from 'react-native';
+import type { SharedValue } from 'react-native-reanimated';
 
 import { useActivityChat, type GroupMember, type GroupOpening } from '@/features/chat';
 import type { NearbyFriend } from '@/features/map/types/map.types';
 import { RadiusSlider } from '@/features/settings';
 import { AnimatedToggleIcon } from '@/shared/components/AnimatedToggleIcon';
+import { PersonAvatar } from '@/shared/components/PersonAvatar';
 import { SquircleButton } from '@/shared/components/SquircleButton';
 import { openLocationSettings } from '@/shared/utils/locationPermission';
 
-import { OpenStatusCard } from './OpenStatusCard';
+import { FloatingSheet } from './FloatingSheet';
 
-const OPEN_COLOR = '#6E8BF7';
+const OPEN_COLOR = '#3B82F6';
 
 function formatDistance(km: number): string {
   if (km < 1) return 'unter 1 km entfernt';
@@ -39,25 +39,13 @@ function InitialsCircle({
   large?: boolean;
 }) {
   return (
-    <View
-      className={
-        large
-          ? 'h-14 w-14 items-center justify-center overflow-hidden rounded-full'
-          : 'h-10 w-10 items-center justify-center overflow-hidden rounded-full'
-      }
-      style={{ backgroundColor: `${OPEN_COLOR}22` }}
-    >
-      {avatarUrl ? (
-        <Image source={{ uri: avatarUrl }} className="h-full w-full" />
-      ) : (
-        <Text
-          className={large ? 'text-lg font-extrabold' : 'text-sm font-bold'}
-          style={{ color: OPEN_COLOR }}
-        >
-          {initials}
-        </Text>
-      )}
-    </View>
+    <PersonAvatar
+      avatarUrl={avatarUrl}
+      initials={initials}
+      size={large ? 56 : 40}
+      backgroundColor={`${OPEN_COLOR}22`}
+      initialsColor={OPEN_COLOR}
+    />
   );
 }
 
@@ -296,6 +284,10 @@ export interface NearbySheetProps {
   focusFriendId?: string;
   onAddFriends?: () => void;
   onClose: () => void;
+  /** The nearby pill this sheet morphs out of. */
+  originRef?: RefObject<View | null>;
+  /** The morph value shared with that pill, so the two cross-fade on one number. */
+  morphProgress?: SharedValue<number>;
   onStartSpontaneousRound: (members: GroupMember[]) => Promise<boolean>;
   onJoinOpening: (opening: GroupOpening) => Promise<boolean>;
 }
@@ -309,10 +301,11 @@ export function NearbySheet({
   focusFriendId,
   onAddFriends,
   onClose,
+  originRef,
+  morphProgress,
   onStartSpontaneousRound,
   onJoinOpening,
 }: NearbySheetProps) {
-  const insets = useSafeAreaInsets();
   const { groupOpenings, setOpeningsActive } = useActivityChat();
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
   const [detailFriend, setDetailFriend] = useState<NearbyFriend | null>(null);
@@ -421,189 +414,181 @@ export function NearbySheet({
   const winkFooterLabel = count === 0 ? footerLabel : `Winken senden (${count})`;
 
   return (
-    <Modal
-      transparent
-      animationType="slide"
+    <FloatingSheet
       visible={visible}
       onRequestClose={dismiss}
-      statusBarTranslucent
-      navigationBarTranslucent
+      originRef={originRef}
+      progress={morphProgress}
+      originColor="rgba(59,130,246,0.16)"
+      originBorderColor="rgba(59,130,246,0.72)"
+      accessibilityLabel="Offene Freunde in deiner Nähe"
     >
-      <GestureHandlerRootView style={{ flex: 1 }}>
-        <Pressable className="flex-1 justify-end bg-black/50" onPress={dismiss}>
+      {/* No `flex-1`: the sheet is as tall as this column turns out to be. */}
+      <View>
+        <View className="flex-row items-center gap-3 px-5 pb-3 pt-2">
+          <View className="h-11 w-11 items-center justify-center rounded-[17px] bg-[#3B82F6]/15">
+            <Ionicons
+              name={detailFriend ? 'person-outline' : 'people-outline'}
+              size={20}
+              color={OPEN_COLOR}
+            />
+          </View>
+          <View className="flex-1">
+            <Text className="text-xl font-extrabold tracking-[-0.35px] text-white">
+              {detailFriend
+                ? detailFriend.displayName
+                : `${openCount} ${openCount === 1 ? 'Freund' : 'Freunde'} offen`}
+            </Text>
+            <Text className="mt-0.5 text-sm text-white/45">
+              {detailFriend
+                ? 'Zur Planung auswählen'
+                : nearbyCount
+                  ? `${nearbyCount} im gewählten Umkreis`
+                  : 'Sieh, wer gerade Zeit hat'}
+            </Text>
+          </View>
           <Pressable
-            className="max-h-[86%] rounded-t-[34px] border border-white/10"
-            style={{ backgroundColor: '#0B1016' }}
-            onPress={(event) => event.stopPropagation()}
+            accessibilityRole="button"
+            accessibilityLabel="Offene Freunde schließen"
+            className="h-10 w-10 items-center justify-center rounded-full bg-white/8 active:opacity-70"
+            onPress={dismiss}
           >
-            <View className="items-center pt-3">
-              <View className="h-1 w-10 rounded-full bg-white/20" />
-            </View>
-
-            <View className="flex-row items-center gap-3 px-5 pb-3 pt-4">
-              <View className="h-11 w-11 items-center justify-center rounded-[17px] bg-[#6E8BF7]/15">
-                <Ionicons
-                  name={detailFriend ? 'person-outline' : 'people-outline'}
-                  size={20}
-                  color={OPEN_COLOR}
-                />
-              </View>
-              <View className="flex-1">
-                <Text className="text-xl font-extrabold tracking-[-0.35px] text-white">
-                  {detailFriend
-                    ? detailFriend.displayName
-                    : `${openCount} ${openCount === 1 ? 'Freund' : 'Freunde'} offen`}
-                </Text>
-                <Text className="mt-0.5 text-sm text-white/45">
-                  {detailFriend
-                    ? 'Zur Planung auswählen'
-                    : nearbyCount
-                      ? `${nearbyCount} im gewählten Umkreis`
-                      : 'Sieh, wer gerade Zeit hat'}
-                </Text>
-              </View>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Offene Freunde schließen"
-                className="h-10 w-10 items-center justify-center rounded-full bg-white/8 active:opacity-70"
-                onPress={dismiss}
-              >
-                <Ionicons name="close" size={20} color="rgba(244,245,247,0.8)" />
-              </Pressable>
-            </View>
-
-            <View className="mx-5 mb-1 mt-1">
-              <OpenStatusCard visible={visible} />
-            </View>
-
-            <View className="mx-5 mb-2 mt-2">
-              <RadiusSlider compact />
-            </View>
-
-            {locationDenied ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Standortzugriff in den Einstellungen erlauben"
-                onPress={openLocationSettings}
-                className="mx-5 mb-2 flex-row items-center gap-2.5 rounded-xl border border-[#E0A23E]/40 bg-[#E0A23E]/10 px-3.5 py-2.5 active:opacity-80"
-              >
-                <Ionicons name="location-outline" size={16} color="#E0A23E" />
-                <Text className="flex-1 text-xs leading-4 text-white/70">
-                  Standort ist aus — Entfernungen lassen sich nicht berechnen.{' '}
-                  <Text className="font-semibold text-[#E0A23E]">Einstellungen öffnen</Text>
-                </Text>
-              </Pressable>
-            ) : null}
-
-            <ScrollView
-              className="px-5"
-              contentContainerStyle={{ paddingBottom: 12 }}
-              showsVerticalScrollIndicator={false}
-            >
-              {/* Friends' running Heimwege — safety beats every other section. */}
-
-              {detailFriend ? (
-                <OpenFriendDetail
-                  friend={detailFriend}
-                  selected={selected.has(detailFriend.id)}
-                  onBack={() => setDetailFriend(null)}
-                  onToggle={() => {
-                    toggle(detailFriend.id);
-                    setDetailFriend(null);
-                  }}
-                />
-              ) : (
-                <>
-                  {friends.length ? (
-                    <>
-                      <SectionLabel>In deiner Nähe</SectionLabel>
-                      <View className="divide-y divide-white/8">
-                        {friends.map((friend) => (
-                          <FriendRow
-                            key={friend.id}
-                            friend={friend}
-                            selected={selected.has(friend.id)}
-                            onOpen={() => setDetailFriend(friend)}
-                            onToggle={() => toggle(friend.id)}
-                          />
-                        ))}
-                      </View>
-                    </>
-                  ) : emptyReason === 'no-friends' ? (
-                    <View className="items-center gap-3 py-6">
-                      <Text className="text-center text-sm leading-5 text-white/40">
-                        Du hast noch niemanden bei Como. Füge zuerst Freunde hinzu — erst dann
-                        siehst du hier, wer offen ist.
-                      </Text>
-                      <Pressable
-                        accessibilityRole="button"
-                        onPress={onAddFriends}
-                        className="rounded-full bg-white/10 px-5 py-2.5 active:opacity-80"
-                      >
-                        <Text className="text-sm font-semibold text-white">Freunde hinzufügen</Text>
-                      </Pressable>
-                    </View>
-                  ) : emptyReason === 'none-open' ? (
-                    <Text className="py-6 text-center text-sm text-white/40">
-                      Gerade ist niemand offen. Stell dich offen — deine Freunde sehen es sofort.
-                    </Text>
-                  ) : emptyReason === 'out-of-range' ? (
-                    <Text className="py-6 text-center text-sm text-white/40">
-                      Niemand offen in diesem Umkreis. Zieh den Nähe-Filter größer.
-                    </Text>
-                  ) : null}
-
-                  {friendsWithoutLocation.length ? (
-                    <>
-                      <SectionLabel>Ohne Näheangabe</SectionLabel>
-                      <View className="divide-y divide-white/8">
-                        {friendsWithoutLocation.map((friend) => (
-                          <FriendRow
-                            key={friend.id}
-                            friend={friend}
-                            selected={selected.has(friend.id)}
-                            onOpen={() => setDetailFriend(friend)}
-                            onToggle={() => toggle(friend.id)}
-                          />
-                        ))}
-                      </View>
-                    </>
-                  ) : null}
-
-                  {/* Groups that explicitly opted into being joinable — an
-                      invitation, never an exclusion display. */}
-                  {groupOpenings.length ? (
-                    <>
-                      <SectionLabel>Am Planen — komm dazu</SectionLabel>
-                      <View className="gap-2 pb-2">
-                        {groupOpenings.map((opening) => (
-                          <OpeningRow
-                            key={opening.id}
-                            opening={opening}
-                            joining={joiningOpeningId === opening.id}
-                            onJoin={() => void handleJoinOpening(opening)}
-                          />
-                        ))}
-                      </View>
-                    </>
-                  ) : null}
-                </>
-              )}
-            </ScrollView>
-
-            <View className="px-5 pt-3" style={{ paddingBottom: Math.max(insets.bottom, 12) }}>
-              <SquircleButton
-                label={winkFooterLabel}
-                color={OPEN_COLOR}
-                icon="hand-left-outline"
-                disabled={count === 0 || starting}
-                loading={starting}
-                onPress={handleStartPlanning}
-              />
-            </View>
+            <Ionicons name="close" size={20} color="rgba(244,245,247,0.8)" />
           </Pressable>
-        </Pressable>
-      </GestureHandlerRootView>
-    </Modal>
+        </View>
+
+        <View className="mx-5 mb-2 mt-2">
+          <RadiusSlider compact />
+        </View>
+
+        {locationDenied ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Standortzugriff in den Einstellungen erlauben"
+            onPress={openLocationSettings}
+            className="mx-5 mb-2 flex-row items-center gap-2.5 rounded-xl border border-[#E0A23E]/40 bg-[#E0A23E]/10 px-3.5 py-2.5 active:opacity-80"
+          >
+            <Ionicons name="location-outline" size={16} color="#E0A23E" />
+            <Text className="flex-1 text-xs leading-4 text-white/70">
+              Standort ist aus — Entfernungen lassen sich nicht berechnen.{' '}
+              <Text className="font-semibold text-[#E0A23E]">Einstellungen öffnen</Text>
+            </Text>
+          </Pressable>
+        ) : null}
+
+        {/* `flexShrink` only: with few friends the list is short and the sheet
+            is short with it; it starts scrolling exactly when the sheet reaches
+            its ceiling and not one row earlier. */}
+        <ScrollView
+          className="px-5"
+          style={{ flexShrink: 1 }}
+          contentContainerStyle={{ paddingBottom: 12 }}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Friends' running Heimwege — safety beats every other section. */}
+
+          {detailFriend ? (
+            <OpenFriendDetail
+              friend={detailFriend}
+              selected={selected.has(detailFriend.id)}
+              onBack={() => setDetailFriend(null)}
+              onToggle={() => {
+                toggle(detailFriend.id);
+                setDetailFriend(null);
+              }}
+            />
+          ) : (
+            <>
+              {friends.length ? (
+                <>
+                  <SectionLabel>In deiner Nähe</SectionLabel>
+                  <View className="divide-y divide-white/8">
+                    {friends.map((friend) => (
+                      <FriendRow
+                        key={friend.id}
+                        friend={friend}
+                        selected={selected.has(friend.id)}
+                        onOpen={() => setDetailFriend(friend)}
+                        onToggle={() => toggle(friend.id)}
+                      />
+                    ))}
+                  </View>
+                </>
+              ) : emptyReason === 'no-friends' ? (
+                <View className="items-center gap-3 py-6">
+                  <Text className="text-center text-sm leading-5 text-white/40">
+                    Du hast noch niemanden bei Mica. Füge zuerst Freunde hinzu — erst dann siehst du
+                    hier, wer offen ist.
+                  </Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={onAddFriends}
+                    className="rounded-full bg-white/10 px-5 py-2.5 active:opacity-80"
+                  >
+                    <Text className="text-sm font-semibold text-white">Freunde hinzufügen</Text>
+                  </Pressable>
+                </View>
+              ) : emptyReason === 'none-open' ? (
+                <Text className="py-6 text-center text-sm text-white/40">
+                  Gerade ist niemand offen. Stell dich offen — deine Freunde sehen es sofort.
+                </Text>
+              ) : emptyReason === 'out-of-range' ? (
+                <Text className="py-6 text-center text-sm text-white/40">
+                  Niemand offen in diesem Umkreis. Zieh den Nähe-Filter größer.
+                </Text>
+              ) : null}
+
+              {friendsWithoutLocation.length ? (
+                <>
+                  <SectionLabel>Ohne Näheangabe</SectionLabel>
+                  <View className="divide-y divide-white/8">
+                    {friendsWithoutLocation.map((friend) => (
+                      <FriendRow
+                        key={friend.id}
+                        friend={friend}
+                        selected={selected.has(friend.id)}
+                        onOpen={() => setDetailFriend(friend)}
+                        onToggle={() => toggle(friend.id)}
+                      />
+                    ))}
+                  </View>
+                </>
+              ) : null}
+
+              {/* Groups that explicitly opted into being joinable — an
+                      invitation, never an exclusion display. */}
+              {groupOpenings.length ? (
+                <>
+                  <SectionLabel>Am Planen — komm dazu</SectionLabel>
+                  <View className="gap-2 pb-2">
+                    {groupOpenings.map((opening) => (
+                      <OpeningRow
+                        key={opening.id}
+                        opening={opening}
+                        joining={joiningOpeningId === opening.id}
+                        onJoin={() => void handleJoinOpening(opening)}
+                      />
+                    ))}
+                  </View>
+                </>
+              ) : null}
+            </>
+          )}
+        </ScrollView>
+
+        {/* No safe-area padding: the sheet already floats clear of the bottom
+            inset, so adding it again would double the gap. */}
+        <View className="px-5 pb-4 pt-3">
+          <SquircleButton
+            label={winkFooterLabel}
+            color={OPEN_COLOR}
+            icon="hand-left-outline"
+            disabled={count === 0 || starting}
+            loading={starting}
+            onPress={handleStartPlanning}
+          />
+        </View>
+      </View>
+    </FloatingSheet>
   );
 }

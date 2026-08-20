@@ -34,11 +34,21 @@ function isSyncOperation(value: unknown): value is SyncOperation {
   if (value.kind === 'activity.create') {
     return typeof value.payload.activityId === 'string' && isRecord(value.payload.activity);
   }
+  if (value.kind === 'chat.message') {
+    return (
+      typeof value.payload.roomId === 'string' &&
+      typeof value.payload.text === 'string' &&
+      typeof value.payload.clientMessageId === 'string'
+    );
+  }
+  if (value.kind === 'timePlan.create') {
+    return typeof value.payload.planId === 'string' && isRecord(value.payload.plan);
+  }
   return (
-    value.kind === 'chat.message' &&
-    typeof value.payload.roomId === 'string' &&
-    typeof value.payload.text === 'string' &&
-    typeof value.payload.clientMessageId === 'string'
+    value.kind === 'timePlan.response' &&
+    typeof value.payload.planId === 'string' &&
+    Number.isInteger(value.payload.revision) &&
+    isRecord(value.payload.responsesByWindow)
   );
 }
 
@@ -144,6 +154,15 @@ export async function enqueueSyncOperation(operation: SyncOperation) {
       operations.push(next);
     }
     await saveOutbox(operation.accountId, operations);
+  });
+}
+
+/** Removes a resolved or manually retried operation without touching other work. */
+export async function discardSyncOperation(accountId: string, id: string) {
+  await withAccountLock(accountId, async () => {
+    const operations = await readOutbox(accountId);
+    const remaining = operations.filter((operation) => operation.id !== id);
+    if (remaining.length !== operations.length) await saveOutbox(accountId, remaining);
   });
 }
 

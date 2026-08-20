@@ -1,16 +1,15 @@
-import Constants from 'expo-constants';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Platform, StyleSheet, UIManager, View, type LayoutChangeEvent } from 'react-native';
+import { Platform, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import MapView, {
   Marker,
-  PROVIDER_DEFAULT,
-  PROVIDER_GOOGLE,
   type LongPressEvent,
   type MapPressEvent,
   type PoiClickEvent,
   type Region,
   type UserLocationChangeEvent,
 } from 'react-native-maps';
+
+import { MAP_PROVIDER } from '../utils/mapProvider';
 
 import {
   cancelAnimation,
@@ -59,15 +58,8 @@ import { PreviewMapCanvas, type PreviewMapCanvasProps } from './PreviewMapCanvas
  *   on iOS and would crash otherwise. POI labels are not tappable there; use
  *   long-press or search instead.
  */
-const IS_EXPO_GO = Constants.appOwnership === 'expo';
-// `ios.config.googleMapsApiKey` is deliberately not exposed to JS at runtime,
-// so checking Expo config would always select Apple Maps. Ask the native layer
-// instead. This also keeps older preview builds safe: without AirGoogleMap
-// they cleanly retain the Apple Maps fallback.
-const IOS_HAS_GOOGLE_RENDERER =
-  Platform.OS === 'ios' && !IS_EXPO_GO && UIManager.hasViewManagerConfig('AIRGoogleMap');
-const MAP_PROVIDER =
-  Platform.OS === 'android' || IOS_HAS_GOOGLE_RENDERER ? PROVIDER_GOOGLE : PROVIDER_DEFAULT;
+// The provider decision itself lives in utils/mapProvider so the composer's
+// place preview cannot pick a different renderer than the main map.
 
 /**
  * "Centred" means centred in the map the user can actually SEE.

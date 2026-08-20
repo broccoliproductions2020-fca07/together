@@ -40,7 +40,7 @@ const renderDocument = (legal) => {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${escapeHtml(legal.title)} · Como</title>
+  <title>${escapeHtml(legal.title)} · Mica</title>
   <style>
     :root { color-scheme: light dark; }
     body {

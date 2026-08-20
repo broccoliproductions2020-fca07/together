@@ -21,7 +21,7 @@ const buildInfo = getBuildInfo();
 
 /**
  * The profile's own accent. Deliberately `SEMANTIC_COLOR.action` and never the
- * `open` blue (#6E8BF7) that used to sit here — that colour belongs to the Open
+ * `open` blue (#3B82F6) that used to sit here — that colour belongs to the Open
  * activity mode and must not explain an unrelated state (semanticColors.ts).
  */
 const ACCENT = SEMANTIC_COLOR.action;
@@ -54,7 +54,11 @@ const FRIEND_REQUEST_OPTIONS: {
   label: string;
   description: string;
 }[] = [
-  { value: 'anyone', label: 'Alle', description: 'Über @Namen oder QR-Code' },
+  {
+    value: 'anyone',
+    label: 'Alle',
+    description: 'Über Name, @Namen oder QR-Code',
+  },
   {
     value: 'shared_activity',
     label: 'Gemeinsame Activity',
@@ -355,7 +359,7 @@ export function ProfileScreen() {
       if (!enabled) {
         Alert.alert(
           'Benachrichtigungen nicht aktiviert',
-          'Erlaube Como Benachrichtigungen in den Systemeinstellungen deines Geräts.',
+          'Erlaube Mica Benachrichtigungen in den Systemeinstellungen deines Geräts.',
         );
       }
     } catch {
@@ -483,7 +487,7 @@ export function ProfileScreen() {
                     textTransform: 'uppercase',
                   }}
                 >
-                  Como · Mitglied
+                  Mica · Mitglied
                 </Text>
                 {/* "Zeig mal deinen Code" — the most common real-life add-friends
                     moment. Hidden when the request policy blocks incoming requests. */}
@@ -767,7 +771,7 @@ export function ProfileScreen() {
           <SettingRow
             icon="shield-checkmark-outline"
             iconColor={SUCCESS}
-            title="So schützt dich Como"
+            title="So schützt dich Mica"
             subtitle="Profil, Standort, Chats — was immer gilt"
             onPress={() => setPrivacyInfoVisible(true)}
           />
@@ -780,7 +784,7 @@ export function ProfileScreen() {
           <SettingRow
             icon="reader-outline"
             title="Nutzungsbedingungen"
-            subtitle="Regeln für die Nutzung von Como"
+            subtitle="Regeln für die Nutzung von Mica"
             onPress={() => router.push('/nutzungsbedingungen')}
           />
           <SettingRow
