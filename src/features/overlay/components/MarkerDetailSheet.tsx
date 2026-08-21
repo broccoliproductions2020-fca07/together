@@ -37,7 +37,11 @@ import { useKeyboardPadding } from '@/features/chat/utils/useKeyboardHeight';
 const CHAT_SNAP_LOW = 60;
 const CHAT_SNAP_HIGH = 92;
 const CHAT_DISMISS_BELOW = CHAT_SNAP_LOW - 12;
-const CHAT_SPRING = { damping: 26, stiffness: 300, mass: 1 };
+/** Critically damped (critical is ~34.6 here) and overshoot-clamped: a snap
+ * point the sheet springs PAST and returns to reads as the chat wobbling, not
+ * as it settling. The spring stays because a flick has to be catchable
+ * mid-flight. */
+const CHAT_SPRING = { damping: 35, stiffness: 300, mass: 1, overshootClamping: true };
 
 export interface MarkerDetailSheetProps {
   visible: boolean;

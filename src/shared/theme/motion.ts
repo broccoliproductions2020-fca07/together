@@ -11,12 +11,25 @@
  * Tune here, nowhere else.
  */
 
-/** Springs are used over durations on purpose: only a spring can be caught mid-flight. */
+/**
+ * Springs are used over durations on purpose: only a spring can be caught
+ * mid-flight.
+ *
+ * But every one of them is at least CRITICALLY DAMPED — `damping >=
+ * 2*sqrt(stiffness*mass)` — and clamps overshoot on top. Both configs below
+ * used to sit at a damping ratio of about 0.78, which is a spring that
+ * deliberately springs past its target and comes back. On a control that
+ * settles after a drag that reads as life; on a sheet changing SIZE it reads
+ * as wobbling, because the thing overshooting is the edge of a surface the eye
+ * is using to judge where the content ends. Interruptibility is what the
+ * spring is here for; bouncing never was.
+ */
 export const MOTION = {
-  /** Sheet arrival and departure. */
-  sheet: { damping: 24, stiffness: 260, mass: 0.9 },
-  /** Settling back after a drag that did not pass the dismiss threshold. */
-  settle: { damping: 26, stiffness: 340, mass: 0.8 },
+  /** Sheet arrival and departure. Critical damping is ~30.6 here. */
+  sheet: { damping: 31, stiffness: 260, mass: 0.9, overshootClamping: true },
+  /** Settling back after a drag that did not pass the dismiss threshold.
+   * Critical damping is ~33.0 here. */
+  settle: { damping: 34, stiffness: 340, mass: 0.8, overshootClamping: true },
   /**
    * Where along the morph the sheet's own content takes over. It starts late:
    * before ~0.4 the container is still small enough that the content would be
