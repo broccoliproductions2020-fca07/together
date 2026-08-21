@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObjec
 import { BackHandler, View, useWindowDimensions } from 'react-native';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
+  Easing,
   Extrapolation,
   interpolate,
   interpolateColor,
@@ -10,12 +11,16 @@ import Animated, {
   useReducedMotion,
   useSharedValue,
   withSpring,
+  withTiming,
   type SharedValue,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useKeyboardHeight } from '@/features/chat/utils/useKeyboardHeight';
 import { concentricRadius, FLOATING_SHEET, MOTION } from '@/shared/theme';
+
+/** Short and monotonic on purpose — see the resize effect below. */
+const RESIZE_EASE = { duration: 140, easing: Easing.out(Easing.quad) };
 
 export interface OriginRect {
   x: number;
@@ -354,8 +359,15 @@ export function FloatingSheet({
       restSettledRef.current = contentHeight > 0;
       return;
     }
-    restHeight.value = withSpring(targetHeight, MOTION.settle);
-    restTop.value = withSpring(targetTop, MOTION.settle);
+    // Timing, NOT a spring. `MOTION.settle` sits at a damping ratio of ~0.79,
+    // so it overshoots by design — which is right for a drag settling back and
+    // exactly wrong for a resize, where overshoot IS visible bouncing. The
+    // target also moves: content re-measures on every frame of its own layout
+    // animation, restarting this on each one. A short monotonic ease therefore
+    // behaves as a smoother — it rounds off the per-frame steps and can never
+    // ring, however often it is re-started.
+    restHeight.value = withTiming(targetHeight, RESIZE_EASE);
+    restTop.value = withTiming(targetTop, RESIZE_EASE);
   }, [contentHeight, mounted, reducedMotion, restHeight, restTop, targetHeight, targetTop]);
 
   /**
