@@ -52,6 +52,18 @@ export interface FloatingSheetProps {
   /** The control the sheet morphs out of. Without one it grows from its own base. */
   originRef?: RefObject<View | null>;
   /**
+   * The origin for hosts whose anchor is NOT a React view — a native map
+   * marker, for instance, which is an image the renderer owns and has no node
+   * to measure. Asked on open AND on close, for the same reason `originRef` is
+   * re-measured: by the time the sheet leaves, the map may have panned and the
+   * anchor may be somewhere else entirely, or gone.
+   *
+   * Takes precedence over `originRef`. Returning `null` is a legitimate answer
+   * — the sheet then grows from its own base rather than landing somewhere
+   * arbitrary, which is the same fallback a missing ref gets.
+   */
+  resolveOrigin?: () => Promise<OriginRect | null>;
+  /**
    * The morph's 0→1 value, owned by the host so the ORIGIN can fade on exactly
    * the same number. Handing over at a threshold instead draws both at once,
    * and two translucent copies of one control stack into a visible flash.
@@ -59,6 +71,28 @@ export interface FloatingSheetProps {
   progress?: SharedValue<number>;
   /** Fires once the exit morph has landed and the sheet has unmounted. */
   onClosed?: () => void;
+  /**
+   * How much of the screen the sheet covers from the bottom edge, so a host
+   * that draws behind it can keep its subject in the strip that stays visible
+   * (the map centres a selected marker this way).
+   *
+   * Deliberately the RESTING geometry — the sheet's own margin plus its
+   * settled height — never a frame of the morph or the keyboard lift. A number
+   * that moved with the animation would have the camera chasing the sheet, and
+   * every frame would answer with a camera move of its own. Reports 0 once the
+   * sheet is gone.
+   */
+  onHeightChange?: (coveredHeight: number) => void;
+  /**
+   * Leaves without the exit morph.
+   *
+   * For the case where the anchor is being destroyed in the same gesture — a
+   * cancelled activity, whose marker plays its own burst. Flying the sheet back
+   * into a marker that is bursting puts two animations on one spot, and the
+   * sheet would be travelling toward something that no longer exists by the
+   * time it arrives. Read at close time, so the host sets it before hiding.
+   */
+  instantClose?: boolean;
   /** The sheet's resting surface. */
   surfaceColor?: string;
   borderColor?: string;
@@ -107,8 +141,11 @@ export function FloatingSheet({
   visible,
   onRequestClose,
   originRef,
+  resolveOrigin,
   progress: externalProgress,
   onClosed,
+  onHeightChange,
+  instantClose = false,
   surfaceColor = '#0B1016',
   borderColor = 'rgba(255,255,255,0.10)',
   originColor = 'rgba(59,130,246,0.16)',
@@ -171,12 +208,30 @@ export function FloatingSheet({
   onClosedRef.current = onClosed;
   const onRequestCloseRef = useRef(onRequestClose);
   onRequestCloseRef.current = onRequestClose;
+  const onHeightChangeRef = useRef(onHeightChange);
+  onHeightChangeRef.current = onHeightChange;
+  const resolveOriginRef = useRef(resolveOrigin);
+  resolveOriginRef.current = resolveOrigin;
+  const instantCloseRef = useRef(instantClose);
+  instantCloseRef.current = instantClose;
   /** Set while an open is waiting for its first content measurement. */
   const openPendingRef = useRef(false);
 
   const requestClose = useCallback(() => {
     onRequestCloseRef.current();
   }, []);
+
+  /**
+   * Both origin kinds through one door, so open and close cannot end up asking
+   * different questions. Held in a ref rather than taken as a dependency: hosts
+   * pass inline arrows, and a re-run mid-close restarts the exit spring from
+   * wherever it currently is.
+   */
+  const askOrigin = useCallback((): Promise<OriginRect | null> => {
+    const resolver = resolveOriginRef.current;
+    if (resolver) return resolver().catch(() => null);
+    return measureOrigin(originRef);
+  }, [originRef]);
 
   /**
    * Falls back to the sheet's own bottom edge. Growing out of your own base is
@@ -202,6 +257,7 @@ export function FloatingSheet({
 
   const finishClose = useCallback(() => {
     setMounted(false);
+    onHeightChangeRef.current?.(0);
     // Cleared so the next open measures again and its wait actually fires; an
     // unchanged value would not re-run the effect that starts the animation.
     setContentHeight(0);
@@ -212,7 +268,7 @@ export function FloatingSheet({
     let cancelled = false;
 
     if (visible) {
-      void measureOrigin(originRef).then((rect) => {
+      void askOrigin().then((rect) => {
         if (cancelled) return;
         applyOrigin(rect);
         dragY.value = 0;
@@ -226,11 +282,12 @@ export function FloatingSheet({
 
     if (!mounted) return;
 
-    void measureOrigin(originRef).then((rect) => {
+    void askOrigin().then((rect) => {
       if (cancelled) return;
       applyOrigin(rect);
       openPendingRef.current = false;
-      if (reducedMotion) {
+      // An anchor that is being destroyed gets no flight back into it.
+      if (reducedMotion || instantCloseRef.current) {
         progress.value = 0;
         dragY.value = 0;
         finishClose();
@@ -249,7 +306,7 @@ export function FloatingSheet({
     // `mounted` is read, not tracked: adding it would re-run the exit on its own
     // state change and cancel the animation it just started.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, applyOrigin, dragY, finishClose, originRef, progress, reducedMotion]);
+  }, [visible, applyOrigin, askOrigin, dragY, finishClose, progress, reducedMotion]);
 
   /**
    * The open waits for the first content measurement. Starting earlier means
@@ -262,6 +319,16 @@ export function FloatingSheet({
     openPendingRef.current = false;
     progress.value = reducedMotion ? 1 : withSpring(1, MOTION.sheet);
   }, [contentHeight, progress, reducedMotion]);
+
+  /**
+   * Reported from the settled geometry, never from the animation: `targetTop`
+   * is where the sheet comes to rest, so this is stable while the morph and the
+   * keyboard lift move the sheet around.
+   */
+  useEffect(() => {
+    if (!mounted || contentHeight <= 0) return;
+    onHeightChangeRef.current?.(Math.max(0, windowHeight - targetTop));
+  }, [contentHeight, mounted, targetTop, windowHeight]);
 
   /** A native Modal would give this for free; an overlay has to ask for it. */
   useEffect(() => {
