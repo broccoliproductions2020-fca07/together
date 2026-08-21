@@ -51,6 +51,7 @@ const {
 const { sharedDayAxis, axisFraction, axisHourMarks, dayStartMs, formatAxisMinutes } =
   load('dayAxis');
 const { staircaseRuns, staircasePoints, roundedPolygonPath, staircasePaths } = load('staircase');
+const { describePlanStatus, planRoundIsOpen } = load('planSummary');
 
 let checks = 0;
 function check(name, run) {
@@ -496,6 +497,100 @@ check('a path is emitted per run, and each one closes', () => {
 check('nothing is emitted for an empty or fully uncovered window', () => {
   assert.deepEqual(staircasePaths([], 30, 3), []);
   assert.deepEqual(staircasePaths([step(0, 40, 0)], 30, 3), []);
+});
+
+console.log('\ndescribePlanStatus');
+
+function highlight(day, startHour, endHour) {
+  const startMs = new Date(2026, 7, 22, startHour, 0, 0).getTime();
+  const endMs = new Date(2026, 7, 22, endHour, 0, 0).getTime();
+  return {
+    windowId: 'w1',
+    dayLabel: day,
+    slot: { startMs, endMs, count: 3, uids: [], everyone: false },
+  };
+}
+
+check('nobody has answered yet', () => {
+  assert.equal(
+    describePlanStatus({ respondedCount: 0, expectedCount: 5, highlights: [] }),
+    'Noch keine Antworten',
+  );
+});
+
+check('answers outstanding name the favourite as provisional', () => {
+  assert.equal(
+    describePlanStatus({
+      respondedCount: 3,
+      expectedCount: 5,
+      highlights: [highlight('Morgen', 19, 21)],
+    }),
+    '3 von 5 Antworten \u00b7 Aktueller Favorit: Morgen, 19:00\u201321:00',
+  );
+});
+
+check('a complete round drops "aktuell" - nothing moves on its own now', () => {
+  assert.equal(
+    describePlanStatus({
+      respondedCount: 5,
+      expectedCount: 5,
+      highlights: [highlight('Morgen', 19, 21)],
+    }),
+    'Alle Antworten da \u00b7 Favorit: Morgen, 19:00\u201321:00',
+  );
+});
+
+check('no overlap at all is stated, never hidden behind a count', () => {
+  assert.equal(
+    describePlanStatus({ respondedCount: 3, expectedCount: 5, highlights: [] }),
+    '3 von 5 Antworten \u00b7 Noch kein gemeinsamer Zeitraum',
+  );
+});
+
+check('a tie is never squeezed into the row as two ranges', () => {
+  const line = describePlanStatus({
+    respondedCount: 4,
+    expectedCount: 5,
+    highlights: [highlight('Morgen', 19, 21), highlight('So 23.8.', 19, 21)],
+  });
+  assert.equal(line, '4 von 5 Antworten \u00b7 Mehrere Favoriten');
+  assert.ok(!line.includes('Favorit:'), 'no dangling label without a time');
+});
+
+check('a reader without member access gets the progress and no favourite', () => {
+  assert.equal(
+    describePlanStatus({
+      respondedCount: 3,
+      expectedCount: 5,
+      highlights: [highlight('Morgen', 19, 21)],
+      canSeeFavourite: false,
+    }),
+    '3 von 5 Antworten',
+  );
+});
+
+check('the row never states a time as decided', () => {
+  [3, 5].forEach((responded) => {
+    const line = describePlanStatus({
+      respondedCount: responded,
+      expectedCount: 5,
+      highlights: [highlight('Morgen', 19, 21)],
+    });
+    assert.ok(/Favorit/.test(line), line);
+  });
+});
+
+check('a stale audience never produces "6 von 5"', () => {
+  assert.equal(
+    describePlanStatus({ respondedCount: 6, expectedCount: 5, highlights: [] }),
+    '6 von 6 Antworten \u00b7 Noch kein gemeinsamer Zeitraum',
+  );
+});
+
+check('only a collecting round shows the row', () => {
+  assert.equal(planRoundIsOpen('collecting'), true);
+  assert.equal(planRoundIsOpen('locked'), false);
+  assert.equal(planRoundIsOpen('cancelled'), false);
 });
 
 console.log(`\n${checks} checks passed.\n`);

@@ -12,9 +12,12 @@ import { AVAILABLE_COLOR, PLANNING_COLOR, usePlanningColors } from '../planningT
 import { timePlanningService } from '../services/timePlanningService';
 import type { TimePlan, TimePlanInterval, TimePlanMember, TimePlanWindow } from '../types';
 import { aggregateWindow, type WindowAvailability } from '../utils/availability';
+import { bestAcrossWindows } from '../utils/matchingSummary';
+import { describePlanStatus } from '../utils/planSummary';
 import { normalizeIntervals } from '../utils/intervals';
 import { TimePlanAnswerCard, type DayAnswer } from './TimePlanAnswerCard';
 import { TimeMatchingCard } from './TimeMatchingCard';
+import { TimePlanMembersList, TimePlanRows } from './TimePlanRows';
 
 /**
  * The Terminfindung surface — rendered INSIDE the normal marker detail sheet,
@@ -95,12 +98,25 @@ export function TimePlanContent({
   planId,
   onOpenActivity,
   onClose,
+  variant = 'full',
+  onOpenMembers,
+  onOpenMatching,
 }: {
   planId: string;
   /** Called with the new Activity id once the host locks a slot. */
   onOpenActivity?: (activityId: string) => void;
   /** Closes the detail sheet — used only by the locked state's hand-off. */
   onClose?: () => void;
+  /**
+   * `summary` is the compact head of the detail sheet: two list rows instead
+   * of the full timeline, which is then one tap away. The answering state is
+   * NOT affected — someone who has not replied still gets the answer cards,
+   * because on this surface answering is the whole point and a row pointing
+   * at the thing you are already looking at says nothing.
+   */
+  variant?: 'summary' | 'full' | 'members';
+  onOpenMembers?: () => void;
+  onOpenMatching?: () => void;
 }) {
   const t = usePlanningColors();
   const { user } = useAuth();
@@ -225,6 +241,21 @@ export function TimePlanContent({
     return map;
   }, [members, uid, windows]);
 
+  /**
+   * The same aggregate the matching card builds, but kept here so the compact
+   * row can name the favourite without a second data path. Note this one
+   * includes the current user, unlike `availabilityByWindow` above, which
+   * deliberately leaves you out so you can see what you are matching against.
+   */
+  const roundHighlights = useMemo(() => {
+    const map = new Map<string, WindowAvailability>();
+    windows.forEach((window) => {
+      const result = aggregateWindow(window, members);
+      if (result) map.set(window.id, result);
+    });
+    return bestAcrossWindows(windows, map);
+  }, [members, windows]);
+
   const unanswered = windows.filter((window) => answers[window.id] == null).length;
   const anyYes = windows.some((window) => answers[window.id] === 'yes');
   const answering = (!hasAnswered && !submitted) || editing;
@@ -306,6 +337,17 @@ export function TimePlanContent({
     );
   }
 
+  if (variant === 'members') {
+    return (
+      <TimePlanMembersList
+        members={members}
+        currentUid={uid}
+        hostId={plan.hostId}
+        canRead={isMember}
+      />
+    );
+  }
+
   return (
     <View style={styles.content}>
       <Text style={[styles.subtitle, { color: t.muted }]}>
@@ -334,6 +376,29 @@ export function TimePlanContent({
               onInterval={(next) => setInterval(window.id, next)}
             />
           ))}
+        </>
+      ) : variant === 'summary' && onOpenMembers && onOpenMatching ? (
+        <>
+          <TimePlanRows
+            members={members}
+            memberCount={plan.memberUids.length}
+            status={describePlanStatus({
+              respondedCount: plan.memberUids.length,
+              expectedCount: plan.audienceUids.length,
+              highlights: roundHighlights,
+              canSeeFavourite: isMember,
+            })}
+            onOpenMembers={onOpenMembers}
+            onOpenMatching={onOpenMatching}
+          />
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setEditing(true)}
+            style={styles.secondary}
+          >
+            <Ionicons name="create-outline" size={16} color={t.muted} />
+            <Text style={[styles.secondaryLabel, { color: t.muted }]}>Meine Zeiten ändern</Text>
+          </Pressable>
         </>
       ) : (
         <>

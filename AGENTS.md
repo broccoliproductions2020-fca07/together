@@ -952,6 +952,34 @@ kein fixes Datum, bis der Host einen Slot festzurrt.
   ein vom Elternteil danebengemalter Streifen hätte eine zweite Zeit-zu-Pixel-Rechnung
   und würde genau während einer Geste verrutschen. Der Aufrufer liefert WAS, der
   Picker entscheidet WO. `core/` bleibt davon unberührt.
+- **Die Detailfläche einer Runde ist eine kompakte LISTE, die Übersicht liegt einen Tap
+  tiefer.** Zwei Zeilen in EINEM Kasten mit einer Haarlinie dazwischen — „N dabei" und
+  „Terminfindung" — statt einer sofort ausgerollten Zeitmatching-Karte. Zwei getrennte
+  Mini-Karten wären zwei Widgets, die zufällig übereinanderliegen; es sind zwei Aussagen
+  über dieselbe Sache. Geometrie, Typografie und Chevron sind vom Teilnehmer-Row in
+  `ActivityContent` übernommen, damit die Flächen als eine Familie lesbar bleiben. Die
+  Terminfindungszeile bekommt **bewusst keinen zweiten Avatar-Stapel**: zwei gestapelte
+  Zeilen, die beide mit Gesichtern anfangen, sind auf einen Blick nicht zu trennen — der
+  linke Rand ist die billigste Stelle, sie zu unterscheiden, also steht dort das ambere
+  Kalender-Icon. Aufklappen läuft über `planningView` im Sheet (`summary` | `full` |
+  `members`) mit demselben Zurück-Kopf wie die Teilnehmerliste; ein offener Drill-in wird
+  zurückgesetzt, sobald eine andere Runde angetippt wird.
+- **Die Statuszeile zählt PERSONEN, die Zeitleiste zählt VERFÜGBARKEIT — nie vermischen.**
+  „18 von 20 Antworten" sind beantwortende von eingeladenen Personen (`memberUids` gegen
+  `audienceUids`; „Beitreten IST Antworten", also ist jedes Mitglied genau eine Antwort).
+  Das `x/y` in der Matrix ist etwas anderes: Verfügbarkeit INNERHALB der bereits
+  Antwortenden. Würden beide dieselbe Formulierung teilen, sähe eine Runde beantwortet
+  aus, weil die wenigen Antwortenden sich zufällig einig sind. Die Wortwahl lebt allein in
+  `describePlanStatus` (`utils/planSummary.ts`) und sagt **nie** eine Zeit als
+  festgelegt an: vor dem Vollzähligwerden „Aktueller Favorit", danach „Favorit", und eine
+  festgelegte Runde zeigt die Zeile gar nicht mehr. Mehrere gleichwertige Fenster werden
+  zu „Mehrere Favoriten" — zwei lange Zeiträume passen nicht in die Zeile, und einen davon
+  zu wählen erfände eine Entscheidung, die der Host nicht getroffen hat.
+- **Für Eingeladene fehlt der Favorit, und das ist die Regel, nicht ein Bug.**
+  `timePlanMembers` ist ihnen verschlossen, also gibt es keine fremde Verdichtung zu
+  zeigen; die Zeile nennt dann nur den Fortschritt (`canSeeFavourite: false`), der aus dem
+  Plan-Dokument selbst kommt. Die Teilnehmerliste sagt es aus demselben Grund offen:
+  „Wer schon dabei ist, siehst du, sobald du selbst geantwortet hast."
 - **Kein eigenes Sheet — alles im `MarkerDetailSheet`.** Eine Runde mit Ort liegt als
   ringloser Marker auf der Karte; Antippen öffnet dieselbe Detailfläche wie jede
   Aktivität (Titel, Host, Ort), nur steht an der Stelle der Uhrzeit die Übersicht

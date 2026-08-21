@@ -74,6 +74,7 @@ function planFromDoc(id: string, data: DocumentData): TimePlan {
     lockedStartsAt: typeof data.lockedStartsAt === 'string' ? data.lockedStartsAt : undefined,
     lockedEndsAt: typeof data.lockedEndsAt === 'string' ? data.lockedEndsAt : undefined,
     memberUids: stringArray(data.memberUids),
+    audienceUids: stringArray(data.audienceUids),
     createdAt: millis(data.createdAt),
     updatedAt: millis(data.updatedAt),
     expireAt: millis(data.expireAt),

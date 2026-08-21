@@ -91,6 +91,7 @@ export function MarkerDetailSheet({
   const [chatExpanded, setChatExpanded] = useState(false);
   const [chatFullscreen, setChatFullscreen] = useState(false);
   const [activityView, setActivityView] = useState<'detail' | 'participants'>('detail');
+  const [planningView, setPlanningView] = useState<'summary' | 'full' | 'members'>('summary');
   const [selectedParticipant, setSelectedParticipant] = useState<MarkerAvatar | null>(null);
   const { user } = useAuth();
   const reducedMotion = useReducedMotion();
@@ -148,9 +149,17 @@ export function MarkerDetailSheet({
   // on every render, so nothing it depends on may sit behind a conditional exit.
   const activitySelection = shownSelection ? isActivitySelection(shownSelection) : null;
   const participantView = Boolean(activitySelection) && activityView === 'participants';
+  const planningId = shownSelection?.type === 'Planning' ? shownSelection.planId : null;
+  const planningDrillIn = planningId !== null && planningView !== 'summary';
   // When joined AND the chat is expanded, the sheet becomes a tall chat surface.
   const chatMode = Boolean(activitySelection) && joined && chatExpanded && !participantView;
   const keyboardPadding = useKeyboardPadding(0, chatMode);
+
+  // Sits with the other pre-return derivations: a drill-in left open must not
+  // survive onto the next round the user taps.
+  useEffect(() => {
+    setPlanningView('summary');
+  }, [planningId]);
 
   if (!mounted || !shownSelection) return null;
 
@@ -323,6 +332,25 @@ export function MarkerDetailSheet({
             </View>
           </GestureDetector>
 
+          {planningDrillIn ? (
+            <View className="mb-3 flex-row items-center gap-3 pr-12">
+              <PressableScale
+                accessibilityRole="button"
+                accessibilityLabel="Zurück zur Übersicht"
+                className="h-10 w-10 items-center justify-center rounded-full bg-secondary/80"
+                haptic={false}
+                onPress={() => setPlanningView('summary')}
+              >
+                <Ionicons name="chevron-back" size={22} color={closeIconColor} />
+              </PressableScale>
+              <View className="flex-1">
+                <Text className="text-xl font-bold text-foreground">
+                  {planningView === 'members' ? 'Teilnehmer' : 'Terminfindung'}
+                </Text>
+              </View>
+            </View>
+          ) : null}
+
           {participantView ? (
             <View className="mb-3 flex-row items-center gap-3 pr-12">
               <PressableScale
@@ -393,6 +421,9 @@ export function MarkerDetailSheet({
                   selection={shownSelection}
                   onOpenActivity={onOpenPlannedActivity}
                   onClose={onClose}
+                  view={planningView}
+                  onOpenMembers={() => setPlanningView('members')}
+                  onOpenMatching={() => setPlanningView('full')}
                 />
               ) : shownSelection.type === 'Place' ? (
                 <PlaceContent
