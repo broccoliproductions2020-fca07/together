@@ -1,8 +1,9 @@
-import { memo, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import { LayoutChangeEvent, Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, {
   Easing,
   LinearTransition,
+  runOnJS,
   useAnimatedStyle,
   useDerivedValue,
   useReducedMotion,
@@ -12,12 +13,21 @@ import Animated, {
 } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
 
+import { defaultTimeRangePickerTheme } from '@/shared/components/time-range-picker';
+import { withAlpha } from '@/shared/components/time-range-picker/theme';
+import Svg, { ClipPath, Defs, G, Path, Rect } from 'react-native-svg';
+
 import { FONT, TEXT_CAPPED, TEXT_FLEXIBLE, TYPE } from '@/shared/theme';
 
-import { usePlanningColors } from '../planningTheme';
+import { FRAME_COLOR, usePlanningColors } from '../planningTheme';
 import type { TimePlanMember, TimePlanWindow } from '../types';
-import { aggregateWindow, memberIntervals, type WindowAvailability } from '../utils/availability';
+import {
+  aggregateWindow,
+  memberIntervals,
+  type WindowAvailability,
+} from '../utils/availability';
 import { axisHourMarks, formatAxisMinutes, sharedDayAxis, axisFraction, dayStartMs } from '../utils/dayAxis';
+import { staircasePaths, type StaircaseStep } from '../utils/staircase';
 import {
   bestAcrossWindows,
   clockLabel,
@@ -30,10 +40,8 @@ import {
  * The Zeitmatching card — an availability MATRIX, not a stack of disabled
  * inputs.
  *
- * It deliberately shares nothing with `TimeRangePicker` but the time-to-x
- * arithmetic. A read-only surface that borrows a control's body (track, pill,
- * grips) reads as "an input you are not allowed to touch"; this reads as a
- * chart, because that is what it is.
+ * It borrows only material tokens from `TimeRangePicker`; it remains a
+ * read-only data view, never an input.
  *
  * ## What the shape says
  *
@@ -53,23 +61,26 @@ import {
  * extent. A drawn frame would repeat what the shape shows.
  */
 
-const AMBER = '#E0A23E';
-/** The lighter edge that makes a step read as translucent glass rather than a
- * flat block — the same trick the picker's bar uses. */
-const AMBER_EDGE = 'rgba(243, 200, 133, 0.95)';
-const AMBER_PEAK = 'rgba(250, 214, 155, 0.98)';
+const PICKER_RANGE = defaultTimeRangePickerTheme('default', FRAME_COLOR).range;
+const AMBER = PICKER_RANGE.color;
+/** Shared compact-picker material for availability steps. */
 
 const LABEL_W = 58;
 const AXIS_LABEL_H = 15;
 const PERSON_H = 12;
 const PERSON_GAP = 3;
-const STEP_TOP_INSET = 7;
 /** Rows can drop to 32 dp; the touch target must not. */
 const MIN_TAP = 44;
+const SOURCE_RIBBON_HEIGHT = 3;
+/** Just enough to take the sharpness off a tread without softening the data. */
+const STEP_RADIUS = 3;
 
-function fillFor(share: number, inPeak: boolean): string {
-  const alpha = (0.16 + 0.46 * share) * (inPeak ? 1 : 0.82);
-  return `rgba(224, 162, 62, ${alpha.toFixed(3)})`;
+function pickerFill(inPeak: boolean): string {
+  return withAlpha(PICKER_RANGE.color, PICKER_RANGE.fillOpacity * (inPeak ? 1 : 0.82));
+}
+
+function pickerBorder(inPeak: boolean): string {
+  return withAlpha(PICKER_RANGE.borderColor, PICKER_RANGE.borderOpacity * (inPeak ? 1 : 0.82));
 }
 
 function percent(value: number): `${number}%` {
@@ -81,6 +92,95 @@ interface PersonAnswer {
   name: string;
   spans: Array<{ startMs: number; endMs: number }>;
   isSelf: boolean;
+}
+
+/**
+ * The whole run of steps for one day as ONE shape.
+ *
+ * Each stretch used to be its own rounded View. Two things went wrong with
+ * that, and they compound: a percentage width is rounded to physical pixels per
+ * element, so neighbours land a fraction apart and the run tears open at every
+ * change of cover — and a corner radius on separate blocks rounds each one AWAY
+ * from its neighbour, so what should read as a staircase reads as loose tiles.
+ *
+ * One outline fixes both. The treads join because they are the same shape, and
+ * the corners can be softened without opening a notch. The per-stretch opacity
+ * survives because the rectangles carrying it are CLIPPED to the outline rather
+ * than being the outline.
+ */
+function Staircase({
+  id,
+  availability,
+  axis,
+  dayStart,
+  width,
+  height,
+  baseY,
+  stepArea,
+  highlighted,
+}: {
+  id: string;
+  availability: WindowAvailability;
+  axis: ReturnType<typeof sharedDayAxis>;
+  dayStart: number;
+  width: number;
+  height: number;
+  baseY: number;
+  stepArea: number;
+  highlighted: Array<{ startMs: number; endMs: number }>;
+}) {
+  const total = Math.max(1, availability.totalCount);
+  const inPeak = (startMs: number, endMs: number) =>
+    highlighted.some((slot) => startMs >= slot.startMs && endMs <= slot.endMs);
+
+  const steps: StaircaseStep[] = availability.segments.map((segment) => ({
+    startPx: axisFraction(segment.startMs, dayStart, axis) * width,
+    endPx: axisFraction(segment.endMs, dayStart, axis) * width,
+    height: segment.count > 0 ? Math.max(3, (segment.count / total) * stepArea) : 0,
+  }));
+  const paths = staircasePaths(steps, baseY, STEP_RADIUS);
+  if (paths.length === 0) return null;
+  const clipId = `stair-${id}`;
+
+  return (
+    <Svg width={width} height={height} style={StyleSheet.absoluteFill} pointerEvents="none">
+      <Defs>
+        <ClipPath id={clipId}>
+          {paths.map((d) => (
+            <Path key={d} d={d} />
+          ))}
+        </ClipPath>
+      </Defs>
+      <G clipPath={`url(#${clipId})`}>
+        {availability.segments.map((segment, index) => {
+          if (segment.count <= 0) return null;
+          const x = axisFraction(segment.startMs, dayStart, axis) * width;
+          const next = axisFraction(segment.endMs, dayStart, axis) * width;
+          // Half a pixel of overlap each side. The clip owns the silhouette, so
+          // this only removes the seam between neighbours.
+          return (
+            <Rect
+              key={`${segment.startMs}-${index}`}
+              x={x - 0.5}
+              y={0}
+              width={next - x + 1}
+              height={height}
+              fill={pickerFill(inPeak(segment.startMs, segment.endMs))}
+            />
+          );
+        })}
+      </G>
+      {paths.map((d) => (
+        <Path
+          key={`edge-${d}`}
+          d={d}
+          fill="none"
+          stroke={pickerBorder(true)}
+          strokeWidth={PICKER_RANGE.borderWidth}
+        />
+      ))}
+    </Svg>
+  );
 }
 
 /**
@@ -118,13 +218,20 @@ const PersonRow = memo(function PersonRow({
   });
 
   const barStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: fromOffset * (1 - local.value) }],
-    opacity: local.value,
+    opacity: 0.74 + 0.26 * local.value,
+    transform: [
+      { translateY: fromOffset * (1 - local.value) },
+      {
+        scaleY:
+          SOURCE_RIBBON_HEIGHT / PERSON_H +
+          (1 - SOURCE_RIBBON_HEIGHT / PERSON_H) * local.value,
+      },
+    ],
   }));
   // Names only once the piece has arrived — while it is still travelling it is
   // part of the shape it came from, not yet a labelled row.
   const nameStyle = useAnimatedStyle(() => ({
-    opacity: Math.max(0, (local.value - 0.62) / 0.38),
+    opacity: Math.max(0, (local.value - 0.68) / 0.32),
   }));
 
   return (
@@ -163,8 +270,10 @@ const PersonRow = memo(function PersonRow({
                   {
                     left: percent(left),
                     width: percent(right - left),
-                    backgroundColor: fillFor(person.isSelf ? 0.9 : 0.62, true),
-                    borderTopColor: AMBER_EDGE,
+                    backgroundColor: pickerFill(true),
+                    borderColor: pickerBorder(true),
+                    borderRadius: Math.min(PICKER_RANGE.radius, PERSON_H / 2),
+                    borderWidth: PICKER_RANGE.borderWidth,
                   },
                   barStyle,
                 ]}
@@ -195,7 +304,9 @@ export const TimeMatchingCard = memo(function TimeMatchingCard({
   const t = usePlanningColors();
   const reducedMotion = useReducedMotion();
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [detailId, setDetailId] = useState<string | null>(null);
   const [plotWidth, setPlotWidth] = useState(0);
+  const expandedRef = useRef<string | null>(null);
   const progress = useSharedValue(0);
 
   const ordered = useMemo(
@@ -220,24 +331,58 @@ export const TimeMatchingCard = memo(function TimeMatchingCard({
     [availabilityByWindow, ordered],
   );
   const summaries = useMemo(() => summariseHighlights(highlights), [highlights]);
+  const highlightsByWindow = useMemo(() => {
+    const map = new Map<string, Array<(typeof highlights)[number]['slot']>>();
+    highlights.forEach(({ windowId, slot }) => {
+      const current = map.get(windowId) ?? [];
+      current.push(slot);
+      map.set(windowId, current);
+    });
+    return map;
+  }, [highlights]);
 
-  useEffect(() => {
-    if (reducedMotion) {
-      progress.value = expandedId ? 1 : 0;
-      return;
-    }
-    progress.value = withDelay(
-      expandedId ? 60 : 0,
-      withTiming(expandedId ? 1 : 0, {
-        duration: expandedId ? 420 : 240,
-        easing: Easing.out(Easing.cubic),
-      }),
-    );
-  }, [expandedId, progress, reducedMotion]);
+  const finishCollapse = useCallback((windowId: string) => {
+    if (expandedRef.current !== null) return;
+    setDetailId((current) => (current === windowId ? null : current));
+  }, []);
 
-  // The aggregate stays behind its own decomposition, very faint, so the
-  // pieces visibly came from somewhere.
-  const ghostStyle = useAnimatedStyle(() => ({ opacity: 1 - 0.78 * progress.value }));
+  const toggleDay = useCallback(
+    (windowId: string) => {
+      if (expandedId === windowId) {
+        expandedRef.current = null;
+        setExpandedId(null);
+        if (reducedMotion) {
+          progress.value = 0;
+          setDetailId(null);
+          return;
+        }
+        progress.value = withTiming(
+          0,
+          { duration: 280, easing: Easing.inOut(Easing.cubic) },
+          (finished) => {
+            if (finished) runOnJS(finishCollapse)(windowId);
+          },
+        );
+        return;
+      }
+
+      expandedRef.current = windowId;
+      progress.value = 0;
+      setDetailId(windowId);
+      setExpandedId(windowId);
+      progress.value = reducedMotion
+        ? 1
+        : withDelay(55, withTiming(1, { duration: 460, easing: Easing.out(Easing.cubic) }));
+    },
+    [expandedId, finishCollapse, progress, reducedMotion],
+  );
+
+  // The aggregate remains whole for the first release beat, then recedes just
+  // enough that the material visibly becomes the individual ribbons.
+  const ghostStyle = useAnimatedStyle(() => {
+    const release = Math.max(0, Math.min(1, (progress.value - 0.12) / 0.88));
+    return { opacity: 1 - 0.78 * release };
+  });
 
   function answersFor(window: TimePlanWindow): PersonAnswer[] {
     const rows = members.map((member) => {
@@ -327,10 +472,13 @@ export const TimeMatchingCard = memo(function TimeMatchingCard({
         {ordered.map((window, dayIndex) => {
           const availability = availabilityByWindow.get(window.id);
           const expanded = expandedId === window.id;
+          const detailVisible = detailId === window.id;
           const dayStart = dayStartMs(window);
-          const best = availability?.best ?? null;
-          const stepArea = rowHeight - STEP_TOP_INSET;
-          const answers = expanded ? answersFor(window) : [];
+          const highlightedSlots = highlightsByWindow.get(window.id) ?? [];
+          const best = highlightedSlots[0] ?? availability?.best ?? null;
+          const stepArea = Math.max(12, Math.min(20, rowHeight - 14));
+          const chartBottom = Math.round((rowHeight - stepArea) / 2);
+          const answers = detailVisible ? answersFor(window) : [];
 
           return (
             <View key={window.id}>
@@ -347,7 +495,7 @@ export const TimeMatchingCard = memo(function TimeMatchingCard({
                 }`}
                 accessibilityHint="Zeigt die einzelnen Antworten."
                 hitSlop={Math.max(0, Math.round((MIN_TAP - rowHeight) / 2))}
-                onPress={() => setExpandedId(expanded ? null : window.id)}
+                onPress={() => toggleDay(window.id)}
                 style={[styles.dayRow, { height: rowHeight }]}
               >
                 <View style={[styles.dayLabelColumn, { width: LABEL_W }]}>
@@ -361,45 +509,37 @@ export const TimeMatchingCard = memo(function TimeMatchingCard({
                   </Text>
                 </View>
 
-                <Animated.View style={[styles.plot, expanded ? ghostStyle : null]}>
-                  {availability?.segments.map((segment) => {
-                    if (segment.count <= 0) return null;
-                    const share = segment.count / Math.max(1, availability.totalCount);
-                    const left = axisFraction(segment.startMs, dayStart, axis);
-                    const right = axisFraction(segment.endMs, dayStart, axis);
-                    const inPeak =
-                      best != null && segment.startMs >= best.startMs && segment.endMs <= best.endMs;
-                    return (
-                      <View
-                        key={`${segment.startMs}-${segment.endMs}`}
-                        style={[
-                          styles.step,
-                          {
-                            left: percent(left),
-                            width: percent(right - left),
-                            height: Math.max(3, share * stepArea),
-                            backgroundColor: fillFor(share, inPeak),
-                            borderTopColor: inPeak ? AMBER_EDGE : 'rgba(243, 200, 133, 0.55)',
-                          },
-                        ]}
-                      />
-                    );
-                  })}
-
-                  {best ? (
-                    <PeakBracket
+                <Animated.View style={[styles.plot, detailVisible ? ghostStyle : null]}>
+                  {plotWidth > 0 && availability ? (
+                    <Staircase
+                      id={`${window.id}-${dayIndex}`}
+                      availability={availability}
                       axis={axis}
                       dayStart={dayStart}
-                      best={best}
-                      total={availability?.totalCount ?? 0}
+                      width={plotWidth}
+                      height={rowHeight}
+                      baseY={rowHeight - chartBottom}
                       stepArea={stepArea}
-                      plotWidth={plotWidth}
+                      highlighted={highlightedSlots}
                     />
                   ) : null}
+
+                  {highlightedSlots.map((slot) => (
+                    <PeakCount
+                      key={`${slot.startMs}-${slot.endMs}`}
+                      axis={axis}
+                      best={slot}
+                      dayStart={dayStart}
+                      plotWidth={plotWidth}
+                      chartTop={rowHeight - chartBottom - stepArea}
+                      stepArea={stepArea}
+                      total={availability?.totalCount ?? 0}
+                    />
+                  ))}
                 </Animated.View>
               </Pressable>
 
-              {expanded
+              {detailVisible
                 ? answers.map((person, index) => (
                     <PersonRow
                       key={person.uid}
@@ -409,7 +549,13 @@ export const TimeMatchingCard = memo(function TimeMatchingCard({
                       progress={progress}
                       index={index}
                       reducedMotion={reducedMotion}
-                      fromOffset={-(PERSON_H + index * (PERSON_H + PERSON_GAP))}
+                      fromOffset={
+                        Math.max(
+                          rowHeight - chartBottom - stepArea + 1,
+                          rowHeight - chartBottom - (index + 1) * SOURCE_RIBBON_HEIGHT,
+                        ) -
+                        (rowHeight + PERSON_GAP + index * (PERSON_H + PERSON_GAP))
+                      }
                     />
                   ))
                 : null}
@@ -448,15 +594,14 @@ export const TimeMatchingCard = memo(function TimeMatchingCard({
   );
 });
 
-/** Start, end and top of the peak, as a bracket over the amber that is already
- * there. It marks where the peak begins and ends; it never fills. */
-function PeakBracket({
+function PeakCount({
   axis,
   dayStart,
   best,
   total,
   stepArea,
   plotWidth,
+  chartTop,
 }: {
   axis: ReturnType<typeof sharedDayAxis>;
   dayStart: number;
@@ -464,6 +609,7 @@ function PeakBracket({
   total: number;
   stepArea: number;
   plotWidth: number;
+  chartTop: number;
 }) {
   const left = axisFraction(best.startMs, dayStart, axis);
   const right = axisFraction(best.endMs, dayStart, axis);
@@ -471,25 +617,25 @@ function PeakBracket({
   const height = Math.max(3, share * stepArea);
   const widthPx = (right - left) * plotWidth;
 
+  if (widthPx < 34 || height < 13) return null;
+
   return (
-    <View
+    <Text
       pointerEvents="none"
+      numberOfLines={1}
+      maxFontSizeMultiplier={TEXT_CAPPED.maxFontSizeMultiplier}
+      allowFontScaling={TEXT_CAPPED.allowFontScaling}
       style={[
-        styles.peak,
-        { left: percent(left), width: percent(right - left), height, borderColor: AMBER_PEAK },
+        styles.peakCount,
+        {
+          left: percent(left),
+          width: percent(right - left),
+          top: chartTop + stepArea - height + 3,
+        },
       ]}
     >
-      {widthPx >= 34 && height >= 13 ? (
-        <Text
-          numberOfLines={1}
-          maxFontSizeMultiplier={TEXT_CAPPED.maxFontSizeMultiplier}
-          allowFontScaling={TEXT_CAPPED.allowFontScaling}
-          style={styles.peakCount}
-        >
-          {best.count}/{total}
-        </Text>
-      ) : null}
-    </View>
+      {best.count}/{total}
+    </Text>
   );
 }
 
@@ -518,29 +664,27 @@ const styles = StyleSheet.create({
   hairline: { height: StyleSheet.hairlineWidth, marginLeft: LABEL_W },
 
   dayRow: { alignItems: 'stretch', flexDirection: 'row' },
-  dayLabelColumn: { justifyContent: 'flex-end', paddingBottom: 2 },
+  dayLabelColumn: { justifyContent: 'center' },
   dayLabel: { fontFamily: FONT.semibold, fontSize: TYPE.caption.fontSize },
-  step: { borderTopWidth: 1, bottom: 3, position: 'absolute' },
-  peak: {
-    borderLeftWidth: 1,
-    borderRightWidth: 1,
-    borderTopWidth: 1,
-    bottom: 3,
-    position: 'absolute',
-  },
   peakCount: {
     color: '#3A2A10',
     fontFamily: FONT.semibold,
     fontSize: TYPE.micro.fontSize - 2,
+    position: 'absolute',
     textAlign: 'center',
-    top: 1,
+    zIndex: 2,
   },
 
   personRow: { alignItems: 'stretch', flexDirection: 'row', height: PERSON_H, marginTop: PERSON_GAP },
   personLabel: { justifyContent: 'center', width: LABEL_W },
   personName: { fontFamily: FONT.medium, fontSize: TYPE.micro.fontSize - 2 },
   personNameSelf: { fontFamily: FONT.semibold },
-  personBar: { borderRadius: 2, borderTopWidth: 1, bottom: 0, position: 'absolute', top: 0 },
+  personBar: {
+    bottom: 0,
+    position: 'absolute',
+    top: 0,
+    zIndex: 3,
+  },
   personEmpty: { alignSelf: 'center', fontFamily: FONT.medium, fontSize: TYPE.micro.fontSize - 2, left: 0, position: 'absolute' },
 
   lock: {

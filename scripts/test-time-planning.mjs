@@ -50,6 +50,7 @@ const {
 } = load('availability');
 const { sharedDayAxis, axisFraction, axisHourMarks, dayStartMs, formatAxisMinutes } =
   load('dayAxis');
+const { staircaseRuns, staircasePoints, roundedPolygonPath, staircasePaths } = load('staircase');
 
 let checks = 0;
 function check(name, run) {
@@ -432,6 +433,69 @@ check('marks stay inside the axis', () => {
 
 check('a zero-width row asks for no marks', () => {
   assert.deepEqual(axisHourMarks(sharedDayAxis([windowAt('w1', 21, 18, 23)]), 0), []);
+});
+
+console.log('\nstaircase');
+
+const step = (startPx, endPx, height) => ({ startPx, endPx, height });
+
+check('touching stretches stay ONE run — that is what closes the gaps', () => {
+  const runs = staircaseRuns([step(0, 40, 10), step(40, 90, 20), step(90, 120, 5)]);
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].length, 3);
+});
+
+check('a stretch nobody can make breaks the run', () => {
+  const runs = staircaseRuns([step(0, 40, 10), step(40, 60, 0), step(60, 90, 15)]);
+  assert.equal(runs.length, 2);
+  assert.equal(runs[0][0].endPx, 40);
+  assert.equal(runs[1][0].startPx, 60);
+});
+
+check('a real hole in the x-range breaks the run too', () => {
+  assert.equal(staircaseRuns([step(0, 40, 10), step(55, 90, 10)]).length, 2);
+});
+
+check('the outline walks base, treads and risers in order', () => {
+  const points = staircasePoints([step(0, 40, 10), step(40, 90, 20)], 30);
+  assert.deepEqual(points, [
+    { x: 0, y: 30 },
+    { x: 0, y: 20 },
+    { x: 40, y: 20 },
+    { x: 40, y: 20 },
+    { x: 40, y: 10 },
+    { x: 90, y: 10 },
+    { x: 90, y: 30 },
+  ]);
+});
+
+check('the outline is closed and starts and ends on the baseline', () => {
+  const points = staircasePoints([step(10, 50, 8)], 24);
+  assert.equal(points[0].y, 24);
+  assert.equal(points[points.length - 1].y, 24);
+  assert.equal(points[0].x, 10);
+  assert.equal(points[points.length - 1].x, 50);
+});
+
+check('rounding never eats a short tread or a low step', () => {
+  const path = roundedPolygonPath(staircasePoints([step(0, 3, 4)], 20), 3);
+  const ys = [...path.matchAll(/-?\d+(?:\.\d+)?,(-?\d+(?:\.\d+)?)/g)].map((m) => Number(m[1]));
+  assert.ok(Math.min(...ys) >= 16, 'the top edge must survive');
+  assert.ok(Math.max(...ys) <= 20, 'nothing may drop below the baseline');
+});
+
+check('a path is emitted per run, and each one closes', () => {
+  const paths = staircasePaths([step(0, 40, 10), step(40, 60, 0), step(60, 90, 15)], 30, 3);
+  assert.equal(paths.length, 2);
+  paths.forEach((path) => {
+    assert.ok(path.startsWith('M'));
+    assert.ok(path.endsWith('Z'));
+  });
+});
+
+check('nothing is emitted for an empty or fully uncovered window', () => {
+  assert.deepEqual(staircasePaths([], 30, 3), []);
+  assert.deepEqual(staircasePaths([step(0, 40, 0)], 30, 3), []);
 });
 
 console.log(`\n${checks} checks passed.\n`);
