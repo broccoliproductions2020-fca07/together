@@ -128,6 +128,7 @@ function Staircase({
   baseY,
   stepArea,
   highlighted,
+  peak,
 }: {
   id: string;
   availability: WindowAvailability;
@@ -138,7 +139,12 @@ function Staircase({
   baseY: number;
   stepArea: number;
   highlighted: Array<{ startMs: number; endMs: number }>;
+  /** This row's own strongest stretch, outlined so the rows can be compared
+   * by eye. Separate from {@link highlighted}, which is the winning window
+   * across ALL rows and marks itself through the stronger fill. */
+  peak: { startMs: number; endMs: number; count: number } | null;
 }) {
+  const t = usePlanningColors();
   const total = Math.max(1, availability.totalCount);
   const inPeak = (startMs: number, endMs: number) =>
     highlighted.some((slot) => startMs >= slot.startMs && endMs <= slot.endMs);
@@ -151,6 +157,19 @@ function Staircase({
   const paths = staircasePaths(steps, baseY, STEP_RADIUS);
   if (paths.length === 0) return null;
   const clipId = `stair-${id}`;
+
+  // Derived from the same expressions as the steps above, never measured
+  // separately — a second rounding is how an outline ends up half a pixel off
+  // the shape it is supposed to trace.
+  const peakRect = (() => {
+    if (!peak || peak.count <= 0) return null;
+    const x = axisFraction(peak.startMs, dayStart, axis) * width;
+    const right = axisFraction(peak.endMs, dayStart, axis) * width;
+    const w = right - x;
+    if (w < 1) return null;
+    const h = Math.max(3, (peak.count / total) * stepArea);
+    return { x, y: baseY - h, width: w, height: h, radius: Math.min(STEP_RADIUS, w / 2, h / 2) };
+  })();
 
   return (
     <Svg width={width} height={height} style={StyleSheet.absoluteFill} pointerEvents="none">
@@ -189,6 +208,19 @@ function Staircase({
           strokeWidth={PICKER_RANGE.borderWidth}
         />
       ))}
+      {peakRect ? (
+        <Rect
+          x={peakRect.x}
+          y={peakRect.y}
+          width={peakRect.width}
+          height={peakRect.height}
+          rx={peakRect.radius}
+          ry={peakRect.radius}
+          fill="none"
+          stroke={t.peakOutline}
+          strokeWidth={PICKER_RANGE.borderWidth}
+        />
+      ) : null}
     </Svg>
   );
 }
@@ -485,7 +517,10 @@ export const TimeMatchingCard = memo(function TimeMatchingCard({
           const detailVisible = detailId === window.id;
           const dayStart = dayStartMs(window);
           const highlightedSlots = highlightsByWindow.get(window.id) ?? [];
-          const best = highlightedSlots[0] ?? availability?.best ?? null;
+          // The row's OWN maximum — what the outline traces, what the number
+          // states and what the screen reader reads. The winning window across
+          // all rows is a different fact and keeps its own, stronger fill.
+          const best = availability?.best ?? null;
           const stepArea = Math.max(12, Math.min(20, rowHeight - 14));
           const chartBottom = Math.round((rowHeight - stepArea) / 2);
           const answers = detailVisible ? answersFor(window) : [];
@@ -531,21 +566,21 @@ export const TimeMatchingCard = memo(function TimeMatchingCard({
                       baseY={rowHeight - chartBottom}
                       stepArea={stepArea}
                       highlighted={highlightedSlots}
+                      peak={best}
                     />
                   ) : null}
 
-                  {highlightedSlots.map((slot) => (
+                  {best ? (
                     <PeakCount
-                      key={`${slot.startMs}-${slot.endMs}`}
                       axis={axis}
-                      best={slot}
+                      best={best}
                       dayStart={dayStart}
                       plotWidth={plotWidth}
                       chartTop={rowHeight - chartBottom - stepArea}
                       stepArea={stepArea}
                       total={availability?.totalCount ?? 0}
                     />
-                  ))}
+                  ) : null}
                 </Animated.View>
               </Pressable>
 
@@ -622,6 +657,7 @@ function PeakCount({
   plotWidth: number;
   chartTop: number;
 }) {
+  const t = usePlanningColors();
   const left = axisFraction(best.startMs, dayStart, axis);
   const right = axisFraction(best.endMs, dayStart, axis);
   const share = best.count / Math.max(1, total);
@@ -639,6 +675,7 @@ function PeakCount({
       style={[
         styles.peakCount,
         {
+          color: t.peakLabel,
           left: percent(left),
           width: percent(right - left),
           top: chartTop + stepArea - height + 3,
@@ -678,7 +715,6 @@ const styles = StyleSheet.create({
   dayLabelColumn: { justifyContent: 'center' },
   dayLabel: { fontFamily: FONT.semibold, fontSize: TYPE.caption.fontSize },
   peakCount: {
-    color: '#3A2A10',
     fontFamily: FONT.semibold,
     fontSize: TYPE.micro.fontSize - 2,
     position: 'absolute',

@@ -899,6 +899,27 @@ kein fixes Datum, bis der Host einen Slot festzurrt.
   GANZE Fenster, die Kurve fällt innerhalb eines Vorschlags also nie auf null und
   deckt seine Breite bereits exakt ab. Ein gezeichneter Rahmen würde nur wiederholen,
   was die Form zeigt.
+- **Jede Zeile nennt ihr EIGENES Maximum — Zahl und Rahmen, genau einmal.** Nicht zu
+  verwechseln mit der Regel darüber: die verbietet einen Rahmen um den ganzen
+  *Vorschlag*, weil er nichts sagt, was die Form nicht schon zeigt. Der Peak ist ein
+  Ausschnitt daraus und wird bisher nur durch eine um 22 % kräftigere Füllung
+  markiert. Der Grund ist gemessen: die gesamte Treppenhöhe ist 12–20 px
+  (`stepArea`), bei 18 Antworten ist eine Person also **1,1 px** — die Höhe kann
+  „15 von 18" und „16 von 18" nicht mehr trennen, und die Deckkraft trägt dieselbe
+  Zahl. Vorher stand die Zahl NUR in der Gewinnerzeile, alle anderen Tage waren
+  unbeziffert; genau der Vergleich, zu dem die gemeinsame Achse einlädt, war damit
+  nicht zu machen. Also: `availability.best` pro Zeile → ein `x/y` in der höchsten
+  Stufe plus ein Hairline-Rechteck in exakt deren Höhe, Breite und `STEP_RADIUS`.
+  Beides wird aus DENSELBEN Ausdrücken abgeleitet wie die Stufen (ein zweites
+  Runden setzt den Umriss um Halbpixel neben die Form, die er nachzeichnen soll).
+  Die stärkere Füllung bleibt auf dem globalen Sieger — Füllung = „die Empfehlung",
+  Rahmen = „das Beste dieser Zeile", zwei Kanäle für zwei Fakten. Bei Gleichstand
+  innerhalb einer Zeile gewinnt der dokumentierte `bestSlot`-Rang, damit es bei
+  genau einer Zahl pro Zeile bleibt. **Der Rahmen ist Tinte bzw. Papier
+  (`peakOutline`), nie Amber** — Amber ist schon Bedienelement UND Daten, eine
+  dritte Amber-Linie läge als weitere Messung obendrauf statt als Markierung
+  darüber. Aus demselben Grund ist die Zahl (`peakLabel`) themenabhängig: sie steht
+  auf der Füllung, und die kippt zwischen den Modi von hellem Sand zu dunklem Oliv.
 - **Farben: drei, je eine Aufgabe** (`planningTheme.ts`). Violett = Identität („das ist
   eine Planungsrunde", dasselbe Violett wie `GROUP_CHAT_ACCENT`). **Amber = das
   BEDIENELEMENT** — die Schiene des Hosts und dein eigener Balken darin, in der

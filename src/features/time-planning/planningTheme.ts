@@ -82,6 +82,11 @@ export interface PlanningSurfaceColors {
    * same availability differently in odd and even rows. At this strength the
    * shift is about two values per channel — felt, not seen. */
   band: string;
+  /** Hairline around a row's own strongest stretch. */
+  peakOutline: string;
+  /** The count drawn INSIDE that stretch, so it is read against the amber
+   * fill and not against the card. */
+  peakLabel: string;
   /** Readable ON the violet CTA. */
   onAccent: string;
 }
@@ -108,6 +113,21 @@ export function usePlanningColors(): PlanningSurfaceColors {
       track: colors.background,
       handle: colors.foreground,
       band: dark ? 'rgba(255,255,255,0.045)' : 'rgba(20,33,28,0.035)',
+      /**
+       * The outline around a row's own best stretch. Deliberately NOT amber:
+       * amber is the control and the data, so a third amber line would read as
+       * more of the same measurement instead of a mark laid on top of it. Ink
+       * on light, paper on dark — the one pair that stays neutral against a
+       * translucent amber fill in both schemes.
+       */
+      peakOutline: dark ? 'rgba(255,255,255,0.78)' : 'rgba(16,22,20,0.66)',
+      /**
+       * Read against the amber FILL, which inverts between the schemes: pale
+       * sand in light, dark olive in dark. A single hard-coded ink therefore
+       * cannot work — it was '#3A2A10' for both, and in dark that is dark
+       * brown on dark olive.
+       */
+      peakLabel: dark ? '#F2E3C6' : '#3A2A10',
       onAccent: '#FFFFFF',
     }),
     [colors, dark],
