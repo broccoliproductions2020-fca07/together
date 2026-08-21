@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
@@ -18,10 +18,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { ProposalData } from '@/features/chat';
 import { useAuth } from '@/features/auth';
-import type { MapSelection, MarkerAvatar } from '@/features/map/types/map.types';
-import { markerModeStyles } from '@/features/map/utils/markerStyles';
+import { useThemeColors } from '@/features/theme';
+import type { MapCoordinate, MapSelection, MarkerAvatar } from '@/features/map/types/map.types';
+import { colorWithAlpha, markerModeStyles } from '@/features/map/utils/markerStyles';
 import { PressableScale } from '@/shared/components/PressableScale';
 
+import { FloatingSheet } from './FloatingSheet';
 import { ActivityContent } from './markerDetail/ActivityContent';
 import { ActivityParticipantsContent } from './markerDetail/ActivityParticipantsContent';
 import { PlaceContent } from './markerDetail/PlaceContent';
@@ -56,6 +58,15 @@ export interface MarkerDetailSheetProps {
   onCancel?: () => void;
   /** Skip the close transition when its marker must immediately play a pop-off. */
   instantClose?: boolean;
+  /**
+   * Where the shown marker currently sits on screen, so the card can grow out
+   * of it and shrink back into it. Supplied by the map, which is the only
+   * thing that can answer it — a marker is a native image, not a node to
+   * measure. Absent (or answering `null`) simply means the card grows from its
+   * own base, which is what the browser preview and every selection without a
+   * pin get.
+   */
+  projectCoordinate?: (coordinate: MapCoordinate) => Promise<{ x: number; y: number } | null>;
   /** How much of the map this sheet currently covers, in px. The camera needs
    * it to centre a selection in the VISIBLE map, not behind the sheet. */
   onHeightChange?: (height: number) => void;
@@ -80,12 +91,14 @@ export function MarkerDetailSheet({
   onLeave,
   onCancel,
   instantClose = false,
+  projectCoordinate,
   onHeightChange,
   onClose,
   onOpenPlannedActivity,
 }: MarkerDetailSheetProps) {
   const insets = useSafeAreaInsets();
-  const { height: windowHeight } = useWindowDimensions();
+  const themeColors = useThemeColors();
+  const { height: windowHeight, width: windowWidth } = useWindowDimensions();
   const [mounted, setMounted] = useState(visible);
   const [shownSelection, setShownSelection] = useState<MapSelection | null>(selection);
   const [chatExpanded, setChatExpanded] = useState(false);
@@ -155,6 +168,47 @@ export function MarkerDetailSheet({
   const chatMode = Boolean(activitySelection) && joined && chatExpanded && !participantView;
   const keyboardPadding = useKeyboardPadding(0, chatMode);
 
+  /**
+   * Roughly a marker's own footprint. The card starts at that size and with a
+   * matching corner radius, so the first frames read as the marker growing
+   * rather than as a rectangle appearing on top of it.
+   */
+  const MARKER_ORIGIN = 56;
+  const originCoordinate =
+    shownSelection && 'targetCoordinate' in shownSelection
+      ? shownSelection.targetCoordinate
+      : shownSelection && 'coordinate' in shownSelection
+        ? shownSelection.coordinate
+        : undefined;
+  const originLat = originCoordinate?.latitude;
+  const originLng = originCoordinate?.longitude;
+  /**
+   * Asked fresh on the way in AND on the way out — never cached. Between the
+   * two the user may have panned, and a card shrinking into the spot the
+   * marker USED to occupy is worse than one that simply settles.
+   */
+  const resolveOrigin = useCallback(async () => {
+    if (!projectCoordinate || originLat == null || originLng == null) return null;
+    const point = await projectCoordinate({ latitude: originLat, longitude: originLng });
+    if (!point) return null;
+    // A marker off the visible map is no origin: the card would fly in from
+    // beyond the edge, which reads as an object entering from nowhere rather
+    // than as this marker opening. Growing from its own base is the honest
+    // answer — the same one a selection without a pin gets.
+    const onScreen =
+      point.x >= -MARKER_ORIGIN &&
+      point.y >= -MARKER_ORIGIN &&
+      point.x <= windowWidth + MARKER_ORIGIN &&
+      point.y <= windowHeight + MARKER_ORIGIN;
+    if (!onScreen) return null;
+    return {
+      x: point.x - MARKER_ORIGIN / 2,
+      y: point.y - MARKER_ORIGIN / 2,
+      width: MARKER_ORIGIN,
+      height: MARKER_ORIGIN,
+    };
+  }, [originLat, originLng, projectCoordinate, windowHeight, windowWidth]);
+
   // Sits with the other pre-return derivations: a drill-in left open must not
   // survive onto the next round the user taps.
   useEffect(() => {
@@ -216,6 +270,232 @@ export function MarkerDetailSheet({
       runOnJS(setChatFullscreen)(target === CHAT_SNAP_HIGH);
     });
 
+  const sheetSurface = themeColors.card;
+  const sheetBorder = themeColors.border;
+  /** Reads against the card, which is near-white in light mode — the sheet's
+   * default grabber is tuned for the dark composer and vanishes there. */
+  const sheetGrabber = colorWithAlpha(themeColors.foreground, 0.22);
+
+  /* Soft mode tint fading from the top edge — a gradient, never a hard
+     edged block, so the tint cannot cut across content. Handed to the
+     sheet as its surface layer so it also covers the grabber strip and
+     the bottom inset, not just the content. */
+  const modeWash = activitySelection ? (
+    <View
+        pointerEvents="none"
+        style={{
+          borderTopLeftRadius: 30,
+          borderTopRightRadius: 30,
+          height: 110,
+          left: 0,
+          overflow: 'hidden',
+          position: 'absolute',
+          right: 0,
+          top: 0,
+        }}
+      >
+        <Svg width="100%" height="100%">
+          <Defs>
+            <LinearGradient id="sheet-mode-wash" x1="0" y1="0" x2="0" y2="1">
+              <Stop
+                offset="0"
+                stopColor={markerModeStyles[activitySelection.mode].color}
+                stopOpacity={0.1}
+              />
+              <Stop
+                offset="1"
+                stopColor={markerModeStyles[activitySelection.mode].color}
+                stopOpacity={0}
+              />
+            </LinearGradient>
+          </Defs>
+          <Rect x="0" y="0" width="100%" height="100%" fill="url(#sheet-mode-wash)" />
+        </Svg>
+      </View>
+  ) : null;
+
+  const body = (
+    <>
+      {planningDrillIn ? (
+        <View className="mb-3 flex-row items-center gap-3 pr-12">
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Zurück zur Übersicht"
+            className="h-10 w-10 items-center justify-center rounded-full bg-secondary/80"
+            haptic={false}
+            onPress={() => setPlanningView('summary')}
+          >
+            <Ionicons name="chevron-back" size={22} color={closeIconColor} />
+          </PressableScale>
+          <View className="flex-1">
+            <Text className="text-xl font-bold text-foreground">
+              {planningView === 'members' ? 'Teilnehmer' : 'Terminfindung'}
+            </Text>
+          </View>
+        </View>
+      ) : null}
+
+      {participantView ? (
+        <View className="mb-3 flex-row items-center gap-3 pr-12">
+          <PressableScale
+            accessibilityRole="button"
+            accessibilityLabel="Zurück zu den Activity-Details"
+            className="h-10 w-10 items-center justify-center rounded-full bg-secondary/80"
+            haptic={false}
+            onPress={() => setActivityView('detail')}
+          >
+            <Ionicons name="chevron-back" size={22} color={closeIconColor} />
+          </PressableScale>
+          <View className="flex-1">
+            <Text className="text-xl font-bold text-foreground">Teilnehmer</Text>
+            <Text className="mt-0.5 text-sm text-muted-foreground">
+              {activitySelection?.participantCount}
+              {activitySelection?.maxParticipants
+                ? ` von ${activitySelection.maxParticipants}`
+                : ''}{' '}
+              dabei
+            </Text>
+          </View>
+        </View>
+      ) : null}
+
+      {/* Chat mode drops the floating close: back leads to the details and a
+          backdrop tap still closes everything — one control per intention. */}
+      {!chatMode ? (
+        <PressableScale
+          accessibilityRole="button"
+          accessibilityLabel="Detail schließen"
+          className="absolute right-5 top-4 z-10 h-10 w-10 items-center justify-center rounded-full bg-secondary/80"
+          haptic={false}
+          onPress={onClose}
+        >
+          <Ionicons name="close" size={20} color={closeIconColor} />
+        </PressableScale>
+      ) : null}
+
+      {(() => {
+        const content =
+          participantView && activitySelection ? (
+            <ActivityParticipantsContent
+              selection={activitySelection}
+              currentUid={user?.id}
+              joined={joined}
+              onOpenProfile={setSelectedParticipant}
+            />
+          ) : activitySelection ? (
+            <ActivityContent
+              selection={activitySelection}
+              joined={joined}
+              joining={joining}
+              chatExpanded={chatExpanded}
+              canEdit={canEdit}
+              onJoin={onJoin}
+              onEdit={onEdit}
+              onStartRoute={onStartRoute}
+              onExpandChat={expandChat}
+              onCollapseChat={collapseChat}
+              onOpenParticipants={() => setActivityView('participants')}
+              onFocusJourney={onFocusJourney}
+              onCreateActivity={onCreateActivity}
+              onLeave={onLeave}
+              onCancel={onCancel}
+            />
+          ) : shownSelection.type === 'Planning' ? (
+            <PlanningContent
+              selection={shownSelection}
+              onOpenActivity={onOpenPlannedActivity}
+              onClose={onClose}
+              view={planningView}
+              onOpenMembers={() => setPlanningView('members')}
+              onOpenMatching={() => setPlanningView('full')}
+            />
+          ) : shownSelection.type === 'Place' ? (
+            <PlaceContent
+              selection={shownSelection}
+              onCreateAtSelection={onCreateAtSelection}
+              onOpenInMaps={onOpenInMaps}
+              onStartRoute={onStartRoute}
+            />
+          ) : (
+            <>
+              <Text className="text-2xl font-bold text-foreground">{shownSelection.title}</Text>
+              {/* Only when there IS an address — an empty line still carries
+                  its top margin and leaves a gap under the name. */}
+              {shownSelection.subtitle ? (
+                <Text className="mt-2 text-base text-muted-foreground">
+                  {shownSelection.subtitle}
+                </Text>
+              ) : null}
+            </>
+          );
+
+        // Chat mode manages its own height + inner scroll. The participant
+        // list scrolls itself (content-sized, capped). Everything else is
+        // capped here so long content scrolls instead of clipping.
+        if (chatMode) return <View className="flex-1">{content}</View>;
+        if (participantView) return content;
+        return (
+          <ScrollView
+            style={{ maxHeight: windowHeight * 0.72 }}
+            contentContainerStyle={{ paddingBottom: 4 }}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            {content}
+          </ScrollView>
+        );
+      })()}
+      {activitySelection ? (
+        <ParticipantProfileSheet
+          visible={selectedParticipant != null}
+          participant={selectedParticipant}
+          activityId={activitySelection.id}
+          activityTitle={activitySelection.title}
+          joined={joined}
+          onClose={() => setSelectedParticipant(null)}
+        />
+      ) : null}
+    </>
+  );
+
+  /**
+   * The overview is a floating card that grows out of its marker; the chat is a
+   * resizable working surface. Two different things, so two different shells —
+   * and the chat keeps the old one deliberately: `FloatingSheet` is
+   * content-sized with a ceiling, while the chat drags between 60 % and 92 %
+   * with its own snap physics on the very grabber `FloatingSheet` claims for
+   * dismissal. The floating margin would be wrong there too: a card may look
+   * light, a working surface needs the whole width.
+   *
+   * Crossing over closes the card WITHOUT its exit morph (`instantClose`) —
+   * the chat opens in the same frame and grows from the height the card just
+   * reported, so a flight back to the marker in between would be a detour
+   * nobody asked for.
+   */
+  if (!chatMode) {
+    return (
+      <FloatingSheet
+        visible={visible}
+        onRequestClose={onClose}
+        resolveOrigin={resolveOrigin}
+        instantClose={instantClose}
+        onHeightChange={(covered) => {
+          sheetHeight.value = covered;
+          onHeightChange?.(covered);
+        }}
+        surfaceColor={sheetSurface}
+        borderColor={sheetBorder}
+        grabberColor={sheetGrabber}
+        originColor={colorWithAlpha(closeIconColor, 0.16)}
+        originBorderColor={colorWithAlpha(closeIconColor, 0.72)}
+        accessibilityLabel={shownSelection.title}
+        surfaceLayer={modeWash}
+      >
+        <View className="px-5">{body}</View>
+      </FloatingSheet>
+    );
+  }
+
   return (
     <GestureHandlerRootView
       pointerEvents="box-none"
@@ -264,41 +544,7 @@ export function MarkerDetailSheet({
           ]}
           pointerEvents={visible ? 'auto' : 'none'}
         >
-          {/* Soft mode tint fading from the top edge — a gradient instead of a
-              hard-edged color block, so the tint never cuts across content. */}
-          {activitySelection ? (
-            <View
-              pointerEvents="none"
-              style={{
-                borderTopLeftRadius: 30,
-                borderTopRightRadius: 30,
-                height: 110,
-                left: 0,
-                overflow: 'hidden',
-                position: 'absolute',
-                right: 0,
-                top: 0,
-              }}
-            >
-              <Svg width="100%" height="100%">
-                <Defs>
-                  <LinearGradient id="sheet-mode-wash" x1="0" y1="0" x2="0" y2="1">
-                    <Stop
-                      offset="0"
-                      stopColor={markerModeStyles[activitySelection.mode].color}
-                      stopOpacity={0.1}
-                    />
-                    <Stop
-                      offset="1"
-                      stopColor={markerModeStyles[activitySelection.mode].color}
-                      stopOpacity={0}
-                    />
-                  </LinearGradient>
-                </Defs>
-                <Rect x="0" y="0" width="100%" height="100%" fill="url(#sheet-mode-wash)" />
-              </Svg>
-            </View>
-          ) : null}
+          {modeWash}
 
           {/* Drag zone: generous hit area around the handle. In chat mode it
               resizes the sheet between the snap points; a decisive downward
@@ -332,145 +578,7 @@ export function MarkerDetailSheet({
             </View>
           </GestureDetector>
 
-          {planningDrillIn ? (
-            <View className="mb-3 flex-row items-center gap-3 pr-12">
-              <PressableScale
-                accessibilityRole="button"
-                accessibilityLabel="Zurück zur Übersicht"
-                className="h-10 w-10 items-center justify-center rounded-full bg-secondary/80"
-                haptic={false}
-                onPress={() => setPlanningView('summary')}
-              >
-                <Ionicons name="chevron-back" size={22} color={closeIconColor} />
-              </PressableScale>
-              <View className="flex-1">
-                <Text className="text-xl font-bold text-foreground">
-                  {planningView === 'members' ? 'Teilnehmer' : 'Terminfindung'}
-                </Text>
-              </View>
-            </View>
-          ) : null}
-
-          {participantView ? (
-            <View className="mb-3 flex-row items-center gap-3 pr-12">
-              <PressableScale
-                accessibilityRole="button"
-                accessibilityLabel="Zurück zu den Activity-Details"
-                className="h-10 w-10 items-center justify-center rounded-full bg-secondary/80"
-                haptic={false}
-                onPress={() => setActivityView('detail')}
-              >
-                <Ionicons name="chevron-back" size={22} color={closeIconColor} />
-              </PressableScale>
-              <View className="flex-1">
-                <Text className="text-xl font-bold text-foreground">Teilnehmer</Text>
-                <Text className="mt-0.5 text-sm text-muted-foreground">
-                  {activitySelection?.participantCount}
-                  {activitySelection?.maxParticipants
-                    ? ` von ${activitySelection.maxParticipants}`
-                    : ''}{' '}
-                  dabei
-                </Text>
-              </View>
-            </View>
-          ) : null}
-
-          {/* Chat mode drops the floating close: back leads to the details and a
-              backdrop tap still closes everything — one control per intention. */}
-          {!chatMode ? (
-            <PressableScale
-              accessibilityRole="button"
-              accessibilityLabel="Detail schließen"
-              className="absolute right-5 top-4 z-10 h-10 w-10 items-center justify-center rounded-full bg-secondary/80"
-              haptic={false}
-              onPress={onClose}
-            >
-              <Ionicons name="close" size={20} color={closeIconColor} />
-            </PressableScale>
-          ) : null}
-
-          {(() => {
-            const content =
-              participantView && activitySelection ? (
-                <ActivityParticipantsContent
-                  selection={activitySelection}
-                  currentUid={user?.id}
-                  joined={joined}
-                  onOpenProfile={setSelectedParticipant}
-                />
-              ) : activitySelection ? (
-                <ActivityContent
-                  selection={activitySelection}
-                  joined={joined}
-                  joining={joining}
-                  chatExpanded={chatExpanded}
-                  canEdit={canEdit}
-                  onJoin={onJoin}
-                  onEdit={onEdit}
-                  onStartRoute={onStartRoute}
-                  onExpandChat={expandChat}
-                  onCollapseChat={collapseChat}
-                  onOpenParticipants={() => setActivityView('participants')}
-                  onFocusJourney={onFocusJourney}
-                  onCreateActivity={onCreateActivity}
-                  onLeave={onLeave}
-                  onCancel={onCancel}
-                />
-              ) : shownSelection.type === 'Planning' ? (
-                <PlanningContent
-                  selection={shownSelection}
-                  onOpenActivity={onOpenPlannedActivity}
-                  onClose={onClose}
-                  view={planningView}
-                  onOpenMembers={() => setPlanningView('members')}
-                  onOpenMatching={() => setPlanningView('full')}
-                />
-              ) : shownSelection.type === 'Place' ? (
-                <PlaceContent
-                  selection={shownSelection}
-                  onCreateAtSelection={onCreateAtSelection}
-                  onOpenInMaps={onOpenInMaps}
-                  onStartRoute={onStartRoute}
-                />
-              ) : (
-                <>
-                  <Text className="text-2xl font-bold text-foreground">{shownSelection.title}</Text>
-                  {/* Only when there IS an address — an empty line still carries
-                      its top margin and leaves a gap under the name. */}
-                  {shownSelection.subtitle ? (
-                    <Text className="mt-2 text-base text-muted-foreground">
-                      {shownSelection.subtitle}
-                    </Text>
-                  ) : null}
-                </>
-              );
-
-            // Chat mode manages its own height + inner scroll. The participant
-            // list scrolls itself (content-sized, capped). Everything else is
-            // capped here so long content scrolls instead of clipping.
-            if (chatMode) return <View className="flex-1">{content}</View>;
-            if (participantView) return content;
-            return (
-              <ScrollView
-                style={{ maxHeight: windowHeight * 0.72 }}
-                contentContainerStyle={{ paddingBottom: 4 }}
-                showsVerticalScrollIndicator={false}
-                keyboardShouldPersistTaps="handled"
-              >
-                {content}
-              </ScrollView>
-            );
-          })()}
-          {activitySelection ? (
-            <ParticipantProfileSheet
-              visible={selectedParticipant != null}
-              participant={selectedParticipant}
-              activityId={activitySelection.id}
-              activityTitle={activitySelection.title}
-              joined={joined}
-              onClose={() => setSelectedParticipant(null)}
-            />
-          ) : null}
+          {body}
         </Animated.View>
       </Animated.View>
     </GestureHandlerRootView>

@@ -96,6 +96,10 @@ export interface FloatingSheetProps {
   /** The sheet's resting surface. */
   surfaceColor?: string;
   borderColor?: string;
+  /** The grabber reads against the SURFACE, so it cannot be one constant: the
+   * default is tuned for the dark composer and all but disappears on a light
+   * card. */
+  grabberColor?: string;
   /** The origin's colours, so the morph starts looking like the control it came from. */
   originColor?: string;
   originBorderColor?: string;
@@ -148,6 +152,7 @@ export function FloatingSheet({
   instantClose = false,
   surfaceColor = '#0B1016',
   borderColor = 'rgba(255,255,255,0.10)',
+  grabberColor = 'rgba(255,255,255,0.22)',
   originColor = 'rgba(59,130,246,0.16)',
   originBorderColor = 'rgba(59,130,246,0.72)',
   maxHeightFraction = FLOATING_SHEET.maxHeightFraction,
@@ -438,7 +443,7 @@ export function FloatingSheet({
             >
               <View
                 style={{
-                  backgroundColor: 'rgba(255,255,255,0.22)',
+                  backgroundColor: grabberColor,
                   borderRadius: 2,
                   height: 4,
                   width: 40,

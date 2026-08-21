@@ -1,3 +1,4 @@
+import type { Ref } from 'react';
 import { useEffect, useState } from 'react';
 import {
   Pressable,
@@ -56,7 +57,22 @@ export interface HeimwegMapMarker {
   subLabel?: string;
 }
 
+/**
+ * The one thing the map exposes upward: where a coordinate currently sits on
+ * screen.
+ *
+ * Deliberately nothing else. A sheet that wants to grow out of a marker needs
+ * a screen rect, and a marker is a native image the renderer owns — there is
+ * no node to measure. Everything ABOUT the sheet stays outside the map: no
+ * selection state, no sheet logic, no new state at all. The browser preview
+ * answers `null`, which is a real answer meaning "grow from your own base".
+ */
+export interface MapCanvasHandle {
+  projectCoordinate: (coordinate: MapCoordinate) => Promise<{ x: number; y: number } | null>;
+}
+
 export interface PreviewMapCanvasProps {
+  ref?: Ref<MapCanvasHandle>;
   /** Native map only: show the device's own-location dot and its heading cone.
    * The browser preview deliberately has no device sensor layer. */
   showsOwnLocation?: boolean;

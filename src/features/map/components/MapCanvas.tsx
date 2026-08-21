@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react';
 import { Platform, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
 import MapView, {
   Marker,
@@ -243,6 +243,31 @@ function markerSettleDuration(
  */
 export function MapCanvas(props: PreviewMapCanvasProps) {
   const mapRef = useRef<MapView | null>(null);
+
+  /**
+   * Screen position of a coordinate, for hosts that need to anchor something to
+   * a marker — a detail sheet growing out of the one that was tapped.
+   *
+   * Asked live rather than cached, because the answer is only true for the
+   * CURRENT camera: between opening and closing a sheet the map may have
+   * panned, rotated or tilted. The renderer can also reject projection while it
+   * is busy, which is why this resolves to `null` instead of throwing — a null
+   * origin is already a meaningful answer everywhere it is consumed.
+   */
+  useImperativeHandle(
+    props.ref,
+    () => ({
+      projectCoordinate: async (coordinate) => {
+        try {
+          const point = await mapRef.current?.pointForCoordinate(coordinate);
+          return point && Number.isFinite(point.x) && Number.isFinite(point.y) ? point : null;
+        } catch {
+          return null;
+        }
+      },
+    }),
+    [props.ref],
+  );
   const regionRef = useRef<Region>(DEFAULT_MAP_REGION);
   const zoomingRef = useRef(false);
   const settlingZoomRef = useRef(false);

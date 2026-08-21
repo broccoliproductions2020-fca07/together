@@ -68,6 +68,7 @@ import {
   showLocationPermissionAlert,
 } from '@/shared/utils/locationPermission';
 
+import type { MapCanvasHandle } from '../components/PreviewMapCanvas';
 import { MapCanvas } from '../components/MapCanvas';
 import { MapLocationPickerOverlay } from '../components/MapLocationPickerOverlay';
 import { useMapBoot } from '../MapBootProvider';
@@ -342,6 +343,17 @@ export function MapScreen({
   const [locationPermissionGranted, setLocationPermissionGranted] = useState(false);
   const [locationBootstrapActive, setLocationBootstrapActive] = useState(false);
   const [mapRendererReady, setMapRendererReady] = useState(false);
+  /**
+   * The map's single exposed capability, forwarded to the detail sheet so its
+   * card can grow out of the marker that was tapped. Nothing about the sheet
+   * lives in the map; the map only answers where a coordinate currently is.
+   */
+  const mapCanvasRef = useRef<MapCanvasHandle | null>(null);
+  const projectCoordinate = useCallback(
+    async (coordinate: MapCoordinate) =>
+      (await mapCanvasRef.current?.projectCoordinate(coordinate)) ?? null,
+    [],
+  );
   const realNearby = useMemo(
     () => presenceToNearby(openFriends, myLocation),
     [openFriends, myLocation],
@@ -1862,6 +1874,7 @@ export function MapScreen({
   return (
     <View style={{ flex: 1 }} className="bg-background">
       <MapCanvas
+        ref={mapCanvasRef}
         // A granted foreground permission is the only prerequisite for the
         // native source. It starts under the boot curtain, never with a prompt.
         onMapReady={() => {
@@ -2184,6 +2197,7 @@ export function MapScreen({
           />
 
           <MarkerDetailSheet
+            projectCoordinate={projectCoordinate}
             onOpenPlannedActivity={(activityId: string) => openActivityWhenKnown(activityId)}
             selection={displayedSelection}
             visible={Boolean(selection)}
