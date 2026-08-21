@@ -51,6 +51,7 @@ const {
 const { sharedDayAxis, axisFraction, axisHourMarks, dayStartMs, formatAxisMinutes } =
   load('dayAxis');
 const { staircaseRuns, staircasePoints, roundedPolygonPath, staircasePaths } = load('staircase');
+const { groupAnswers, ANSWER_LIST_LIMIT } = load('answerGroups');
 
 let checks = 0;
 function check(name, run) {
@@ -496,6 +497,103 @@ check('a path is emitted per run, and each one closes', () => {
 check('nothing is emitted for an empty or fully uncovered window', () => {
   assert.deepEqual(staircasePaths([], 30, 3), []);
   assert.deepEqual(staircasePaths([step(0, 40, 0)], 30, 3), []);
+});
+
+console.log('\ngroupAnswers');
+
+function answered(uid, spans) {
+  return member(uid, 'member', { w1: spans });
+}
+
+check('identical answers collapse into one line', () => {
+  const w = windowAt('w1', 21, 18, 23);
+  const whole = [{ startsAt: at(21, 18), endsAt: at(21, 23) }];
+  const groups = groupAnswers(w, [
+    answered('a', whole),
+    answered('b', whole),
+    answered('c', whole),
+  ]);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].kind, 'whole');
+  assert.equal(groups[0].count, 3);
+});
+
+check('a late start becomes "erst ab", an early end "nur bis"', () => {
+  const w = windowAt('w1', 21, 18, 23);
+  const groups = groupAnswers(w, [
+    answered('a', [{ startsAt: at(21, 20), endsAt: at(21, 23) }]),
+    answered('b', [{ startsAt: at(21, 18), endsAt: at(21, 20) }]),
+  ]);
+  const from = groups.find((group) => group.kind === 'from');
+  const until = groups.find((group) => group.kind === 'until');
+  assert.equal(from.startMs, Date.parse(at(21, 20)));
+  assert.equal(until.endMs, Date.parse(at(21, 20)));
+});
+
+check('a slice inside the window keeps both ends', () => {
+  const w = windowAt('w1', 21, 18, 23);
+  const [group] = groupAnswers(w, [answered('a', [{ startsAt: at(21, 19), endsAt: at(21, 21) }])]);
+  assert.equal(group.kind, 'range');
+  assert.equal(group.startMs, Date.parse(at(21, 19)));
+  assert.equal(group.endMs, Date.parse(at(21, 21)));
+});
+
+check('a split answer is not a pattern, it is "other"', () => {
+  const w = windowAt('w1', 21, 18, 23);
+  const [group] = groupAnswers(w, [
+    answered('a', [
+      { startsAt: at(21, 18), endsAt: at(21, 19) },
+      { startsAt: at(21, 21), endsAt: at(21, 23) },
+    ]),
+  ]);
+  assert.equal(group.kind, 'other');
+});
+
+check('largest group first', () => {
+  const w = windowAt('w1', 21, 18, 23);
+  const whole = [{ startsAt: at(21, 18), endsAt: at(21, 23) }];
+  const late = [{ startsAt: at(21, 20), endsAt: at(21, 23) }];
+  const groups = groupAnswers(w, [
+    answered('a', late),
+    answered('b', whole),
+    answered('c', whole),
+    answered('d', whole),
+  ]);
+  assert.equal(groups[0].kind, 'whole');
+  assert.equal(groups[0].count, 3);
+  assert.equal(groups[1].count, 1);
+});
+
+check('"nobody can" is never merged away and stays last', () => {
+  const w = windowAt('w1', 21, 18, 23);
+  const spread = [19, 20, 21, 22].map((hour, index) =>
+    answered(`p${index}`, [{ startsAt: at(21, hour), endsAt: at(21, 23) }]),
+  );
+  const groups = groupAnswers(w, [...spread, answered('x', []), answered('y', [])], 3);
+  const none = groups[groups.length - 1];
+  assert.equal(none.kind, 'none');
+  assert.equal(none.count, 2);
+});
+
+check('everything past the limit collapses into one rest line', () => {
+  const w = windowAt('w1', 21, 18, 23);
+  const spread = [19, 20, 21, 22].map((hour, index) =>
+    answered(`p${index}`, [{ startsAt: at(21, hour), endsAt: at(21, 23) }]),
+  );
+  const groups = groupAnswers(w, spread, 3);
+  assert.equal(groups.length, 3);
+  const total = groups.reduce((sum, group) => sum + group.count, 0);
+  assert.equal(total, 4, 'nobody may be lost in the merge');
+});
+
+check('an unanswered member is not grouped at all', () => {
+  const w = windowAt('w1', 21, 18, 23);
+  const groups = groupAnswers(w, [member('a', 'member', {}, 'pending')]);
+  assert.deepEqual(groups, []);
+});
+
+check('the listing threshold is a dozen', () => {
+  assert.equal(ANSWER_LIST_LIMIT, 12);
 });
 
 console.log(`\n${checks} checks passed.\n`);

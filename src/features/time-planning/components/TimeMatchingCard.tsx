@@ -28,6 +28,7 @@ import {
 } from '../utils/availability';
 import { axisHourMarks, formatAxisMinutes, sharedDayAxis, axisFraction, dayStartMs } from '../utils/dayAxis';
 import { staircasePaths, type StaircaseStep } from '../utils/staircase';
+import { ANSWER_LIST_LIMIT, groupAnswers, type AnswerGroup } from '../utils/answerGroups';
 import {
   bestAcrossWindows,
   clockLabel,
@@ -67,6 +68,17 @@ const AMBER = PICKER_RANGE.color;
 
 const LABEL_W = 58;
 const AXIS_LABEL_H = 15;
+/**
+ * Person rows follow the same idea as the day rows: comfortable while there
+ * are few, tighter as they multiply — and a floor, because below this a band
+ * stops being a band and a bar stops being a surface. Past
+ * {@link ANSWER_LIST_LIMIT} the rows give way to grouped patterns entirely, so
+ * this never has to shrink further.
+ */
+function personRowHeight(count: number): number {
+  return count <= 6 ? 16 : 14;
+}
+
 const PERSON_H = 12;
 const PERSON_GAP = 3;
 /** Rows can drop to 32 dp; the touch target must not. */
@@ -199,6 +211,7 @@ const PersonRow = memo(function PersonRow({
   fromOffset,
   index,
   reducedMotion,
+  rowH,
 }: {
   person: PersonAnswer;
   window: TimePlanWindow;
@@ -207,6 +220,7 @@ const PersonRow = memo(function PersonRow({
   fromOffset: number;
   index: number;
   reducedMotion: boolean;
+  rowH: number;
 }) {
   const t = usePlanningColors();
   const dayStart = dayStartMs(window);
@@ -223,8 +237,7 @@ const PersonRow = memo(function PersonRow({
       { translateY: fromOffset * (1 - local.value) },
       {
         scaleY:
-          SOURCE_RIBBON_HEIGHT / PERSON_H +
-          (1 - SOURCE_RIBBON_HEIGHT / PERSON_H) * local.value,
+          SOURCE_RIBBON_HEIGHT / rowH + (1 - SOURCE_RIBBON_HEIGHT / rowH) * local.value,
       },
     ],
   }));
@@ -235,7 +248,7 @@ const PersonRow = memo(function PersonRow({
   }));
 
   return (
-    <View style={styles.personRow}>
+    <View style={[styles.personRow, { height: rowH }]}>
       <Animated.View style={[styles.personLabel, nameStyle]}>
         <Text
           numberOfLines={1}
@@ -250,16 +263,14 @@ const PersonRow = memo(function PersonRow({
           {person.name}
         </Text>
       </Animated.View>
-      <View style={styles.plot}>
-        {person.spans.length === 0 ? (
-          <Animated.Text
-            {...TEXT_CAPPED}
-            style={[styles.personEmpty, { color: t.muted }, nameStyle]}
-          >
-            kann nicht
-          </Animated.Text>
-        ) : (
-          person.spans.map((span) => {
+      {/* The band IS the row. A banded row with nothing in it says "cannot" by
+          having a definite extent and nothing inside — clearer than a label
+          stranded at the left edge, and it doubles as the thing that stops the
+          eye slipping between rows. */}
+      <View style={[styles.plot, { backgroundColor: index % 2 === 0 ? t.band : 'transparent' }]}>
+        {person.spans.length === 0
+          ? null
+          : person.spans.map((span) => {
             const left = axisFraction(span.startMs, dayStart, axis);
             const right = axisFraction(span.endMs, dayStart, axis);
             return (
@@ -279,12 +290,72 @@ const PersonRow = memo(function PersonRow({
                 ]}
               />
             );
-          })
-        )}
+            })}
       </View>
     </View>
   );
 });
+
+/** "erst ab 20:00", "nur bis 19:30", "den ganzen Zeitraum" — the pattern, not
+ * the people. Singular is spelled out because "1 können" reads as a bug. */
+function describeGroup(group: AnswerGroup): string {
+  const verb = group.count === 1 ? 'kann' : 'können';
+  switch (group.kind) {
+    case 'whole':
+      return `${verb} den ganzen Zeitraum`;
+    case 'from':
+      return `${verb} erst ab ${clockLabel(group.startMs ?? 0)}`;
+    case 'until':
+      return `${verb} nur bis ${clockLabel(group.endMs ?? 0)}`;
+    case 'range':
+      return `${verb} ${clockLabel(group.startMs ?? 0)}–${clockLabel(group.endMs ?? 0)}`;
+    case 'other':
+      return `${verb} zu anderen Zeiten`;
+    default:
+      return `${verb} nicht`;
+  }
+}
+
+/**
+ * One pattern in a round too large to list.
+ *
+ * There is nothing to decompose here — the aggregate does not become these
+ * lines the way it becomes individual bars — so they simply arrive rather than
+ * travelling out of the shape above.
+ */
+function AnswerGroupRow({
+  group,
+  progress,
+  reducedMotion,
+}: {
+  group: AnswerGroup;
+  progress: SharedValue<number>;
+  reducedMotion: boolean;
+}) {
+  const t = usePlanningColors();
+  const style = useAnimatedStyle(() =>
+    reducedMotion ? { opacity: 1 } : { opacity: progress.value },
+  );
+
+  return (
+    <Animated.View style={[styles.groupRow, style]}>
+      <Text
+        maxFontSizeMultiplier={TEXT_CAPPED.maxFontSizeMultiplier}
+        allowFontScaling={TEXT_CAPPED.allowFontScaling}
+        style={[styles.groupCount, { color: t.text }]}
+      >
+        {group.count}
+      </Text>
+      <Text
+        numberOfLines={1}
+        {...TEXT_FLEXIBLE}
+        style={[styles.groupLabel, { color: t.muted }]}
+      >
+        {describeGroup(group)}
+      </Text>
+    </Animated.View>
+  );
+}
 
 export const TimeMatchingCard = memo(function TimeMatchingCard({
   windows,
@@ -316,6 +387,9 @@ export const TimeMatchingCard = memo(function TimeMatchingCard({
   const axis = useMemo(() => sharedDayAxis(ordered), [ordered]);
   const marks = useMemo(() => axisHourMarks(axis, plotWidth), [axis, plotWidth]);
   const rowHeight = dayRowHeight(ordered.length);
+  const personH = personRowHeight(members.length);
+  /** Past a dozen answers the individual rows stop being read. */
+  const grouped = members.length >= ANSWER_LIST_LIMIT;
 
   const availabilityByWindow = useMemo(() => {
     const map = new Map<string, WindowAvailability>();
@@ -539,7 +613,20 @@ export const TimeMatchingCard = memo(function TimeMatchingCard({
                 </Animated.View>
               </Pressable>
 
-              {detailVisible
+              {detailVisible && grouped
+                ? // Too many answers to read one by one: the patterns behind
+                  // them are what is still worth knowing at that size.
+                  groupAnswers(window, members).map((group) => (
+                    <AnswerGroupRow
+                      key={`${group.kind}-${group.startMs ?? ''}-${group.endMs ?? ''}`}
+                      group={group}
+                      progress={progress}
+                      reducedMotion={reducedMotion}
+                    />
+                  ))
+                : null}
+
+              {detailVisible && !grouped
                 ? answers.map((person, index) => (
                     <PersonRow
                       key={person.uid}
@@ -549,12 +636,13 @@ export const TimeMatchingCard = memo(function TimeMatchingCard({
                       progress={progress}
                       index={index}
                       reducedMotion={reducedMotion}
+                      rowH={personH}
                       fromOffset={
                         Math.max(
                           rowHeight - chartBottom - stepArea + 1,
                           rowHeight - chartBottom - (index + 1) * SOURCE_RIBBON_HEIGHT,
                         ) -
-                        (rowHeight + PERSON_GAP + index * (PERSON_H + PERSON_GAP))
+                        (rowHeight + PERSON_GAP + index * (personH + PERSON_GAP))
                       }
                     />
                   ))
@@ -675,6 +763,15 @@ const styles = StyleSheet.create({
     zIndex: 2,
   },
 
+  groupRow: { alignItems: 'baseline', flexDirection: 'row', gap: 8, minHeight: 18 },
+  groupCount: {
+    fontFamily: FONT.semibold,
+    fontSize: TYPE.caption.fontSize,
+    fontVariant: ['tabular-nums'],
+    textAlign: 'right',
+    width: LABEL_W,
+  },
+  groupLabel: { flex: 1, fontFamily: FONT.medium, fontSize: TYPE.caption.fontSize },
   personRow: { alignItems: 'stretch', flexDirection: 'row', height: PERSON_H, marginTop: PERSON_GAP },
   personLabel: { justifyContent: 'center', width: LABEL_W },
   personName: { fontFamily: FONT.medium, fontSize: TYPE.micro.fontSize - 2 },

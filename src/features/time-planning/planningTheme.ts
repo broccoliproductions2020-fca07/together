@@ -77,6 +77,11 @@ export interface PlanningSurfaceColors {
   cardBorder: string;
   track: string;
   handle: string;
+  /** Zebra band behind a person's row. Deliberately far below the border
+   * token: the bars over it are translucent, so a strong band would tint the
+   * same availability differently in odd and even rows. At this strength the
+   * shift is about two values per channel — felt, not seen. */
+  band: string;
   /** Readable ON the violet CTA. */
   onAccent: string;
 }
@@ -102,6 +107,7 @@ export function usePlanningColors(): PlanningSurfaceColors {
       cardBorder: colors.border,
       track: colors.background,
       handle: colors.foreground,
+      band: dark ? 'rgba(255,255,255,0.045)' : 'rgba(20,33,28,0.035)',
       onAccent: '#FFFFFF',
     }),
     [colors, dark],

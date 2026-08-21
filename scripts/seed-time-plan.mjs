@@ -275,10 +275,68 @@ async function main() {
     ),
   );
 
+  // ── 3. A round too big to list. Above ANSWER_LIST_LIMIT the card groups the
+  // answers into patterns instead of drawing a row per person, and that path
+  // only shows up with enough people to trip it.
+  const crowdWindows = windowsFor('tpcrowd', [
+    [2, 18, 23],
+    [5, 10, 16],
+  ]);
+  const crowdExpire = Math.max(...crowdWindows.map((w) => Date.parse(w.endsAt))) + RETENTION_MS;
+  const crowdId = 'timePlan_seed_crowd';
+  const crowd = Array.from({ length: 17 }, (_, index) => ({
+    uid: `seed-crowd-${index + 1}`,
+    displayName: `Person ${index + 1}`,
+    initials: `P${index + 1}`,
+  }));
+  batch.set(db.doc(`timePlans/${crowdId}`), {
+    hostId: me.uid,
+    hostName: me.displayName,
+    hostInitials: me.initials,
+    title: 'Sommerfest',
+    place: { ...PLACE, label: 'Tempelhofer Feld', latitude: 52.5265, longitude: 13.3985 },
+    sourceWindows: crowdWindows,
+    revision: 1,
+    status: 'collecting',
+    audienceUids: [me.uid, ...crowd.map((person) => person.uid)],
+    memberUids: [me.uid, ...crowd.map((person) => person.uid)],
+    createdAt: ts(now - 3 * HOUR),
+    updatedAt: ts(now - 10 * 60 * 1000),
+    expireAt: ts(crowdExpire),
+  });
+  batch.set(
+    db.doc(`timePlans/${crowdId}/timePlanMembers/${me.uid}`),
+    memberDoc(me, 'host', Object.fromEntries(crowdWindows.map((w) => [w.id, whole(w)])), crowdExpire),
+  );
+  // A deliberate spread: most can all evening, a block arrives late, a few
+  // leave early, two cannot make it at all.
+  crowd.forEach((person, index) => {
+    const evening = crowdWindows[0];
+    const day = crowdWindows[1];
+    let first;
+    if (index < 9) first = whole(evening);
+    else if (index < 14) first = part(evening, 120, 300);
+    else if (index < 15) first = part(evening, 0, 120);
+    else first = [];
+    batch.set(
+      db.doc(`timePlans/${crowdId}/timePlanMembers/${person.uid}`),
+      memberDoc(
+        person,
+        'member',
+        {
+          [evening.id]: first,
+          [day.id]: index % 3 === 0 ? whole(day) : part(day, 60, 360),
+        },
+        crowdExpire,
+      ),
+    );
+  });
+
   await batch.commit();
   console.log(`Terminfindungen angelegt für ${me.displayName} (${me.uid}):`);
   console.log(`  • ${invitedId} — du bist EINGELADEN (Antwortkarten, Postfach-Eintrag)`);
   console.log(`  • ${hostedId} — du bist HOST (Übersicht, Auffächern, Festlegen)`);
+  console.log(`  • ${crowdId} — 18 Antworten, Übersicht fasst zusammen statt aufzulisten`);
   await app.delete();
 }
 
