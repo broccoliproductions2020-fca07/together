@@ -179,6 +179,22 @@ export function FloatingSheet({
   const originW = useSharedValue(0);
   const originH = useSharedValue(0);
   const originR = useSharedValue(0);
+  /**
+   * Where the sheet RESTS, as animated values rather than as the plain numbers
+   * they are derived from.
+   *
+   * Content that changes size while the sheet is open — a fanned-out row, a
+   * drill-in, a longer list — re-measures on every frame of its own layout
+   * animation. Interpolating straight to the derived number meant each of
+   * those frames snapped the sheet to a new height through a React re-render:
+   * a card growing smoothly inside a container that stepped after it. Springing
+   * these instead keeps the resize on the UI thread and turns the steps into
+   * one movement.
+   */
+  const restHeight = useSharedValue(0);
+  const restTop = useSharedValue(0);
+  /** False until the first measurement has been placed without animating. */
+  const restSettledRef = useRef(false);
 
   const { inset, screenRadius } = FLOATING_SHEET;
   const radius = concentricRadius(screenRadius, inset);
@@ -325,6 +341,23 @@ export function FloatingSheet({
     progress.value = reducedMotion ? 1 : withSpring(1, MOTION.sheet);
   }, [contentHeight, progress, reducedMotion]);
 
+  useEffect(() => {
+    if (!mounted) {
+      restSettledRef.current = false;
+      return;
+    }
+    // The first placement of an open must be instant: springing from zero would
+    // play a resize the user never asked for, on top of the entry morph.
+    if (!restSettledRef.current || reducedMotion) {
+      restHeight.value = targetHeight;
+      restTop.value = targetTop;
+      restSettledRef.current = contentHeight > 0;
+      return;
+    }
+    restHeight.value = withSpring(targetHeight, MOTION.settle);
+    restTop.value = withSpring(targetTop, MOTION.settle);
+  }, [contentHeight, mounted, reducedMotion, restHeight, restTop, targetHeight, targetTop]);
+
   /**
    * Reported from the settled geometry, never from the animation: `targetTop`
    * is where the sheet comes to rest, so this is stable while the morph and the
@@ -362,13 +395,13 @@ export function FloatingSheet({
   const containerStyle = useAnimatedStyle(() => {
     const p = progress.value;
     const width = interpolate(p, [0, 1], [originW.value, targetWidth]);
-    const height = interpolate(p, [0, 1], [originH.value, targetHeight]);
+    const height = interpolate(p, [0, 1], [originH.value, restHeight.value]);
     // Scaled by the morph so a sheet opening with the keyboard already up grows
     // from its origin and arrives lifted, rather than starting above the origin.
     const lift = avoidKeyboard ? Math.min(Math.abs(keyboardHeight.value), maxLift) * p : 0;
     return {
       left: interpolate(p, [0, 1], [originX.value, targetLeft]),
-      top: interpolate(p, [0, 1], [originY.value, targetTop]) + dragY.value - lift,
+      top: interpolate(p, [0, 1], [originY.value, restTop.value]) + dragY.value - lift,
       width,
       height,
       borderRadius: interpolate(p, [0, 1], [originR.value, radius]),
