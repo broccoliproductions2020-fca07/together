@@ -1,6 +1,5 @@
 export { TimePlanContent } from './components/TimePlanContent';
 export { PlanningOfferFields } from './components/PlanningOfferFields';
-export { TimeMatchingCard } from './components/TimeMatchingCard';
 export { timePlanningService } from './services/timePlanningService';
 export { useInvitedTimePlans } from './useInvitedTimePlans';
 export { timePlansToMapMarkers } from './utils/planMarkers';
@@ -14,8 +13,6 @@ export {
   AVAILABILITY_LEVELS,
 } from './utils/availability';
 export type { AvailabilitySegment, BestSlot, WindowAvailability } from './utils/availability';
-export { axisFraction, axisHourMarks, formatAxisMinutes, sharedDayAxis } from './utils/dayAxis';
-export type { DayAxis } from './utils/dayAxis';
 export { timePlanCreateInputFromDraft } from './utils/timePlanDraft';
 export type {
   TimePlan,

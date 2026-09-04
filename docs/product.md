@@ -23,9 +23,10 @@ notice and coordinate a real meeting without becoming a public social feed.
 - **Profile:** account, privacy, notification and appearance controls.
 - **Friends and Circles:** confirmed friendships and private visibility lists.
 
-Socialize is not mounted or released in the current app. Its server callable
-surface remains disabled until it has a deliberate product, safety and data
-retention release decision.
+Socialize was removed from the client (September 2026, `v2-discovery`). Its server
+callables remain deployed behind `SOCIALIZE_ENABLED = false` and reject every call;
+they are dead weight, not a feature. The last working client lives in the tag
+`v1-social`.
 
 ## Backend contract
 

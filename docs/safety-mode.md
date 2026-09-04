@@ -17,7 +17,7 @@ Prominenz, nicht Präsenz: erlaubt ist ein stilles Chrome-Element, nie eine schr
   bleibt als Identitätsanker außen in der Ecke (Plattform-Konvention); die Leiste bleibt
   symmetrisch und das Suchfeld mittig. Gleiche Optik wie der Kalender-Button. Bei minimierter
   eigener Session pulsiert ein Ring in der eigenen Statusfarbe; bei reduzierter Bewegung bleibt
-  er statisch. Kalender und Socialize bekommen KEINEN eigenen Button.
+  er statisch. Die Kalenderkarte bekommt KEINEN eigenen Button.
 - **Ein Element, eine Bedeutung (Revision Juli 2026):** Der **Schild** ist AUSSCHLIESSLICH der
   eigene Heimweg — Ruhezustand → Start-Sheet, eigene Session → Konsole/Panel. Er wechselt seine
   Funktion NIE danach, was andere tun (das Muskelgedächtnis im Bedarfsmoment darf nicht brechen:
@@ -31,8 +31,8 @@ Prominenz, nicht Präsenz: erlaubt ist ein stilles Chrome-Element, nie eine schr
   beim Hinschauen; Blau langsam atmend, Orange/Rot schnell, reduzierte Bewegung statisch) → Tap
   öffnet den Heimweg-Fokus. Im Fall-3-Fokus wird sie zur ruhigen „Heimweg-Fokus verlassen"-Pille;
   das Fall-2-Panel verlässt man über sein Minimieren-Chevron. Eigene Session minimiert ohne
-  fremde Heimwege → Rückweg in die Konsole (wichtig auf Kalender/Socialize, wo es keinen Schild
-  gibt).
+  fremde Heimwege → Rückweg in die Konsole (wichtig bei offener Kalenderkarte, wo der Schild verdeckt
+  sein kann).
 - Das Begleitungs-Sheet dient ausschließlich dem empfangenen Heimweg. Der eigene Start bleibt
   konsequent am Schild; so enthält das Sheet keine konkurrierende zweite Aufgabe.
 - Es gibt keine zusätzlichen dauerhaften Heimweg-Zeilen in Activities oder im Offen-Sheet.
@@ -66,9 +66,9 @@ ein Filter über der immer gemounteten Hauptkarte (Akku-Argument). Drei Fälle:
 3. **Nur empfangen:** Vollbild-Fokus ohne Panel; rein über die pulsierende Status-Pille, raus
    über deren „Heimweg-Fokus verlassen"-Zustand.
 
-Öffnet sich Fokus/Panel aus Kalender oder Socialize, dreht die App **still zuerst auf die
-Karten-Ebene** (MainSurface), damit das Richtige durchscheint; beim Verlassen bleibt man auf der
-Karte. Der Mode-Switch (Karte/Socialize-Pille) ist im Fokus ausgeblendet.
+Es gibt keine zweite Ebene mehr, auf die `MainSurface` drehen müsste: Der Kalender ist eine
+Karte über der Karte, und `MapScreen` schließt beim Aktivieren des Fokus nur diese Karte. Der
+frühere Mode-Switch ist gelöscht.
 
 ## Start und Empfänger
 

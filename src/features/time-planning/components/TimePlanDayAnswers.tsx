@@ -23,8 +23,8 @@ import { clockLabel } from '../utils/matchingSummary';
  *
  * The poll model people already know: the overview counts per option, and one
  * option opens into the individual answers. This replaces the stacked
- * staircase as the way availability is read (September 2026) — the staircase
- * lives on in `TimeMatchingCard`, which is no longer mounted anywhere.
+ * staircase as the way availability is read (September 2026); the staircase and
+ * `TimeMatchingCard` are deleted.
  *
  * What makes it work is that it does NOT mark the people who differ. Everyone
  * who said "Passt" gets the identical full-width bar, so somebody who narrowed

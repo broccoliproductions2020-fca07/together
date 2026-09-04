@@ -22,8 +22,8 @@ import { TimePlanDayAnswers } from './TimePlanDayAnswers';
  *
  * The poll model people already know — a count and a bar per option, tap an
  * option to see who is behind it. It replaced the stacked staircase in
- * September 2026 as the ONLY overview (`TimeMatchingCard` still exists and is
- * no longer mounted). The staircase was not wrong, but it was a second machine
+ * September 2026 as the ONLY overview (`TimeMatchingCard` is deleted). The
+ * staircase was not wrong, but it was a second machine
  * for the same question: two cards with different titles, different layouts
  * and a switch between them, so someone who saw both saw two features.
  *

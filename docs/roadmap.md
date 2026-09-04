@@ -28,7 +28,8 @@ project.
 
 ## Deliberately deferred
 
-- Socialize remains disabled until its product scope, moderation, retention and
-  existing-data migration plan are approved together.
+- Socialize is deleted from the client (September 2026). The server callables stay
+  disabled behind `SOCIALIZE_ENABLED = false`; remove them on the next functions
+  deploy. Reviving it means rebuilding the surface, not re-enabling a flag.
 - New always-on listeners, permanent chat history, public rankings and hidden
   location tracking are outside the product contract.

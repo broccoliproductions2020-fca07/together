@@ -25,7 +25,7 @@ import { STATUS_COLOR, worstStatus } from '../safetyTheme';
  *    something to watch and you are not watching it"), tap → Heimweg-Fokus.
  *  - Fall-3 focus open → calm exit pill back to the normal map.
  *  - Own session minimised without shared walks → way back into the console
- *    (matters on calendar/socialize, where there is no shield).
+ *    (matters with the calendar card open, where the shield can be covered).
  * Hidden while the console panel/modal is open — those show everything.
  */
 export function SafetyStatusPill({

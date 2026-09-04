@@ -441,7 +441,7 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
 
   // Friend presence is only map chrome. Keep the own open-status write-through
   // above alive everywhere, but do not keep paying for friend updates while the
-  // permanently-mounted map layer is hidden behind Calendar or Socialize.
+  // permanently-mounted map layer is hidden behind the calendar card.
   useEffect(() => {
     const accountUid = actor.uid;
     setOpenFriends([]);
