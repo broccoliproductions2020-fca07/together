@@ -14,9 +14,10 @@ type IoniconName = ComponentProps<typeof Ionicons>['name'];
  */
 export type CoreStatus = 'idle' | 'open' | 'now' | 'soon';
 
-export type CoreTargetId = 'search' | 'activity' | 'postfach' | 'calendar';
+export type CoreTargetId = 'search' | 'nearby' | 'activity' | 'postfach' | 'calendar';
 
-/** The activity sub-level. Exactly the two creatable modes; `open` is presence. */
+/** Start choices. `open` stays presence; only `now` and `soon` open the composer. */
+/** The two creatable activity modes. Open remains the Core's own tap action. */
 export type CoreActivityId = 'now' | 'soon';
 
 /**
@@ -43,8 +44,8 @@ export interface CoreTarget {
  * that moves depending on what is going on destroys the muscle memory that is
  * the whole point of a radial menu.
  *
- * The four specified areas stay in this exact order. Nearby friends remain a
- * separate, always-visible map pill rather than competing with personal actions.
+ * The five areas stay in this exact order. Nearby lives here now, so the map has
+ * one unmistakable bottom-centre gateway instead of a second floating control.
  */
 export const CORE_ROOT_TARGETS: readonly CoreTarget[] = [
   {
@@ -54,12 +55,18 @@ export const CORE_ROOT_TARGETS: readonly CoreTarget[] = [
     icon: 'search',
   },
   {
+    id: 'nearby',
+    label: 'Freunde',
+    accessibilityLabel: 'Offene Freunde in deiner Nähe',
+    icon: 'people-outline',
+  },
+  {
     id: 'activity',
-    label: 'Aktivität',
-    accessibilityLabel: 'Neue Aktivität',
+    label: 'Starten',
+    accessibilityLabel: 'Activity jetzt oder für später starten',
     // The core itself is the one-tap Open control. A second plus here made the
     // two actions look like the same thing.
-    icon: 'flash-outline',
+    icon: 'add-circle-outline',
   },
   {
     id: 'postfach',
@@ -120,9 +127,8 @@ export const CORE_ACTIVITY_TARGETS: readonly CoreActivityTarget[] = [
 ] as const;
 
 /**
- * Arc geometry. The root spread keeps four targets a comfortable thumb-angle
- * apart; the sub-level is narrower because two options straddling the apex read
- * as one choice — thumb up-left is Jetzt, up-right is Soon.
+ * Arc geometry. Five root targets use a wider fan, while Jetzt/Soon sit above
+ * the Core as one compact activity decision.
  */
 export const CORE_ORBIT_RADIUS = 124;
 /**
@@ -135,22 +141,21 @@ export const CORE_ORBIT_RADIUS = 124;
  * between the core's rim and the nearest card corner, where ±30° left 15 px on
  * a 360 pt screen and the two nearly touched.
  */
-export const CORE_ACTIVITY_RADIUS = 150;
-export const CORE_ACTIVITY_RADIUS_MIN = 132;
+export const CORE_ACTIVITY_RADIUS = 162;
+export const CORE_ACTIVITY_RADIUS_MIN = 148;
 export const CORE_ACTIVITY_CARD_WIDTH = 104;
 export const CORE_ACTIVITY_CARD_HEIGHT = 78;
 /**
- * Four functions get a narrower 132° fan. The old 170° five-item fan made the
- * outer actions demand an uncomfortable sideways thumb reach; fewer, wider
- * sectors keep every root action inside the enlarged Core's natural range.
+ * Five functions need enough arc length for 52 px targets without returning to
+ * the old edge-hugging 170-degree fan.
  */
-const ROOT_SPREAD = (132 * Math.PI) / 180;
+const ROOT_SPREAD = (148 * Math.PI) / 180;
 const SUB_SPREAD = (52 * Math.PI) / 180;
 
 /**
  * How hard the oblique correction is pushed.
  *
- * Kept deliberately modest: the fan already gives four actions wide sectors,
+ * Kept deliberately modest: the fan already gives five actions stable sectors,
  * while diagonals still receive a little more tolerance than orthogonal marks.
  * Calibrate on a device before raising it.
  */
@@ -160,9 +165,8 @@ export const CORE_ROOT_ANGLES = arcAngles(CORE_ROOT_TARGETS.length, ROOT_SPREAD)
 export const CORE_ACTIVITY_ANGLES = arcAngles(CORE_ACTIVITY_TARGETS.length, SUB_SPREAD);
 export const CORE_ROOT_WEIGHTS = obliqueSectorWeights(CORE_ROOT_ANGLES, CORE_SECTOR_BIAS);
 /**
- * Jetzt/Soon is left-versus-right across the apex — one boundary, both options
- * equally reachable. There is no diagonal to compensate for, so the two stay
- * even and the weights would only add noise.
+ * Jetzt/Soon use equal visual sectors; weighting this compact second level
+ * would make one option easier to reach than the other.
  */
 export const CORE_ACTIVITY_WEIGHTS = CORE_ACTIVITY_ANGLES.map(() => 1);
 

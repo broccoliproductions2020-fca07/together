@@ -8,7 +8,7 @@ import {
   where,
   doc,
   serverTimestamp,
-  updateDoc,
+  writeBatch,
   type DocumentData,
 } from '@react-native-firebase/firestore';
 import Constants from 'expo-constants';
@@ -93,6 +93,7 @@ function mapNotification(id: string, data: DocumentData): NotificationDoc {
     safetyAlertAt: typeof data.safetyAlertAt === 'number' ? data.safetyAlertAt : undefined,
     createdAt: toMillis(data.createdAt),
     expireAt: toMillis(data.expireAt),
+    seenAt: data.seenAt ? toMillis(data.seenAt) : undefined,
   };
 }
 
@@ -114,13 +115,22 @@ export const firebaseNotificationService: NotificationService = {
        * and silently dropped every newer one: past fifty unexpired entries, a
        * new notification could never reach the client at all.
        *
-       * Descending takes the fifty newest. The deployed composite index
-       * (recipientUid ASC, expireAt ASC, createdAt DESC) still serves this — a
-       * query may use an index prefix, and an ascending index is scanned in
-       * reverse for a descending order. The `createdAt` ordering is dropped on
-       * purpose: it can never break a tie that `expireAt` has not already
-       * broken, and asking for a mixed direction is what would demand a new
-       * index. Display order is the client sort below.
+       * Descending takes the fifty newest, and it needs its OWN composite
+       * index (recipientUid ASC, expireAt DESC). An earlier version of this
+       * comment claimed the existing (recipientUid ASC, expireAt ASC,
+       * createdAt DESC) index would serve it by being scanned in reverse. It
+       * does not: reversing that index also reverses `createdAt` and
+       * `__name__`, so the ordering it produces is not the one this query
+       * asks for, and Firestore answers `failed-precondition` — which the
+       * Postfach shows as "Abgleich nicht möglich".
+       *
+       * That mistake could only ever be found on staging: the Firestore
+       * EMULATOR does not require composite indexes at all and answers this
+       * query happily. Any change to the ordering here therefore has to be
+       * matched in firestore.indexes.json and deployed, never reasoned about
+       * against the emulator. The `createdAt` ordering stays dropped — it can
+       * never break a tie that `expireAt` has not already broken. Display
+       * order is the client sort below.
        */
       orderBy('expireAt', 'desc'),
       limit(NOTIFICATION_LIMIT),
@@ -139,45 +149,34 @@ export const firebaseNotificationService: NotificationService = {
     );
   },
 
-  async markSeen(actor) {
-    await updateDoc(doc(getFirebaseDb(), 'users', actor.uid), {
-      notificationsSeenAt: serverTimestamp(),
+  async markSeen(_actor, notificationIds) {
+    const ids = [...new Set(notificationIds)].slice(0, NOTIFICATION_LIMIT);
+    if (ids.length === 0) return;
+    const db = getFirebaseDb();
+    const batch = writeBatch(db);
+    ids.forEach((id) => {
+      batch.update(doc(db, 'notifications', id), { seenAt: serverTimestamp() });
+    });
+    await batch.commit();
+  },
+
+  async resolveJourneyReminder(_actor, input) {
+    if (!input.notificationId) return;
+    await httpsCallable<{ activityId: string; notificationId: string }, { ok: true }>(
+      getFirebaseFunctions(),
+      'resolveJourneyReminder',
+    )({
+      activityId: input.activityId,
+      notificationId: input.notificationId,
     });
   },
 
   async registerDevice(_actor) {
-    if (Device.osName === 'Android') {
-      await Notifications.setNotificationChannelAsync('default', {
-        name: 'Mica',
-        importance: Notifications.AndroidImportance.DEFAULT,
-      });
-      await Notifications.setNotificationChannelAsync(JOURNEY_CHANNEL_ID, {
-        name: 'Anreise',
-        description: 'Live-Status einer geteilten Anreise',
-        importance: Notifications.AndroidImportance.DEFAULT,
-      });
-      await Notifications.setNotificationChannelAsync(SAFETY_CHANNEL_ID, {
-        name: 'Safety',
-        description: 'Heimweg-Anfragen und Bestätigungen',
-        importance: Notifications.AndroidImportance.HIGH,
-      });
-      await Notifications.setNotificationChannelAsync(SAFETY_ALERT_CHANNEL_ID, {
-        name: 'Safety-Hinweise',
-        description: 'Hinweise bei Unsicherheit und Hilferufen',
-        importance: Notifications.AndroidImportance.MAX,
-        vibrationPattern: [0, 300, 180, 300],
-        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
-      });
-    }
-    const token = await currentExpoToken(true);
-    if (!token) return false;
-    await httpsCallable<{ token: string }, { ok: true }>(
-      getFirebaseFunctions(),
-      'registerPushToken',
-    )({ token });
-    registeredToken = token;
-    lastUnregisteredToken = null;
-    return true;
+    return registerWithToken(await ensureChannelsThenToken(true));
+  },
+
+  async registerDeviceIfPermitted(_actor) {
+    return registerWithToken(await ensureChannelsThenToken(false));
   },
 
   async unregisterDevice() {
@@ -213,3 +212,44 @@ export const firebaseNotificationService: NotificationService = {
     });
   },
 };
+
+async function registerWithToken(token: string | null) {
+  if (!token) return false;
+  await httpsCallable<{ token: string }, { ok: true }>(
+    getFirebaseFunctions(),
+    'registerPushToken',
+  )({ token });
+  registeredToken = token;
+  lastUnregisteredToken = null;
+  return true;
+}
+
+async function ensureChannelsThenToken(requestPermission: boolean) {
+  await ensureAndroidChannels();
+  return currentExpoToken(requestPermission);
+}
+
+async function ensureAndroidChannels() {
+  if (Device.osName !== 'Android') return;
+  await Notifications.setNotificationChannelAsync('default', {
+    name: 'Mica',
+    importance: Notifications.AndroidImportance.DEFAULT,
+  });
+  await Notifications.setNotificationChannelAsync(JOURNEY_CHANNEL_ID, {
+    name: 'Anreise',
+    description: 'Live-Status einer geteilten Anreise',
+    importance: Notifications.AndroidImportance.DEFAULT,
+  });
+  await Notifications.setNotificationChannelAsync(SAFETY_CHANNEL_ID, {
+    name: 'Safety',
+    description: 'Heimweg-Anfragen und Bestätigungen',
+    importance: Notifications.AndroidImportance.HIGH,
+  });
+  await Notifications.setNotificationChannelAsync(SAFETY_ALERT_CHANNEL_ID, {
+    name: 'Safety-Hinweise',
+    description: 'Hinweise bei Unsicherheit und Hilferufen',
+    importance: Notifications.AndroidImportance.MAX,
+    vibrationPattern: [0, 300, 180, 300],
+    lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+  });
+}

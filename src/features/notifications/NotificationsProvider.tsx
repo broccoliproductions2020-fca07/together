@@ -31,7 +31,7 @@ interface NotificationsContextValue {
   pushEnabled: boolean;
   enablePush: () => Promise<boolean>;
   disablePush: () => Promise<void>;
-  markAllSeen: () => void;
+  markSeen: (notificationIds: string[]) => void;
   retryList: () => void;
   setListActive: (active: boolean) => void;
 }
@@ -107,18 +107,17 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   const autoRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pushEnabled, setPushEnabled] = useState(false);
   const [pushHintCount, setPushHintCount] = useState(0);
-  const [localSeenAt, setLocalSeenAt] = useState(0);
   const registeredActorRef = useRef<string | null>(null);
   const receivedIdentifiersRef = useRef(new Set<string>());
-  const effectiveSeenAt = Math.max(notificationsSeenAt, localSeenAt);
 
   useEffect(() => {
     notificationsRef.current = [];
     setNotifications([]);
     setPushHintCount(0);
-    setLocalSeenAt(0);
     setIsLoading(false);
     setListError(null);
+    setListErrorCode(null);
+    autoRetriesRef.current = 0;
     receivedIdentifiersRef.current.clear();
   }, [actor.uid]);
 
@@ -133,15 +132,32 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
           await AsyncStorage.setItem(key, legacyPreference);
           await AsyncStorage.removeItem(LEGACY_PUSH_ENABLED_KEY);
         }
-        if (stored !== 'true') return;
-        const enabled = await notificationService.registerDevice(actor);
+        /**
+         * Default ON wherever the OS already allows it.
+         *
+         * The old test was `stored !== 'true'`, so a reinstall or a new device
+         * — which wipes this preference while the iOS grant survives — left
+         * someone who had explicitly said yes silently without notifications,
+         * with a toggle that showed "off" for no reason they could see.
+         *
+         * An explicit 'false' still wins: turning it off means off. And an
+         * account that was never asked is still never prompted here —
+         * `registerDeviceIfPermitted` opens no dialog, so the product's rule
+         * against a cold ask at launch holds.
+         */
+        if (stored === 'false') return;
+        const enabled =
+          stored === 'true'
+            ? await notificationService.registerDevice(actor)
+            : await notificationService.registerDeviceIfPermitted(actor);
         if (cancelled) {
           if (enabled) void notificationService.unregisterDevice(actor).catch(() => {});
           return;
         }
         registeredActorRef.current = enabled ? actor.uid : null;
         setPushEnabled(enabled);
-        if (!enabled) await AsyncStorage.setItem(key, 'false');
+        if (enabled) await AsyncStorage.setItem(key, 'true');
+        else if (stored === 'true') await AsyncStorage.setItem(key, 'false');
       })
       .catch(() => {});
 
@@ -213,29 +229,45 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   }, [registerPushHint]);
 
   const isUnread = useCallback(
-    (notification: NotificationDoc) => notification.createdAt > effectiveSeenAt,
-    [effectiveSeenAt],
+    (notification: NotificationDoc) =>
+      notification.seenAt === undefined && notification.createdAt > notificationsSeenAt,
+    [notificationsSeenAt],
   );
   const exactUnreadCount = useMemo(
     () => notifications.filter(isUnread).length,
     [isUnread, notifications],
   );
 
-  const markAllSeen = useCallback(() => {
-    if (exactUnreadCount === 0 && pushHintCount === 0) return;
-    const newestLoadedUnreadAt = notificationsRef.current.reduce(
-      (latest, notification) =>
-        isUnread(notification) ? Math.max(latest, notification.createdAt) : latest,
-      0,
-    );
-    if (newestLoadedUnreadAt > 0) {
-      setLocalSeenAt((current) => Math.max(current, newestLoadedUnreadAt));
-    }
-    setPushHintCount(0);
-    void notificationService.markSeen(actor).catch((error) => {
-      console.warn('[notifications] Seen-Cursor konnte nicht gespeichert werden:', error);
-    });
-  }, [actor, exactUnreadCount, isUnread, pushHintCount]);
+  const markSeen = useCallback(
+    (notificationIds: string[]) => {
+      const requestedIds = new Set(notificationIds);
+      const unreadIds = notificationsRef.current
+        .filter((notification) => requestedIds.has(notification.id) && isUnread(notification))
+        .map((notification) => notification.id);
+      if (unreadIds.length === 0) return;
+      const unreadIdSet = new Set(unreadIds);
+      const markedAt = Date.now();
+      const optimistic = notificationsRef.current.map((notification) =>
+        unreadIdSet.has(notification.id) ? { ...notification, seenAt: markedAt } : notification,
+      );
+      notificationsRef.current = optimistic;
+      setNotifications(optimistic);
+      void notificationService.markSeen(actor, unreadIds).catch((error) => {
+        const rolledBack = notificationsRef.current.map((notification) =>
+          unreadIdSet.has(notification.id) && notification.seenAt === markedAt
+            ? { ...notification, seenAt: undefined }
+            : notification,
+        );
+        notificationsRef.current = rolledBack;
+        setNotifications(rolledBack);
+        console.warn(
+          '[notifications] Sichtbare Mitteilungen konnten nicht gespeichert werden:',
+          error,
+        );
+      });
+    },
+    [actor, isUnread],
+  );
 
   const value = useMemo<NotificationsContextValue>(
     () => ({
@@ -259,7 +291,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
         setPushEnabled(false);
         await AsyncStorage.setItem(pushPreferenceKey(actor.uid), 'false').catch(() => {});
       },
-      markAllSeen,
+      markSeen,
       // A deliberate press refills the auto-retry budget: the user has told us
       // conditions may have changed (back on wifi, clock corrected).
       retryList: () => {
@@ -275,7 +307,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       isUnread,
       listError,
       listErrorCode,
-      markAllSeen,
+      markSeen,
       notifications,
       pushEnabled,
       pushHintCount,

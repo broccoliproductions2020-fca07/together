@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useKeepAwake } from 'expo-keep-awake';
 import { useEffect } from 'react';
-import { ActivityIndicator, Pressable, Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -13,6 +13,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { loaderSizeForIcon, TogetherLoader } from '@/shared/components';
 import { SEMANTIC_COLOR } from '@/shared/utils/semanticColors';
 
 import type { SafetyStartPhase } from '../types';
@@ -81,7 +82,7 @@ export function SafetyOperationState({
           className="h-16 w-16 items-center justify-center rounded-full border"
           style={{ backgroundColor: `${color}18`, borderColor: `${color}70` }}
         >
-          <ActivityIndicator size="large" color={color} />
+          <TogetherLoader accessibilityLabel="" color={color} size={loaderSizeForIcon(36)} />
         </View>
       </View>
       <Text className="mt-4 text-center text-xl font-extrabold tracking-[-0.3px] text-white">

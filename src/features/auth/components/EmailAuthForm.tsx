@@ -14,7 +14,7 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { TogetherLoader } from '@/shared/components';
-import { FONT, TYPE } from '@/shared/theme';
+import { FONT, shadow, TYPE } from '@/shared/theme';
 import { haptics } from '@/shared/utils/haptics';
 
 import type { SignInWithEmailInput } from '../types';
@@ -207,7 +207,11 @@ export function EmailAuthForm({
 
   const shakeStyle = useAnimatedStyle(() => ({ transform: [{ translateX: shake.value }] }));
 
-  const buttonLabel = isSignup ? 'Account erstellen' : 'Einloggen';
+  const buttonLabel = isSignup ? 'Konto erstellen' : 'Einloggen';
+  // Sign-up is several round trips (Konto anlegen → claimUsername → Profildokumente
+  // → Bestätigungsmail), also Sekunden statt Millisekunden. Der Knopf muss das
+  // sagen; ein stehengebliebenes „Konto erstellen" liest sich wie ein ignorierter Tap.
+  const busyLabel = isSignup ? 'Konto wird erstellt …' : 'Anmeldung läuft …';
   const resetMessage = resetError
     ? resetError
     : resetSent
@@ -454,8 +458,11 @@ export function EmailAuthForm({
       >
         {/* Fine top light edge — the premium cue. */}
         <View pointerEvents="none" style={styles.submitSheen} />
-        {submitting ? <TogetherLoader size={24} /> : null}
-        <Text style={styles.submitLabel}>{buttonLabel}</Text>
+        {/* Tinte, nicht das voreingestellte Paper: DIESER Knopf ist paperfarben,
+            der helle Loader wurde also weiß auf weiß gezeichnet und war
+            unsichtbar — der Tap sah aus, als passiere nichts. */}
+        {submitting ? <TogetherLoader accessibilityLabel="" color={COLORS.ink} size={24} /> : null}
+        <Text style={styles.submitLabel}>{submitting ? busyLabel : buttonLabel}</Text>
         {!submitting ? <Ionicons name="arrow-forward" size={18} color={COLORS.ink} /> : null}
       </Pressable>
 
@@ -599,7 +606,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: COLORS.paper,
     borderRadius: 20,
-    elevation: 6,
     flexDirection: 'row',
     gap: 8,
     justifyContent: 'center',
@@ -607,10 +613,7 @@ const styles = StyleSheet.create({
     minHeight: 56,
     overflow: 'hidden',
     paddingHorizontal: 20,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.28,
-    shadowRadius: 16,
+    ...shadow({ color: '#000000', offsetY: 8, radius: 16, opacity: 0.28, elevation: 6 }),
   },
   submitLabel: {
     color: COLORS.ink,

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { BackHandler, View, useWindowDimensions } from 'react-native';
-import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   Easing,
   Extrapolation,
@@ -19,8 +19,23 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useKeyboardHeight } from '@/features/chat/utils/useKeyboardHeight';
 import { concentricRadius, FLOATING_SHEET, MOTION } from '@/shared/theme';
 
+/**
+ * The default resting surface. Named rather than inlined because a host that
+ * keeps it still has to tell the header what its ink is measured against, and
+ * two copies of one literal is how those two quietly drift apart.
+ */
+export const FLOATING_SHEET_SURFACE = '#0B1016';
+
 /** Short and monotonic on purpose — see the resize effect below. */
 const RESIZE_EASE = { duration: 140, easing: Easing.out(Easing.quad) };
+
+/**
+ * How long the entry may wait for its first content measurement before it
+ * opens anyway. Long enough that a normal open always measures first and keeps
+ * the exact geometry it animates to; short enough that a sheet which never
+ * measures is a stumble rather than a dead surface.
+ */
+const OPEN_MEASUREMENT_GRACE = 400;
 
 export interface OriginRect {
   x: number;
@@ -30,13 +45,28 @@ export interface OriginRect {
 }
 
 /**
+ * A way to ASK where the sheet came from, handed over instead of a measured
+ * rect.
+ *
+ * The distinction is the whole contract: a host that passes a NUMBER has frozen
+ * it at tap time, and the way back then flies into wherever that control used
+ * to be. A host that passes a FUNCTION is re-asked on close, so a control that
+ * moved, retracted or disappeared answers honestly — including with `null`.
+ */
+export type SheetOriginResolver = () => Promise<OriginRect | null>;
+
+/**
  * Measures the control a sheet grows out of.
  *
  * Asked again on CLOSE, never cached from the open. A frozen rect makes the way
  * in look right and the way back wrong: by then the map may have panned, the
  * core may be closed, and the sheet would shrink into a spot where nothing is.
+ *
+ * Exported so a host building its own `resolveOrigin` measures with the SAME
+ * guards — a second copy of this is how one entry point starts accepting a
+ * degenerate rect the sheet would have rejected.
  */
-function measureOrigin(ref?: RefObject<View | null>): Promise<OriginRect | null> {
+export function measureSheetOrigin(ref?: RefObject<View | null>): Promise<OriginRect | null> {
   return new Promise((resolve) => {
     const node = ref?.current;
     if (!node) {
@@ -88,6 +118,8 @@ export interface FloatingSheetProps {
    * sheet is gone.
    */
   onHeightChange?: (coveredHeight: number) => void;
+  /** Remounts the measuring surface when its semantic content changes. */
+  contentKey?: string;
   /**
    * Leaves without the exit morph.
    *
@@ -110,6 +142,8 @@ export interface FloatingSheetProps {
   originBorderColor?: string;
   /** Ceiling only — the sheet is as tall as its content until it hits this. */
   maxHeightFraction?: number;
+  /** Optional screen frame for a host that needs more separation from the map. */
+  frameInset?: number;
   /**
    * Lifts the whole sheet clear of the keyboard.
    *
@@ -154,13 +188,15 @@ export function FloatingSheet({
   progress: externalProgress,
   onClosed,
   onHeightChange,
+  contentKey,
   instantClose = false,
-  surfaceColor = '#0B1016',
+  surfaceColor = FLOATING_SHEET_SURFACE,
   borderColor = 'rgba(255,255,255,0.10)',
   grabberColor = 'rgba(255,255,255,0.22)',
   originColor = 'rgba(59,130,246,0.16)',
   originBorderColor = 'rgba(59,130,246,0.72)',
   maxHeightFraction = FLOATING_SHEET.maxHeightFraction,
+  frameInset = FLOATING_SHEET.inset,
   avoidKeyboard = false,
   surfaceLayer,
   accessibilityLabel,
@@ -175,6 +211,7 @@ export function FloatingSheet({
   const [mounted, setMounted] = useState(false);
   /** 0 until the content has laid itself out once; the open waits for it. */
   const [contentHeight, setContentHeight] = useState(0);
+  const [contentMeasurementRevision, setContentMeasurementRevision] = useState(0);
 
   const internalProgress = useSharedValue(0);
   const progress = externalProgress ?? internalProgress;
@@ -201,7 +238,8 @@ export function FloatingSheet({
   /** False until the first measurement has been placed without animating. */
   const restSettledRef = useRef(false);
 
-  const { inset, screenRadius } = FLOATING_SHEET;
+  const { screenRadius } = FLOATING_SHEET;
+  const inset = Math.max(1, frameInset);
   const radius = concentricRadius(screenRadius, inset);
   const targetLeft = inset;
   const targetWidth = Math.max(0, windowWidth - inset * 2);
@@ -242,6 +280,38 @@ export function FloatingSheet({
   instantCloseRef.current = instantClose;
   /** Set while an open is waiting for its first content measurement. */
   const openPendingRef = useRef(false);
+  /** True once that wait has run past its grace period — see the watchdog. */
+  const overdueRef = useRef(false);
+  /**
+   * 1 while the entry morph is still flying.
+   *
+   * The gate below re-runs on every content measurement, and re-issuing
+   * `withSpring` restarts it from the current value with velocity ZERO. Content
+   * that measures more than once — a chat preview resolving, an avatar landing,
+   * a row animating its own height — therefore kept knocking the morph back to
+   * a standstill, and it stalls inside the worst possible window: past
+   * `originCrossfade` (0.12) the card is already fully opaque, but
+   * `contentFade` does not begin until 0.4, so what stands on screen is an
+   * opaque card in the ORIGIN colour with nothing in it. On an activity marker
+   * that is a green or amber empty card, for as long as the re-measures keep
+   * arriving — which on a slow device is long enough to read as a dead sheet.
+   */
+  const openFlight = useSharedValue(0);
+  /**
+   * Bumped on every open, purely so the gate below re-evaluates.
+   *
+   * `openPendingRef` is a ref, which React cannot see. The gate used to hang
+   * off `contentHeight` alone, so it only fired when the measurement CHANGED —
+   * and a re-open that skipped `finishClose` still carries the previous
+   * height. Same activity, same height, no change, no gate: the sheet mounted
+   * at progress 0 (fully transparent) and the exit spring still in flight then
+   * unmounted it again. A dead tap with no error, until any reload cleared the
+   * stale height.
+   */
+  const [openTicket, setOpenTicket] = useState(0);
+  /** Read by the exit spring's callback, which can land after a re-open. */
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
 
   const requestClose = useCallback(() => {
     onRequestCloseRef.current();
@@ -256,7 +326,7 @@ export function FloatingSheet({
   const askOrigin = useCallback((): Promise<OriginRect | null> => {
     const resolver = resolveOriginRef.current;
     if (resolver) return resolver().catch(() => null);
-    return measureOrigin(originRef);
+    return measureSheetOrigin(originRef);
   }, [originRef]);
 
   /**
@@ -282,6 +352,10 @@ export function FloatingSheet({
   );
 
   const finishClose = useCallback(() => {
+    // The exit animation outlives the state that started it: a re-open during
+    // the flight leaves this callback queued, and honouring it would unmount
+    // the sheet the host is currently asking for.
+    if (visibleRef.current) return;
     setMounted(false);
     onHeightChangeRef.current?.(0);
     // Cleared so the next open measures again and its wait actually fires; an
@@ -299,6 +373,7 @@ export function FloatingSheet({
         applyOrigin(rect);
         dragY.value = 0;
         openPendingRef.current = true;
+        setOpenTicket((ticket) => ticket + 1);
         setMounted(true);
       });
       return () => {
@@ -320,6 +395,9 @@ export function FloatingSheet({
         return;
       }
       dragY.value = withSpring(0, MOTION.settle);
+      // The exit owns `progress` from here; a stale flight flag would let a
+      // later re-measure decide the entry morph still had somewhere to go.
+      openFlight.value = 0;
       progress.value = withSpring(0, MOTION.sheet, (finished) => {
         'worklet';
         if (finished) runOnJS(finishClose)();
@@ -335,16 +413,74 @@ export function FloatingSheet({
   }, [visible, applyOrigin, askOrigin, dragY, finishClose, progress, reducedMotion]);
 
   /**
+   * A floor under the entry, because the failure it catches is the worst one
+   * this component has: the sheet mounts, `progress` never leaves 0, and what
+   * stands on screen is the bare origin rect — 56 dp of marker-shaped card with
+   * its content clipped away entirely. Taps do nothing, there is no error, and
+   * nothing on screen says a sheet is open. Measured on a device in exactly
+   * that state (September 2026): the container sat at 147×147 px on a 420 dpi
+   * screen — the origin to the pixel — with not one child in the view tree.
+   *
+   * The gate below is guarded by `contentHeight > 0`, so anything that stops
+   * the content from reporting a height strands the sheet for good. Rather
+   * than enumerate those paths, this bounds them: after 400 ms the sheet opens
+   * whether or not it was ever measured. `targetHeight` falls back to the
+   * ceiling without a measurement, so the worst case is a sheet that opens at
+   * full height and settles down — visible and usable, which a stranded one is
+   * not. Cleared as soon as the real measurement arrives.
+   */
+  useEffect(() => {
+    if (!visible || !mounted || contentHeight > 0) {
+      overdueRef.current = false;
+      return;
+    }
+    const timer = setTimeout(() => {
+      overdueRef.current = true;
+      setOpenTicket((ticket) => ticket + 1);
+    }, OPEN_MEASUREMENT_GRACE);
+    return () => clearTimeout(timer);
+  }, [contentHeight, mounted, visible]);
+
+  /**
    * The open waits for the first content measurement. Starting earlier means
    * the first frames animate toward the fallback ceiling and then jump when the
    * real height arrives — a visible hitch at the one moment everything is
    * moving anyway, so it would look like a stutter rather than a correction.
+   * It waits, but not indefinitely: the watchdog above substitutes for a
+   * measurement that never came, so the wait can delay an open, never cancel
+   * one.
    */
   useEffect(() => {
-    if (!openPendingRef.current || contentHeight <= 0) return;
+    if (!visible || !mounted || (contentHeight <= 0 && !overdueRef.current)) return;
+    /*
+     * Stated as an INVARIANT, not as a transition: while the host wants this
+     * sheet and the sheet has measured itself, `progress` ends at 1. The old
+     * version fired once off `openPendingRef`, so every path that lost that
+     * one shot — a close whose `finishClose` was skipped by a re-open, an
+     * origin promise resolving after the exit spring — left the sheet mounted
+     * at a progress nobody would write again. Two such bugs have already been
+     * fixed here (see `openTicket`); this closes the class instead.
+     *
+     * The early return keeps a content resize from restarting a spring that
+     * has nowhere to go — and `visible` keeps it out of the exit animation's
+     * way, which owns `progress` from the moment the host closes the sheet.
+     *
+     * `openFlight` extends the same early return to a spring that is still on
+     * its way: the invariant is "progress ENDS at 1", not "re-issue the
+     * animation", and re-issuing it is what stalled the morph (see the flag).
+     */
+    if (!openPendingRef.current && (progress.value >= 1 || openFlight.value === 1)) return;
     openPendingRef.current = false;
-    progress.value = reducedMotion ? 1 : withSpring(1, MOTION.sheet);
-  }, [contentHeight, progress, reducedMotion]);
+    if (reducedMotion) {
+      progress.value = 1;
+      return;
+    }
+    openFlight.value = 1;
+    progress.value = withSpring(1, MOTION.sheet, (finished) => {
+      'worklet';
+      if (finished) openFlight.value = 0;
+    });
+  }, [contentHeight, mounted, openFlight, openTicket, progress, reducedMotion, visible]);
 
   useEffect(() => {
     if (!mounted) {
@@ -378,7 +514,7 @@ export function FloatingSheet({
   useEffect(() => {
     if (!mounted || contentHeight <= 0) return;
     onHeightChangeRef.current?.(Math.max(0, windowHeight - targetTop));
-  }, [contentHeight, mounted, targetTop, windowHeight]);
+  }, [contentHeight, contentMeasurementRevision, mounted, targetTop, windowHeight]);
 
   /** A native Modal would give this for free; an overlay has to ask for it. */
   useEffect(() => {
@@ -444,7 +580,20 @@ export function FloatingSheet({
   if (!mounted) return null;
 
   return (
-    <GestureHandlerRootView
+    /*
+     * A PLAIN View, never a second `GestureHandlerRootView`.
+     *
+     * The app already mounts one at the root (`app/_layout.tsx`), and a nested
+     * one installs its own touch orchestrator that intercepts in
+     * `dispatchTouchEvent` — before React Native's `pointerEvents` is ever
+     * consulted. Measured on device: with a sheet open, a 500 ms swipe on bare
+     * map far ABOVE the sheet moved 0 of 18 000 sampled pixels, and marker taps
+     * did nothing. That is the exact opposite of this component's contract —
+     * the map stays live around the sheet, which is why this is not a Modal.
+     * RNGH says so itself in the log: "Gesture handler is already enabled for
+     * a parent view".
+     */
+    <View
       pointerEvents="box-none"
       style={{ bottom: 0, left: 0, position: 'absolute', right: 0, top: 0 }}
     >
@@ -454,7 +603,10 @@ export function FloatingSheet({
         style={[{ borderWidth: 1, overflow: 'hidden', position: 'absolute' }, containerStyle]}
       >
         <Animated.View
-          onLayout={(event) => setContentHeight(Math.ceil(event.nativeEvent.layout.height))}
+          onLayout={(event) => {
+            setContentHeight(Math.ceil(event.nativeEvent.layout.height));
+            setContentMeasurementRevision((revision) => revision + 1);
+          }}
           style={[
             { left: 0, maxHeight, position: 'absolute', top: 0, width: targetWidth },
             contentStyle,
@@ -499,10 +651,24 @@ export function FloatingSheet({
 
           {/* `flexShrink` and no `flex: 1`: the sheet must be free to be short.
               A flex-1 child would claim the ceiling height every time, which is
-              exactly the fixed-height behaviour this replaced. */}
-          <View style={{ flexShrink: 1, paddingBottom: contentInsetBottom }}>{children}</View>
+              exactly the fixed-height behaviour this replaced.
+
+              `contentKey` sits HERE, on a plain View, and never on the animated
+              parent above. Remounting a view that carries a `useAnimatedStyle`
+              re-attaches that style to a fresh native tag, and the fresh tag
+              starts on the style's INITIAL value — which for `contentFade`
+              [0.4, 0.86] at progress 0 is opacity 0. If `progress` is already
+              resting at 1 (the sheet is open and simply switched selection),
+              nothing ever writes it again, so the new view stays invisible for
+              good: a correctly framed, perfectly empty white sheet, grabber and
+              wash included. Keying the children instead gives the same reset —
+              fresh measurement, no carried-over child state — without ever
+              recreating an animated view. */}
+          <View key={contentKey} style={{ flexShrink: 1, paddingBottom: contentInsetBottom }}>
+            {children}
+          </View>
         </Animated.View>
       </Animated.View>
-    </GestureHandlerRootView>
+    </View>
   );
 }

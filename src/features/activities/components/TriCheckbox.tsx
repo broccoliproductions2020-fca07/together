@@ -129,6 +129,6 @@ const styles = StyleSheet.create({
     width: BOX,
   },
   dash: { borderRadius: 2, height: 2.6, width: 12 },
-  glyph: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
+  glyph: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
   press: { alignItems: 'center', justifyContent: 'center' },
 });

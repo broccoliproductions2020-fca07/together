@@ -5,9 +5,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useKeyboardPadding } from '@/features/chat/utils/useKeyboardHeight';
 import { useOpenStatus } from '@/features/presence';
-import { FONT, TEXT_CAPPED, TEXT_FLEXIBLE, TYPE } from '@/shared/theme';
+import { FONT, TEXT_CAPPED, TYPE } from '@/shared/theme';
 
 import { CORE_ACCENT } from '../core/coreTargets';
+import { FLOATING_SHEET_SURFACE } from './FloatingSheet';
+import { FloatingSheetHeader } from './FloatingSheetHeader';
 import { OpenStatusCard } from './OpenStatusCard';
 
 export interface OpenStatusSheetProps {
@@ -36,7 +38,7 @@ export interface OpenStatusSheetProps {
  */
 export function OpenStatusSheet({ visible, onClose, onOpenNearby }: OpenStatusSheetProps) {
   const insets = useSafeAreaInsets();
-  const { syncing, syncError } = useOpenStatus();
+  const { isOpen, syncing, syncError } = useOpenStatus();
   // The vibe field sits inside this sheet, so the whole card rides the keyboard
   // up. Lifting works here precisely because the sheet is content-sized — the
   // composer avoids it only because a 90%-tall sheet has nowhere left to go.
@@ -65,37 +67,25 @@ export function OpenStatusSheet({ visible, onClose, onOpenNearby }: OpenStatusSh
               <View className="h-1 w-10 rounded-full bg-white/20" />
             </View>
 
-            <View className="flex-row items-center gap-3 px-5 pb-2 pt-4">
-              <View
-                className="h-11 w-11 items-center justify-center rounded-[17px]"
-                style={{ backgroundColor: `${CORE_ACCENT.open}26` }}
-              >
-                <Ionicons name="person-outline" size={20} color={CORE_ACCENT.open} />
-              </View>
-              <View className="flex-1">
-                <Text {...TEXT_FLEXIBLE} style={styles.title}>
-                  Dein Status
-                </Text>
-                <Text {...TEXT_FLEXIBLE} style={styles.subtitle}>
-                  {syncing
+            <FloatingSheetHeader
+              icon="person-outline"
+              accent={CORE_ACCENT.open}
+              surface={FLOATING_SHEET_SURFACE}
+              title="Dein Status"
+              subtitle={
+                syncing
+                  ? isOpen
                     ? 'Dein Status wird veröffentlicht …'
-                    : syncError
-                      ? 'Dein Status wurde nicht veröffentlicht'
-                      : 'Alles optional — du bist bereits offen'}
-                </Text>
-              </View>
-              {/* Never disabled while syncing: a close control that waits for
-                  the network is a trap, and the provider's rollback already
-                  keeps the status honest on its own. */}
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Status schließen"
-                className="h-10 w-10 items-center justify-center rounded-full bg-white/8 active:opacity-70"
-                onPress={onClose}
-              >
-                <Ionicons name="close" size={20} color="rgba(244,245,247,0.8)" />
-              </Pressable>
-            </View>
+                    : 'Dein Status wird beendet …'
+                  : syncError
+                    ? 'Die Änderung konnte nicht gespeichert werden'
+                    : isOpen
+                      ? 'Alles optional — du bist bereits offen'
+                      : 'Du bist nicht mehr offen'
+              }
+              closeLabel="Status schließen"
+              onClose={onClose}
+            />
 
             <ScrollView
               className="px-5"
@@ -134,19 +124,5 @@ const styles = StyleSheet.create({
     fontFamily: FONT.semibold,
     fontSize: TYPE.label.fontSize,
     lineHeight: TYPE.label.lineHeight,
-  },
-  subtitle: {
-    color: 'rgba(244,245,247,0.45)',
-    fontFamily: FONT.medium,
-    fontSize: TYPE.caption.fontSize,
-    lineHeight: TYPE.caption.lineHeight,
-    marginTop: 2,
-  },
-  title: {
-    color: '#F2EFE9',
-    fontFamily: FONT.bold,
-    fontSize: TYPE.body.fontSize,
-    letterSpacing: -0.3,
-    lineHeight: TYPE.body.lineHeight,
   },
 });

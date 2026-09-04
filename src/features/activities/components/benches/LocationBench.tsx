@@ -2,8 +2,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useMemo } from 'react';
 import { ActivityIndicator, Keyboard, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { usePlaceSearch } from '@/features/places';
-import { SearchField } from '@/shared/components';
+import { usePlaceSearch } from '@/features/places/hooks/usePlaceSearch';
+import { SearchField } from '@/shared/components/SearchField';
 import { FONT, TEXT_CAPPED, TEXT_FLEXIBLE, TYPE } from '@/shared/theme';
 
 import type { ActivityDraft, SelectedPlace } from '../../types';
@@ -38,7 +38,8 @@ function applyPlace(draft: ActivityDraft, place: SelectedPlace): ActivityDraft {
  * value readable as an answer rather than as a guess. */
 function sourceLabel(draft: ActivityDraft): string {
   if (draft.locationChoice === 'open') return 'Ohne Ort';
-  if (draft.place?.source === 'current' || draft.locationChoice === 'current') return 'Dein Standort';
+  if (draft.place?.source === 'current' || draft.locationChoice === 'current')
+    return 'Dein Standort';
   return 'Gewählter Ort';
 }
 
@@ -79,8 +80,7 @@ export function LocationBench({
 }: LocationBenchProps) {
   const isOpenLocation = draft.locationChoice === 'open';
   const place = isOpenLocation ? undefined : draft.place;
-  const isCurrentLocation =
-    draft.locationChoice === 'current' || draft.place?.source === 'current';
+  const isCurrentLocation = draft.locationChoice === 'current' || draft.place?.source === 'current';
   const hasCoordinate = place?.latitude != null && place?.longitude != null;
   /**
    * Bias the ranking towards where the person actually is.
@@ -93,9 +93,7 @@ export function LocationBench({
    */
   const searchCenter = useMemo(
     () =>
-      hasCoordinate
-        ? { latitude: place!.latitude!, longitude: place!.longitude! }
-        : fallbackCenter,
+      hasCoordinate ? { latitude: place!.latitude!, longitude: place!.longitude! } : fallbackCenter,
     [fallbackCenter, hasCoordinate, place],
   );
   // The compact composer surface owns only its layout. Debounce, session
@@ -178,17 +176,17 @@ export function LocationBench({
       {showSearchResults ? (
         <View style={styles.results}>
           {placeSearch.loading ? (
-            <SearchMessage icon="ellipsis-horizontal" accent={accent} label="Orte werden gesucht …" />
+            <SearchMessage
+              icon="ellipsis-horizontal"
+              accent={accent}
+              label="Orte werden gesucht …"
+            />
           ) : null}
           {placeSearch.resolving ? (
             <SearchMessage icon="location-outline" accent={accent} label="Ort wird geladen …" />
           ) : null}
           {placeSearch.error && !placeSearch.loading ? (
-            <SearchMessage
-              icon="alert-circle-outline"
-              accent="#E8B98F"
-              label={placeSearch.error}
-            />
+            <SearchMessage icon="alert-circle-outline" accent="#E8B98F" label={placeSearch.error} />
           ) : null}
           {placeSearch.completed &&
           !placeSearch.loading &&
@@ -275,7 +273,6 @@ export function LocationBench({
         onUseCurrentLocation={fallbackCenter ? useCurrentLocation : undefined}
         onOpenFullMap={pick}
       />
-
     </View>
   );
 }
@@ -321,9 +318,22 @@ const styles = StyleSheet.create({
     fontSize: TYPE.micro.fontSize,
     marginTop: 1,
   },
-  resultIcon: { alignItems: 'center', borderRadius: 999, height: 32, justifyContent: 'center', width: 32 },
+  resultIcon: {
+    alignItems: 'center',
+    borderRadius: 999,
+    height: 32,
+    justifyContent: 'center',
+    width: 32,
+  },
   resultName: { color: '#F4F5F7', fontFamily: FONT.semibold, fontSize: TYPE.caption.fontSize },
-  resultRow: { alignItems: 'center', flexDirection: 'row', gap: 10, minHeight: 48, paddingHorizontal: 8, paddingVertical: 5 },
+  resultRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 48,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
   resultText: { flex: 1, minWidth: 0 },
   results: {
     backgroundColor: 'rgba(255,255,255,0.055)',
@@ -350,8 +360,19 @@ const styles = StyleSheet.create({
     fontSize: TYPE.label.fontSize,
     paddingVertical: 0,
   },
-  searchMessage: { alignItems: 'center', flexDirection: 'row', gap: 9, minHeight: 42, paddingHorizontal: 8 },
-  searchMessageText: { color: 'rgba(244,245,247,0.58)', flex: 1, fontFamily: FONT.medium, fontSize: TYPE.caption.fontSize },
+  searchMessage: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 9,
+    minHeight: 42,
+    paddingHorizontal: 8,
+  },
+  searchMessageText: {
+    color: 'rgba(244,245,247,0.58)',
+    flex: 1,
+    fontFamily: FONT.medium,
+    fontSize: TYPE.caption.fontSize,
+  },
   source: {
     color: 'rgba(244,245,247,0.32)',
     fontFamily: FONT.semibold,

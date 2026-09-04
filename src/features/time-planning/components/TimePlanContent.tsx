@@ -1,10 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 
 import { useAuth } from '@/features/auth';
 import { useSyncOutbox, type SyncOperation } from '@/features/sync';
+import { loaderSizeForIcon, TogetherLoader } from '@/shared/components';
 import { FONT, TEXT_CAPPED, TYPE } from '@/shared/theme';
 import { haptics } from '@/shared/utils/haptics';
 
@@ -14,9 +15,15 @@ import type { TimePlan, TimePlanInterval, TimePlanMember, TimePlanWindow } from 
 import { aggregateWindow, type WindowAvailability } from '../utils/availability';
 import { bestAcrossWindows } from '../utils/matchingSummary';
 import { describePlanStatus } from '../utils/planSummary';
-import { normalizeIntervals } from '../utils/intervals';
+import {
+  canSeedResponseDraft,
+  fullInterval,
+  replaceFirstInterval,
+  responseDraftToResponses,
+  seedResponseDraft,
+} from '../utils/responseDraft';
 import { TimePlanAnswerCard, type DayAnswer } from './TimePlanAnswerCard';
-import { TimeMatchingCard } from './TimeMatchingCard';
+import { TimeTallyCard } from './TimeTallyCard';
 import { TimePlanMembersList, TimePlanRows } from './TimePlanRows';
 
 /**
@@ -36,12 +43,16 @@ import { TimePlanMembersList, TimePlanRows } from './TimePlanRows';
  *   round by turning it into a real Activity.
  */
 
-const MINUTE_MS = 60_000;
-
 function isTimePlanResponseOperation(
   operation: SyncOperation,
 ): operation is Extract<SyncOperation, { kind: 'timePlan.response' }> {
   return operation.kind === 'timePlan.response';
+}
+
+function isTimePlanCreateOperation(
+  operation: SyncOperation,
+): operation is Extract<SyncOperation, { kind: 'timePlan.create' }> {
+  return operation.kind === 'timePlan.create';
 }
 
 /**
@@ -58,40 +69,6 @@ function planningErrorMessage(caught: unknown, fallback: string): string {
   const message = caught instanceof Error ? caught.message : '';
   const looksWritten = /[a-zäöüß]/.test(message) && message.includes(' ');
   return looksWritten ? message : fallback;
-}
-
-function fullInterval(window: TimePlanWindow): TimePlanInterval {
-  return { startsAt: window.startsAt, endsAt: window.endsAt };
-}
-
-/** What the answer cards hold, turned into what the server stores. An empty
- * list is the explicit "no" — that is the documented shape, not an omission. */
-function toResponses(
-  windows: TimePlanWindow[],
-  answers: Record<string, DayAnswer>,
-  intervals: Record<string, TimePlanInterval>,
-): Record<string, TimePlanInterval[]> {
-  return Object.fromEntries(
-    windows.map((window) => {
-      if (answers[window.id] !== 'yes') return [window.id, []];
-      const chosen = intervals[window.id] ?? fullInterval(window);
-      return [window.id, normalizeIntervals([chosen], window)];
-    }),
-  );
-}
-
-function seedFromMember(
-  windows: TimePlanWindow[],
-  member: TimePlanMember | undefined,
-): { answers: Record<string, DayAnswer>; intervals: Record<string, TimePlanInterval> } {
-  const answers: Record<string, DayAnswer> = {};
-  const intervals: Record<string, TimePlanInterval> = {};
-  windows.forEach((window) => {
-    const stored = member?.responseStatus === 'responded' ? member.responsesByWindow[window.id] : undefined;
-    intervals[window.id] = stored?.[0] ?? fullInterval(window);
-    answers[window.id] = stored ? (stored.length > 0 ? 'yes' : 'no') : null;
-  });
-  return { answers, intervals };
 }
 
 export function TimePlanContent({
@@ -126,11 +103,14 @@ export function TimePlanContent({
   const membersRevisionRef = useRef(0);
   const [plan, setPlan] = useState<TimePlan | null>(null);
   const [members, setMembers] = useState<TimePlanMember[]>([]);
+  const [membersLoadedPlanId, setMembersLoadedPlanId] = useState<string | null>(null);
   const [answers, setAnswers] = useState<Record<string, DayAnswer>>({});
-  const [intervals, setIntervals] = useState<Record<string, TimePlanInterval>>({});
+  const [intervals, setIntervals] = useState<Record<string, TimePlanInterval[]>>({});
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [locking, setLocking] = useState(false);
+  const savingRef = useRef(false);
+  const lockingRef = useRef(false);
   // The member listener can only attach once the plan doc reports the new
   // membership, which is a round trip away. Without this the CTA sits there
   // saying "Antworten und beitreten" after it already succeeded.
@@ -153,7 +133,7 @@ export function TimePlanContent({
     };
   }, [planId, uid]);
 
-  const isMember = Boolean(uid && plan?.memberUids.includes(uid));
+  const isMember = Boolean(uid && plan?.joined);
 
   /**
    * Availability is members-only, so this listener is keyed on MEMBERSHIP and
@@ -164,17 +144,21 @@ export function TimePlanContent({
    * not recover from one: the error callback fires once and the subscription is
    * dead. Joining then changed nothing on screen, because the listener that
    * would have reported the new membership had already given up. Keying it on
-   * `plan.memberUids` (which the plan listener CAN read either way) makes it
+   * The viewer-relative `plan.joined` projection makes it
    * attach exactly when it is allowed to, including right after joining.
    */
   useEffect(() => {
     if (!planId || !uid || !isMember) {
       setMembers([]);
+      setMembersLoadedPlanId(null);
       return;
     }
+    setMembersLoadedPlanId(null);
     const revision = ++membersRevisionRef.current;
     const stopMembers = timePlanningService.subscribeMembers({ uid }, planId, (next) => {
-      if (revision === membersRevisionRef.current) setMembers(next);
+      if (revision !== membersRevisionRef.current) return;
+      setMembers(next);
+      setMembersLoadedPlanId(planId);
     });
     return () => {
       membersRevisionRef.current += 1;
@@ -199,12 +183,22 @@ export function TimePlanContent({
   // Seed the cards once per plan. Re-seeding on every member update would wipe
   // an answer in progress the moment somebody else's response arrived.
   useEffect(() => {
-    if (!plan || seededRef.current === plan.id) return;
+    if (
+      !plan ||
+      !canSeedResponseDraft({
+        planId: plan.id,
+        seededPlanId: seededRef.current,
+        isMember,
+        membersLoadedPlanId,
+      })
+    ) {
+      return;
+    }
     seededRef.current = plan.id;
-    const seed = seedFromMember(windows, ownMember);
+    const seed = seedResponseDraft(windows, ownMember);
     setAnswers(seed.answers);
     setIntervals(seed.intervals);
-  }, [ownMember, plan, windows]);
+  }, [isMember, membersLoadedPlanId, ownMember, plan, windows]);
 
   const failedResponse = useMemo(
     () =>
@@ -220,6 +214,20 @@ export function TimePlanContent({
         .find((operation) => operation.payload.planId === planId && operation.status === 'queued'),
     [planId, syncOperations],
   );
+  const queuedCreation = useMemo(
+    () =>
+      syncOperations
+        .filter(isTimePlanCreateOperation)
+        .find((operation) => operation.payload.planId === planId && operation.status === 'queued'),
+    [planId, syncOperations],
+  );
+  const failedCreation = useMemo(
+    () =>
+      syncOperations
+        .filter(isTimePlanCreateOperation)
+        .find((operation) => operation.payload.planId === planId && operation.status === 'failed'),
+    [planId, syncOperations],
+  );
 
   useEffect(() => {
     if (!failedResponse) return;
@@ -229,23 +237,10 @@ export function TimePlanContent({
     haptics.warning();
   }, [failedResponse]);
 
-  /** What the others have said, per window — drawn behind your own bar so a
-   * span you could shift to meet everyone is visible WHILE you drag. */
-  const availabilityByWindow = useMemo(() => {
-    const map = new Map<string, WindowAvailability>();
-    const others = members.filter((member) => member.uid !== uid);
-    windows.forEach((window) => {
-      const result = aggregateWindow(window, others);
-      if (result) map.set(window.id, result);
-    });
-    return map;
-  }, [members, uid, windows]);
-
   /**
    * The same aggregate the matching card builds, but kept here so the compact
    * row can name the favourite without a second data path. Note this one
-   * includes the current user, unlike `availabilityByWindow` above, which
-   * deliberately leaves you out so you can see what you are matching against.
+   * includes the current user, because it describes the round as a whole.
    */
   const roundHighlights = useMemo(() => {
     const map = new Map<string, WindowAvailability>();
@@ -256,9 +251,9 @@ export function TimePlanContent({
     return bestAcrossWindows(windows, map);
   }, [members, windows]);
 
-  const unanswered = windows.filter((window) => answers[window.id] == null).length;
-  const anyYes = windows.some((window) => answers[window.id] === 'yes');
-  const answering = (!hasAnswered && !submitted) || editing;
+  const anyActive = windows.some((window) => (answers[window.id] ?? 'full') !== 'none');
+  const memberResponseResolved = !isMember || membersLoadedPlanId === planId;
+  const answering = ((!hasAnswered && !submitted) || editing) && memberResponseResolved;
 
   const setAnswer = useCallback((windowId: string, next: DayAnswer) => {
     setAnswers((current) => ({ ...current, [windowId]: next }));
@@ -267,14 +262,34 @@ export function TimePlanContent({
   }, []);
 
   const setInterval = useCallback((windowId: string, next: TimePlanInterval) => {
-    setIntervals((current) => ({ ...current, [windowId]: next }));
+    setIntervals((current) => ({
+      ...current,
+      [windowId]: replaceFirstInterval(current[windowId], next),
+    }));
   }, []);
 
+  /**
+   * The way back out of an edit. "Meine Zeiten ändern" used to be a one-way
+   * door: the only ways to leave the cards again were to send them or to close
+   * the whole sheet, so a mis-tap on a switch had no undo. Re-seeding from the
+   * stored member is what makes this a cancel rather than a second edit —
+   * anything less would leave the changed answers sitting in state, ready to
+   * be sent by the next visit.
+   */
+  const cancelEditing = useCallback(() => {
+    const seed = seedResponseDraft(windows, ownMember);
+    setAnswers(seed.answers);
+    setIntervals(seed.intervals);
+    setError(null);
+    setEditing(false);
+  }, [ownMember, windows]);
+
   async function submit() {
-    if (!plan || !uid || saving || unanswered > 0) return;
+    if (!plan || !uid || savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
     setError(null);
-    const responses = toResponses(windows, answers, intervals);
+    const responses = responseDraftToResponses(windows, answers, intervals);
     try {
       if (hasAnswered) {
         await timePlanningService.respondToTimePlan({ uid }, plan.id, plan.revision, responses);
@@ -285,17 +300,17 @@ export function TimePlanContent({
       setSubmitted(true);
       setEditing(false);
     } catch (caught) {
-      setError(
-        planningErrorMessage(caught, 'Das hat nicht geklappt. Bitte versuche es erneut.'),
-      );
+      setError(planningErrorMessage(caught, 'Das hat nicht geklappt. Bitte versuche es erneut.'));
       haptics.warning();
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }
 
   async function lock(window: TimePlanWindow, startsAt: string, endsAt: string) {
-    if (!plan || !uid || locking) return;
+    if (!plan || !uid || lockingRef.current) return;
+    lockingRef.current = true;
     setLocking(true);
     setError(null);
     try {
@@ -310,29 +325,46 @@ export function TimePlanContent({
       // Activity looked like nothing had happened at all: the activity feed has
       // not echoed the document yet, so there was nothing to open.
     } catch (caught) {
-      setError(
-        planningErrorMessage(caught, 'Der Termin konnte nicht festgelegt werden.'),
-      );
+      setError(planningErrorMessage(caught, 'Der Termin konnte nicht festgelegt werden.'));
       haptics.warning();
     } finally {
+      lockingRef.current = false;
       setLocking(false);
     }
   }
 
   const ctaLabel = saving
     ? 'Wird gespeichert …'
-    : unanswered > 0
-      ? `Noch ${unanswered} ${unanswered === 1 ? 'Tag' : 'Tage'} offen`
-      : hasAnswered
-        ? 'Antwort speichern'
-        : anyYes
-          ? 'Antworten und beitreten'
-          : 'Antworten · ich kann nicht';
+    : hasAnswered
+      ? 'Änderungen übernehmen'
+      : anyActive
+        ? 'Zeiten übernehmen & beitreten'
+        : 'Absage übernehmen & beitreten';
 
   if (!plan) {
     return (
       <View style={styles.loading}>
-        <ActivityIndicator color={PLANNING_COLOR} />
+        {failedCreation ? (
+          <>
+            <Text style={[styles.errorText, { textAlign: 'center' }]}>
+              Die Terminfindung konnte nicht angelegt werden. Bitte erstelle sie erneut.
+            </Text>
+            {onClose ? (
+              <Pressable accessibilityRole="button" onPress={onClose} style={styles.secondary}>
+                <Text style={[styles.secondaryLabel, { color: t.muted }]}>Schließen</Text>
+              </Pressable>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <TogetherLoader color={PLANNING_COLOR} size={loaderSizeForIcon(20)} />
+            {queuedCreation ? (
+              <Text style={[styles.loadingText, { color: t.muted }]}>
+                Offline gespeichert — die Terminfindung wird angelegt, sobald du wieder Netz hast.
+              </Text>
+            ) : null}
+          </>
+        )}
       </View>
     );
   }
@@ -359,32 +391,34 @@ export function TimePlanContent({
       {plan.status === 'locked' ? (
         <LockedNotice plan={plan} onOpenActivity={onOpenActivity} onClose={onClose} />
       ) : answering ? (
-        <>
-          <Text style={[styles.lead, { color: t.muted }]}>
-            {hasAnswered
-              ? 'Ändere, wann du kannst.'
-              : 'Sag kurz, wann du kannst. Ein Tipp pro Tag reicht.'}
-          </Text>
-          {windows.map((window) => (
+        /**
+         * One list, one border. The instruction line that used to sit above it
+         * ("Sag pro Tag kurz Bescheid …") is gone: three segments reading
+         * Passt · Teilweise · Passt nicht explain themselves, and what the
+         * sentence added — that "Teilweise" opens a picker — is discovered by
+         * the tap that does it. A full line box to teach a control that teaches
+         * itself is the most expensive kind of copy on a sheet this tall.
+         */
+        <View style={[styles.answerList, { backgroundColor: t.card, borderColor: t.cardBorder }]}>
+          {windows.map((window, index) => (
             <TimePlanAnswerCard
               key={window.id}
               window={window}
-              availability={availabilityByWindow.get(window.id) ?? null}
-              answer={answers[window.id] ?? null}
-              interval={intervals[window.id] ?? fullInterval(window)}
+              separated={index > 0}
+              answer={answers[window.id] ?? 'full'}
+              interval={intervals[window.id]?.[0] ?? fullInterval(window)}
               onAnswer={(next) => setAnswer(window.id, next)}
               onInterval={(next) => setInterval(window.id, next)}
             />
           ))}
-        </>
+        </View>
       ) : variant === 'summary' && onOpenMembers && onOpenMatching ? (
         <>
           <TimePlanRows
             members={members}
-            memberCount={plan.memberUids.length}
+            memberCount={plan.memberCount}
             status={describePlanStatus({
-              respondedCount: plan.memberUids.length,
-              expectedCount: plan.audienceUids.length,
+              respondedCount: plan.memberCount,
               highlights: roundHighlights,
               canSeeFavourite: isMember,
             })}
@@ -402,7 +436,7 @@ export function TimePlanContent({
         </>
       ) : (
         <>
-          <TimeMatchingCard
+          <TimeTallyCard
             windows={windows}
             members={members}
             currentUid={uid}
@@ -433,28 +467,42 @@ export function TimePlanContent({
       ) : null}
 
       {plan.status === 'collecting' && answering ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={{ disabled: unanswered > 0 || saving }}
-          disabled={unanswered > 0 || saving}
-          onPress={() => void submit()}
-          style={[
-            styles.cta,
-            unanswered > 0 || saving ? { backgroundColor: t.faint } : null,
-          ]}
-        >
-          <Text
-            numberOfLines={1}
-            maxFontSizeMultiplier={TEXT_CAPPED.maxFontSizeMultiplier}
-            allowFontScaling={TEXT_CAPPED.allowFontScaling}
-            style={[
-              styles.ctaLabel,
-              { color: unanswered > 0 || saving ? t.muted : t.onAccent },
-            ]}
+        <View style={styles.ctaRow}>
+          {hasAnswered ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ disabled: saving }}
+              disabled={saving}
+              onPress={cancelEditing}
+              style={[styles.cancel, { borderColor: t.cardBorder }]}
+            >
+              <Text
+                numberOfLines={1}
+                maxFontSizeMultiplier={TEXT_CAPPED.maxFontSizeMultiplier}
+                allowFontScaling={TEXT_CAPPED.allowFontScaling}
+                style={[styles.cancelLabel, { color: t.muted }]}
+              >
+                Abbrechen
+              </Text>
+            </Pressable>
+          ) : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ disabled: saving }}
+            disabled={saving}
+            onPress={() => void submit()}
+            style={[styles.cta, saving ? { backgroundColor: t.faint } : null]}
           >
-            {ctaLabel}
-          </Text>
-        </Pressable>
+            <Text
+              numberOfLines={1}
+              maxFontSizeMultiplier={TEXT_CAPPED.maxFontSizeMultiplier}
+              allowFontScaling={TEXT_CAPPED.allowFontScaling}
+              style={[styles.ctaLabel, { color: saving ? t.muted : t.onAccent }]}
+            >
+              {ctaLabel}
+            </Text>
+          </Pressable>
+        </View>
       ) : null}
     </View>
   );
@@ -505,10 +553,11 @@ function LockedNotice({
 }
 
 const styles = StyleSheet.create({
-  loading: { alignItems: 'center', justifyContent: 'center', paddingVertical: 32 * 2 },
+  loading: { alignItems: 'center', gap: 12, justifyContent: 'center', paddingVertical: 32 * 2 },
+  loadingText: { fontFamily: FONT.medium, fontSize: TYPE.caption.fontSize, textAlign: 'center' },
   subtitle: { fontFamily: FONT.medium, fontSize: TYPE.caption.fontSize },
   content: { gap: 12 },
-  lead: { fontFamily: FONT.medium, fontSize: TYPE.caption.fontSize },
+  answerList: { borderRadius: 16, borderWidth: 1, overflow: 'hidden' },
   secondary: {
     alignItems: 'center',
     alignSelf: 'flex-start',
@@ -518,14 +567,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   secondaryLabel: { fontFamily: FONT.medium, fontSize: TYPE.caption.fontSize },
+  ctaRow: { flexDirection: 'row', gap: 8 },
   cta: {
     alignItems: 'center',
     backgroundColor: PLANNING_COLOR,
     borderRadius: 16,
+    flex: 1,
     justifyContent: 'center',
     minHeight: 56,
+    paddingHorizontal: 12,
   },
   ctaLabel: { fontFamily: FONT.semibold, fontSize: TYPE.body.fontSize },
+  cancel: {
+    alignItems: 'center',
+    borderRadius: 16,
+    borderWidth: 1,
+    justifyContent: 'center',
+    minHeight: 56,
+    paddingHorizontal: 18,
+  },
+  cancelLabel: { fontFamily: FONT.semibold, fontSize: TYPE.label.fontSize },
   error: {
     backgroundColor: 'rgba(243,103,94,0.14)',
     borderRadius: 12,

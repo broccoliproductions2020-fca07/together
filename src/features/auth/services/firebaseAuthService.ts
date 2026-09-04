@@ -3,7 +3,6 @@ import {
   deleteUser,
   GoogleAuthProvider,
   sendPasswordResetEmail,
-  sendEmailVerification,
   onAuthStateChanged,
   OAuthProvider,
   signInAnonymously,
@@ -272,12 +271,29 @@ async function signUpWithEmail(
     // The release gate (FUNCTIONS_ENFORCE_EMAIL_VERIFICATION, docs/backend-plan
     // step 8) rejects writes without a verified address — a fresh account that
     // never received a mail would look broken from the very first tap.
-    await sendEmailVerification(user).catch(() => {});
+    // Still best-effort: a failed mail must not roll back a finished sign-up,
+    // the gate offers "erneut senden" for exactly this case.
+    await requestVerificationEmail().catch(() => {});
     return toSession(user, profile.username);
   } catch (error) {
     await deleteUser(user).catch(() => firebaseSignOut(auth).catch(() => {}));
     throw toAuthError(error, 'signup');
   }
+}
+
+/**
+ * Queues the branded verification mail server-side.
+ *
+ * Replaces the SDK's sendEmailVerification, whose template belongs to Firebase
+ * and cannot carry the brand. Nothing about detecting verification changes:
+ * the callable still hands out a genuine Firebase action link, so
+ * `EmailVerificationGate` keeps polling `emailVerified` exactly as before.
+ */
+async function requestVerificationEmail(): Promise<void> {
+  await httpsCallable<undefined, { queued: boolean; alreadyVerified: boolean }>(
+    getFirebaseFunctions(),
+    'sendVerificationEmail',
+  )();
 }
 
 async function loadSocialAuth() {
@@ -454,7 +470,10 @@ export const firebaseAuthService: AuthService = {
     const authUser = getFirebaseAuth().currentUser;
     if (!authUser) throw new Error('Nicht angemeldet.');
     if (!authUser.email) throw new Error('Für dieses Konto gibt es keine E-Mail-Adresse.');
-    await sendEmailVerification(authUser);
+    // Errors travel on here, unlike at sign-up: the gate's "erneut senden"
+    // button shows them, and a silent failure would leave someone tapping a
+    // button that never does anything.
+    await requestVerificationEmail();
   },
 
   async deleteAccount() {

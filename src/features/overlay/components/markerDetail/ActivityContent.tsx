@@ -19,29 +19,27 @@ import {
 import { colorWithAlpha, markerModeStyles } from '@/features/map/utils/markerStyles';
 import { useThemeColors } from '@/features/theme';
 import { PressableScale } from '@/shared/components/PressableScale';
+import { SEMANTIC_COLOR } from '@/shared/utils/semanticColors';
 
 import { ActivityHeader } from './ActivityHeader';
 import { MODE_COPY } from './constants';
 import { PrimaryButton } from './PrimaryButton';
 import type { ActivitySelection } from './types';
 
-const JOURNEY_ENTRY_LEAD_MS = 6 * 60 * 60 * 1000;
-// Mirrors journeyBackground's auto-stop bounds: an Anreise started now can run
-// until the event ends (+ buffer) and never longer than the hard two-hour cap.
-const JOURNEY_END_BUFFER_MS = 30 * 60 * 1000;
+const JOURNEY_ENTRY_LEAD_MS = 60 * 60 * 1000;
 const JOURNEY_HARD_MAX_MS = 2 * 60 * 60 * 1000;
 const ACTIVITY_CLOCK_TICK_MS = 60_000;
 
 /** Last moment at which starting an Anreise to this activity still means anything. */
 function journeyEntryClosesAt(start: number, endsAt: string | undefined) {
   const end = endsAt ? Date.parse(endsAt) : NaN;
-  return Number.isFinite(end) ? end + JOURNEY_END_BUFFER_MS : start + JOURNEY_HARD_MAX_MS;
+  return Number.isFinite(end) ? end : start + JOURNEY_HARD_MAX_MS;
 }
 
-// The idle entry opens six hours before the start and stays available while the
+// The idle entry opens one hour before the start and stays available while the
 // activity runs — a `now` activity you joined is exactly the case where you are
-// still on your way AFTER the start time, and it is also the only way back in
-// after stopping a shared Anreise (the focus X ends the sharing).
+// still on your way AFTER the start time, and the entry remains available after
+// manually stopping a shared Anreise.
 function journeyEntryIsProminent(
   startsAt: string | undefined,
   endsAt: string | undefined,
@@ -92,7 +90,7 @@ function JourneyFocusShortcut({
         className="h-8 w-8 items-center justify-center rounded-full"
         style={{ backgroundColor: colorWithAlpha(accent, 0.18) }}
       >
-        <Ionicons name="car-outline" size={17} color={accent} />
+        <Ionicons name="navigate-outline" size={17} color={accent} />
       </View>
       <Text className="flex-1 text-sm font-bold text-foreground">{underwayCount} unterwegs</Text>
       <Text className="text-xs font-semibold" style={{ color: accent }}>
@@ -188,7 +186,7 @@ function ActivityManagementActions({
 }: {
   onLeave?: () => void;
   onCancel?: () => void;
-  /** A host sees both actions, so the sheet has to say how they differ. */
+  /** Only picks the leave action's label — a host hands the Activity on. */
   isHost?: boolean;
 }) {
   const colors = useThemeColors();
@@ -199,11 +197,6 @@ function ActivityManagementActions({
       <Text className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
         Activity verwalten
       </Text>
-      {isHost && onLeave && onCancel ? (
-        <Text className="-mt-1 mb-1 text-xs text-muted-foreground">
-          Verlassen gibt die Activity ab — sie läuft ohne dich weiter. Absagen beendet sie für alle.
-        </Text>
-      ) : null}
       {onLeave ? (
         <Pressable
           accessibilityRole="button"
@@ -267,7 +260,12 @@ export function ActivityContent({
   onCancel?: () => void;
 }) {
   const accent = markerModeStyles[selection.mode].color;
-  const { activeJourney, getActivityJourneys, watchActivityJourney } = useJourney();
+  const {
+    activeJourney,
+    getActivityJourneys,
+    getActivityJourneyError,
+    watchActivityJourney,
+  } = useJourney();
   const [now, setNow] = useState(() => Date.now());
   // Chat info (members, admins) — the same sheet the full-screen chat opens,
   // so the inline chat is not a second-class surface.
@@ -307,9 +305,10 @@ export function ActivityContent({
       boundaryTimers.forEach(clearTimeout);
     };
   }, [selection.startsAt, selection.endsAt]);
-  // A `now` activity has no Anreise at all, so it also gets no RTDB journey
-  // listener — the feature being absent has to be absent in the cost, too.
-  const journeySupported = activitySupportsJourney(selection.plannedMode);
+  const journeySupported = activitySupportsJourney(
+    selection.plannedMode,
+    selection.targetCoordinate,
+  );
   useEffect(() => {
     if (!joined || !journeySupported) return;
     return watchActivityJourney(journeyContext);
@@ -325,7 +324,7 @@ export function ActivityContent({
   const journeyFocusShortcut = (
     <JourneyFocusShortcut
       journeys={journeys}
-      accent={accent}
+      accent={SEMANTIC_COLOR.journey}
       onFocus={onFocusJourney ? () => onFocusJourney() : undefined}
     />
   );
@@ -409,6 +408,7 @@ export function ActivityContent({
             activityId={selection.id}
             context={journeyContext}
             journeys={journeys}
+            viewerError={getActivityJourneyError(selection.id)}
             armedJourney={armedJourney}
             idlePresentation={journeyIdlePresentation}
             onFocusParticipant={onFocusJourney}

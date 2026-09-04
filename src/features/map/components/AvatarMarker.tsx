@@ -20,7 +20,7 @@ export interface AvatarMarkerProps {
   progress: SharedValue<number>;
   /** A round still looking for a time: no ring, violet name badge. */
   planning?: boolean;
-  /** Keep the label visible even when zoomed out (selected / joined). */
+  /** Keep the label visible even when zoomed out. */
   titlePriority?: boolean;
   unreadCount?: number;
   participantCount?: number;
@@ -76,7 +76,7 @@ export function AvatarMarker({
       selected={selected}
       title={label ?? displayName}
       planning={planning}
-      titlePriority={titlePriority || selected}
+      titlePriority={titlePriority}
       journeyUnderwayCount={journeyUnderwayCount}
     />
   );

@@ -30,8 +30,11 @@ import { STATUS_COLOR, worstStatus } from '../safetyTheme';
  */
 export function SafetyStatusPill({
   showOwnSessionReminder = true,
+  onTopOcclusionHeightChange,
 }: {
   showOwnSessionReminder?: boolean;
+  /** Bottom edge of the pill, measured from the screen top. */
+  onTopOcclusionHeightChange?: (height: number) => void;
 }) {
   const {
     session,
@@ -64,6 +67,9 @@ export function SafetyStatusPill({
     !friendSessions.length &&
     !heimwegFocusActive;
   const visible = companionPending || focusExit || ownMinimized;
+  useEffect(() => {
+    if (!visible) onTopOcclusionHeightChange?.(0);
+  }, [onTopOcclusionHeightChange, visible]);
 
   // Pulse only while friends share unseen — stops the moment you watch.
   // Blue = calm: the pill body stays STILL, only an expanding radar ring
@@ -137,10 +143,9 @@ export function SafetyStatusPill({
   } else {
     color = STATUS_COLOR[session!.status];
     const count = session!.audienceUids.length;
-    label =
-      startingHeimweg
-        ? 'Heimweg wird gestartet'
-        : session!.status === 'red'
+    label = startingHeimweg
+      ? 'Heimweg wird gestartet'
+      : session!.status === 'red'
         ? 'Hilferuf gesendet'
         : session!.status === 'orange'
           ? 'Unsicher gemeldet'
@@ -155,6 +160,11 @@ export function SafetyStatusPill({
     <Animated.View
       className="absolute left-0 right-0 items-center"
       style={{ top: insets.top + 64, zIndex: 40 }}
+      onLayout={(event) => {
+        onTopOcclusionHeightChange?.(
+          Math.max(0, insets.top + 64 + event.nativeEvent.layout.height),
+        );
+      }}
       pointerEvents="box-none"
       entering={reducedMotion ? undefined : FadeIn.delay(45).duration(180)}
       exiting={reducedMotion ? undefined : FadeOut.duration(125)}

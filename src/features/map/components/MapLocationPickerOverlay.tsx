@@ -1,12 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useRef } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { SelectedPlace } from '@/features/activities';
 import { FloatingSurface } from '@/features/overlay/components/FloatingSurface';
 import type { PlaceSuggestion } from '@/features/places';
-import { AppButton } from '@/shared/components';
+import { AppButton, loaderSizeForIcon, TogetherLoader } from '@/shared/components';
 
 import type { ActivityMode, MapCoordinate } from '../types/map.types';
 
@@ -142,13 +142,13 @@ export function MapLocationPickerOverlay({
           <FloatingSurface className="rounded-[24px]" contentClassName="p-2">
             {searchLoading ? (
               <View className="flex-row items-center gap-3 px-3 py-3">
-                <ActivityIndicator color={accent} />
+                <TogetherLoader accessibilityLabel="" color={accent} size={loaderSizeForIcon(18)} />
                 <Text className="text-sm font-semibold text-foreground">Orte werden gesucht …</Text>
               </View>
             ) : null}
             {loading ? (
               <View className="flex-row items-center gap-3 px-3 py-3">
-                <ActivityIndicator color={accent} />
+                <TogetherLoader accessibilityLabel="" color={accent} size={loaderSizeForIcon(18)} />
                 <Text className="text-sm font-semibold text-foreground">Ort wird geladen …</Text>
               </View>
             ) : null}

@@ -83,9 +83,8 @@ export interface MapMarker {
   /**
    * A round still looking for a time (Terminfindung), not a fixed plan.
    *
-   * The ring is a clock, so this marker has none — that absence IS the
-   * statement. Since the ring is also the only thing carrying the mode colour,
-   * the colour moves into the name badge instead, in the app's planning violet.
+   * Visually it remains a future (`soon`) activity. The missing concrete time
+   * is communicated in its detail sheet, not through a second map colour.
    */
   planning?: boolean;
   /** ISO 8601 — drives the "soon" → "now" auto-transition, if set. */
@@ -150,6 +149,20 @@ export interface ActivitySelectionPreview {
   guestInvitesEnabled?: boolean;
 }
 
+/** One selectable plan inside a map stack. A stack groups map furniture only;
+ * it never turns several independent activities into one participant group. */
+export interface ActivityStackItem {
+  id: string;
+  title: string;
+  mode: ActivityMode;
+  planning?: boolean;
+  timeLabel?: string;
+  placeLabel?: string;
+  participantCount: number;
+  maxParticipants?: number;
+  participants: MarkerAvatar[];
+}
+
 export type MapSelection =
   /**
    * A round still looking for a time. It is a selection like any other, so it
@@ -163,6 +176,13 @@ export type MapSelection =
       hostName: string;
       placeLabel?: string;
       coordinate?: MapCoordinate;
+    }
+  | {
+      type: 'ActivityStack';
+      id: string;
+      title: string;
+      coordinate: MapCoordinate;
+      activities: ActivityStackItem[];
     }
   | ({ type: 'Avatar'; hostName: string } & ActivitySelectionPreview)
   | ({ type: 'Cluster' } & ActivitySelectionPreview)

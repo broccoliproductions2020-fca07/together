@@ -76,6 +76,19 @@ export function axisHourMarks(axis: DayAxis, widthPx: number): number[] {
   for (let hour = firstHour; hour <= lastHour; hour += 1) {
     if ((hour - firstHour) % step === 0) marks.push(hour * 60);
   }
+
+  const endpoint = lastHour * 60;
+  const previous = marks[marks.length - 1];
+  if (previous !== endpoint && previous != null) {
+    const distancePx = ((endpoint - previous) / 60) * perHour;
+    if (distancePx >= 34) {
+      marks.push(endpoint);
+    } else if (marks.length > 1) {
+      // The final label is the actual end of the scale. Prefer it over a
+      // neighbouring regular tick that would otherwise leave a blank tail.
+      marks[marks.length - 1] = endpoint;
+    }
+  }
   return marks;
 }
 

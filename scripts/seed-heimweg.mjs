@@ -11,10 +11,14 @@
  *     the others stay blue, so mixed severity is testable: pill/sheet must
  *     show the worst one first)
  *   node scripts/seed-heimweg.mjs --end         → removes sessions + index
+ *   node scripts/seed-heimweg.mjs --once --owner seed-mia --audience seed-amelie,seed-david
+ *     → ONE session owned by the signed-in screenshot account, shared with
+ *       exactly those two. That is the owner console ("Sicher angekommen"),
+ *       not the companion view, and it is what the landing capture needs.
  *
  * Behaviour:
- *  - Shares with EVERY non-seed auth user (your dev account/s), exactly like
- *    the main seed's friendships.
+ *  - Shares with EVERY non-seed auth user (your dev account/s), plus the two
+ *    supplied portrait companions used by the owner-side marketing capture.
  *  - Updates location/updatedAt every 20 s while running, so derived signals
  *    stay honestly fresh. Ctrl+C leaves the session standing — updatedAt goes
  *    stale, which IS the honest data-gap demo (orange after 4 min); clean up
@@ -24,6 +28,8 @@
  */
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
+
+import { LANDING_CENTRE } from './lib/seed-scenarios.mjs';
 
 const require = createRequire(import.meta.url);
 const admin = require('./firebase-admin-tools.cjs');
@@ -40,9 +46,10 @@ const DATABASE_URL = 'http://127.0.0.1:9000?ns=demo-together-default-rtdb';
  * main seed). Distinct radii/phases so their circles never overlap. */
 const WALKERS = [
   { uid: 'seed-mia', displayName: 'Mia Sommer', initials: 'MS', radius: 0.004, phase: 0 },
-  { uid: 'seed-ben', displayName: 'Ben Otto', initials: 'BO', radius: 0.006, phase: 2.1 },
-  { uid: 'seed-nora', displayName: 'Nora Weiß', initials: 'NW', radius: 0.0025, phase: 4.2 },
+  { uid: 'seed-amelie', displayName: 'Amelie Wagner', initials: 'AW', radius: 0.006, phase: 2.1 },
+  { uid: 'seed-david', displayName: 'David Klein', initials: 'DK', radius: 0.0025, phase: 4.2 },
 ];
+const LANDING_COMPANION_UIDS = ['seed-mia', 'seed-amelie', 'seed-david'];
 const HOUR = 60 * 60 * 1000;
 const NOTIFICATION_RETENTION_MS = 30 * 24 * HOUR;
 const BLUE_RETENTION_MS = 3 * 60 * 1000;
@@ -64,12 +71,52 @@ function argValue(name, fallback) {
   const value = index >= 0 ? Number(args[index + 1]) : NaN;
   return Number.isFinite(value) ? value : fallback;
 }
-const CENTER = { lat: argValue('lat', 52.5208), lng: argValue('lng', 13.4095) };
+function stringArg(name, fallback) {
+  const index = args.indexOf(`--${name}`);
+  const value = index >= 0 ? args[index + 1] : undefined;
+  return typeof value === 'string' && !value.startsWith('--') ? value : fallback;
+}
+/** Same centre rule as the other seeds: dev in Berlin, landing in Augsburg. */
+const SCENARIO = stringArg('scenario', 'dev');
+const DEFAULT_CENTER =
+  SCENARIO === 'landing'
+    ? { lat: LANDING_CENTRE.lat, lng: LANDING_CENTRE.lng }
+    : { lat: 52.5208, lng: 13.4095 };
+const CENTER = {
+  lat: argValue('lat', DEFAULT_CENTER.lat),
+  lng: argValue('lng', DEFAULT_CENTER.lng),
+};
+/** Who owns the session. Default: the demo companion set above. */
+const ownerUid = stringArg('owner', null);
+/** Who may watch it. Default: every dev account plus the portrait companions. */
+const explicitAudience = stringArg('audience', '')
+  .split(',')
+  .map((uid) => uid.trim())
+  .filter(Boolean);
 const safetyNotificationId = (recipientUid, ownerUid) =>
   `seed-safety-${createHash('sha256')
     .update(`${recipientUid}:${ownerUid}`)
     .digest('hex')
     .slice(0, 16)}`;
+
+async function clearSeedWalkers({ db, rtdb, audienceUids }) {
+  const removals = {};
+  for (const walker of WALKERS) {
+    removals[`heimwege/${walker.uid}`] = null;
+    audienceUids.forEach((uid) => {
+      removals[`heimwegeIndex/${uid}/${walker.uid}`] = null;
+    });
+  }
+  const notificationDeletes = [];
+  for (const walker of WALKERS) {
+    audienceUids.forEach((uid) => {
+      notificationDeletes.push(
+        db.doc(`notifications/${safetyNotificationId(uid, walker.uid)}`).delete(),
+      );
+    });
+  }
+  await Promise.all([rtdb.ref().update(removals), ...notificationDeletes]);
+}
 
 async function main() {
   const app = admin.initializeApp({ projectId: PROJECT_ID, databaseURL: DATABASE_URL });
@@ -79,36 +126,68 @@ async function main() {
 
   const { users } = await auth.listUsers(1000);
   const devUids = users.map((user) => user.uid).filter((uid) => !uid.startsWith('seed-'));
-  if (!devUids.length) {
+  // Ohne --owner/--audience wird das Publikum aus den Dev-Konten abgeleitet,
+  // dann muss es welche geben. Die Aufnahme-Welt nennt beides ausdruecklich
+  // und hat nach ihrem harten Reset absichtlich kein einziges Dev-Konto mehr.
+  if (!devUids.length && !ownerUid && !explicitAudience.length) {
     console.error('Kein Dev-Account im Auth-Emulator — erst `npm run emulators:seed` ausführen.');
     process.exit(1);
   }
 
   if (endMode) {
     // Removes ALL possible walkers regardless of how many were started.
-    const removals = {};
-    for (const walker of WALKERS) {
-      removals[`heimwege/${walker.uid}`] = null;
-      devUids.forEach((uid) => {
-        removals[`heimwegeIndex/${uid}/${walker.uid}`] = null;
-      });
-    }
-    const notificationDeletes = [];
-    for (const walker of WALKERS) {
-      devUids.forEach((uid) => {
-        notificationDeletes.push(
-          db.doc(`notifications/${safetyNotificationId(uid, walker.uid)}`).delete(),
-        );
-      });
-    }
-    await Promise.all([rtdb.ref().update(removals), ...notificationDeletes]);
+    await clearSeedWalkers({
+      db,
+      rtdb,
+      audienceUids: [...new Set([...devUids, ...LANDING_COMPANION_UIDS])],
+    });
     console.log(`Alle Demo-Heimwege entfernt (${WALKERS.length} Läufer).`);
     await app.delete();
     return;
   }
 
-  const count = Math.min(Math.max(Math.round(argValue('count', 1)), 1), WALKERS.length);
-  const walkers = WALKERS.slice(0, count).map((walker, index) => ({
+  // A fresh test mode must not retain walkers from a previous --count run.
+  const sharedAudienceUids = explicitAudience.length
+    ? explicitAudience
+    : [...new Set([...devUids, ...LANDING_COMPANION_UIDS])];
+  await clearSeedWalkers({
+    db,
+    rtdb,
+    audienceUids: [...new Set([...sharedAudienceUids, ...devUids, ...LANDING_COMPANION_UIDS])],
+  });
+
+  // `--owner` turns the seed around: instead of friends whose Heimweg you
+  // accompany, it is YOUR session, seen from the console. The identity comes
+  // from the profile the main seed already wrote, so the name and the portrait
+  // in the console are the ones the rest of the app shows.
+  let roster = WALKERS;
+  if (ownerUid) {
+    const profile = (await db.doc(`publicProfiles/${ownerUid}`).get()).data();
+    if (!profile) {
+      console.error(`Kein Profil für --owner ${ownerUid}. Erst den Haupt-Seed ausführen.`);
+      process.exit(1);
+    }
+    roster = [
+      {
+        uid: ownerUid,
+        displayName: profile.displayName,
+        initials: profile.initials,
+        radius: 0.004,
+        phase: 0,
+      },
+    ];
+    // Nothing else may share with the owner, or the map behind the console
+    // shows a stranger's Heimweg marker next to their own.
+    await rtdb
+      .ref(`heimwegeIndex/${ownerUid}`)
+      .remove()
+      .catch(() => {});
+  }
+
+  const count = ownerUid
+    ? 1
+    : Math.min(Math.max(Math.round(argValue('count', 1)), 1), roster.length);
+  const walkers = roster.slice(0, count).map((walker, index) => ({
     ...walker,
     angle: walker.phase,
     // Mixed severity on purpose: --status colors only the FIRST walker.
@@ -123,9 +202,15 @@ async function main() {
     at: ms,
   });
 
-  const audienceUids = Object.fromEntries(devUids.map((uid) => [uid, true]));
   const writes = {};
   for (const walker of walkers) {
+    const audienceUids = sharedAudienceUids.filter((uid) => uid !== walker.uid);
+    const confirmedAt = now - 2 * 60 * 1000;
+    const companions = Object.fromEntries(
+      (ownerUid ? sharedAudienceUids : LANDING_COMPANION_UIDS)
+        .filter((uid) => uid !== walker.uid)
+        .map((uid) => [uid, { confirmedAt }]),
+    );
     writes[`heimwege/${walker.uid}`] = {
       displayName: walker.displayName,
       initials: walker.initials,
@@ -135,17 +220,18 @@ async function main() {
       expiresAt,
       retainUntil: expiresAt + (walker.status === 'blue' ? BLUE_RETENTION_MS : 30 * 60 * 1000),
       location: locationOf(walker, now),
-      audienceUids,
-      companions: {},
+      audienceUids: Object.fromEntries(audienceUids.map((uid) => [uid, true])),
+      companions,
     };
-    devUids.forEach((uid) => {
+    audienceUids.forEach((uid) => {
       writes[`heimwegeIndex/${uid}/${walker.uid}`] = true;
     });
   }
   await rtdb.ref().update(writes);
   const notificationWrites = [];
-  for (const walker of WALKERS) {
-    for (const recipientUid of devUids) {
+  for (const walker of roster) {
+    const audienceUids = sharedAudienceUids.filter((uid) => uid !== walker.uid);
+    for (const recipientUid of audienceUids) {
       const ref = db.doc(`notifications/${safetyNotificationId(recipientUid, walker.uid)}`);
       if (!walkers.some((activeWalker) => activeWalker.uid === walker.uid)) {
         notificationWrites.push(ref.delete());
@@ -166,7 +252,7 @@ async function main() {
   }
   await Promise.all(notificationWrites);
   console.log(
-    `${walkers.map((walker) => `${walker.displayName} (${walker.status})`).join(', ')} ${walkers.length === 1 ? 'teilt ihren' : 'teilen ihren'} Heimweg mit ${devUids.length} Dev-Account(s) [${devUids.join(', ')}].`,
+    `${walkers.map((walker) => `${walker.displayName} (${walker.status})`).join(', ')} ${walkers.length === 1 ? 'teilt ihren' : 'teilen ihren'} Heimweg mit ${sharedAudienceUids.length} ausgewählten Begleiter:innen.`,
   );
 
   if (onceMode) {

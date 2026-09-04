@@ -1,0 +1,15 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "MY6UVLY69P.com.broccolistudio.together",
+        "paths": ["/f/*"]
+      },
+      {
+        "appID": "MY6UVLY69P.com.broccolistudio.together.staging",
+        "paths": ["/f/*"]
+      }
+    ]
+  }
+}

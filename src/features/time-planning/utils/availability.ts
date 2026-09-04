@@ -150,41 +150,51 @@ function sameUids(left: string[], right: string[]): boolean {
 /**
  * The strongest windows the overview can name.
  *
- * Only adjacent segments covered by the same people are joined. A change in
- * people must stay visible: otherwise the suggested window could not be
- * accepted by every person it names. The best run has the highest count; a tie
- * goes to the longer one. Exact ties are all returned in chronological order.
- * A run shorter than {@link MIN_SLOT_MINUTES} is only offered when
- * nothing longer exists at all — a five-minute peak is not an appointment.
+ * Every candidate is at least the Activity minimum and carries only people who
+ * cover its WHOLE span. Adjacent steps may therefore join even when their full
+ * participant sets differ: their intersection is still an honest lockable
+ * group. The highest cover wins, then the longer candidate; exact ties remain.
  */
 export function bestSlots(segments: AvailabilitySegment[], totalCount: number): BestSlot[] {
-  const runs: AvailabilitySegment[] = [];
-  segments.forEach((segment) => {
-    if (segment.count === 0) return;
-    const previous = runs[runs.length - 1];
-    if (
-      previous &&
-      previous.endMs === segment.startMs &&
-      sameUids(previous.uids, segment.uids)
-    ) {
-      previous.endMs = segment.endMs;
-      return;
-    }
-    runs.push({ ...segment, uids: [...segment.uids] });
-  });
-  if (runs.length === 0) return [];
-
   const minMs = MIN_SLOT_MINUTES * MINUTE_MS;
-  const longEnough = runs.filter((run) => run.endMs - run.startMs >= minMs);
-  const pool = longEnough.length > 0 ? longEnough : runs;
+  const candidates: AvailabilitySegment[] = [];
+  for (let startIndex = 0; startIndex < segments.length; startIndex += 1) {
+    const start = segments[startIndex];
+    let sharedUids = [...start.uids];
+    if (sharedUids.length === 0) continue;
+    for (let endIndex = startIndex; endIndex < segments.length; endIndex += 1) {
+      const current = segments[endIndex];
+      if (endIndex > startIndex) {
+        const previous = segments[endIndex - 1];
+        if (previous.endMs !== current.startMs) break;
+        sharedUids = sharedUids.filter((uid) => current.uids.includes(uid));
+      }
+      if (sharedUids.length === 0) break;
+      if (current.endMs - start.startMs < minMs) continue;
+      candidates.push({
+        startMs: start.startMs,
+        endMs: current.endMs,
+        count: sharedUids.length,
+        uids: [...sharedUids],
+      });
+    }
+  }
+  if (candidates.length === 0) return [];
 
-  const highestCount = Math.max(...pool.map((run) => run.count));
-  const countWinners = pool.filter((run) => run.count === highestCount);
+  const highestCount = Math.max(...candidates.map((run) => run.count));
+  const countWinners = candidates.filter((run) => run.count === highestCount);
   const longestDuration = Math.max(...countWinners.map((run) => run.endMs - run.startMs));
 
+  const seen = new Set<string>();
   return countWinners
     .filter((run) => run.endMs - run.startMs === longestDuration)
     .sort((left, right) => left.startMs - right.startMs)
+    .filter((run) => {
+      const key = `${run.startMs}:${run.endMs}:${run.uids.join(',')}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
     .map((winner) => ({
       startMs: winner.startMs,
       endMs: winner.endMs,

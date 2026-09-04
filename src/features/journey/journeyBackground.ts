@@ -1,9 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { onAuthStateChanged } from '@react-native-firebase/auth';
+import * as Crypto from 'expo-crypto';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import * as TaskManager from 'expo-task-manager';
-import { Platform } from 'react-native';
+import { Alert, Linking, Platform } from 'react-native';
 
 import { notificationService } from '@/features/notifications/services/notificationService';
 import { getFirebaseAuth } from '@/shared/services/firebase';
@@ -36,6 +37,7 @@ const ARRIVAL_CONFIRMATIONS = 2;
 const ARRIVAL_STATUS_RETENTION_MS = 15 * 60 * 1000;
 const LOCATION_INTERVAL_MS = 30_000;
 const LOCATION_DISTANCE_INTERVAL_METERS = 20;
+const LOCATION_POINT_TTL_MS = 2 * 60 * 1000;
 const MAX_USABLE_ACCURACY_METERS = 45;
 const MIN_MOVEMENT_METERS = 40;
 const MIN_MOVEMENT_SPEED_MPS = 0.45;
@@ -55,7 +57,8 @@ interface MovementObservation {
 }
 
 interface StoredJourney {
-  version: 2;
+  version: 3;
+  sessionId: string;
   actor: JourneyActor;
   activity: JourneyActivityContext;
   status: AutomationStatus;
@@ -65,6 +68,7 @@ interface StoredJourney {
   updatedAt: string;
   currentCoordinate?: GeoCoordinate;
   lastObservation?: MovementObservation;
+  movementHits: number;
   arrivalHits: number;
   arrivalExpiresAt?: number;
   /** Pending local-notification id for the best-effort T-30 arm trigger
@@ -73,6 +77,7 @@ interface StoredJourney {
 }
 
 interface LegacyStoredJourney {
+  version?: number;
   actor?: JourneyActor;
   activity?: { id?: string };
   armTriggerNotificationId?: string;
@@ -104,7 +109,7 @@ function distanceMeters(a?: GeoCoordinate, b?: GeoCoordinate): number | undefine
 }
 
 function journeyExpiry(state: StoredJourney, now: number) {
-  // Arming may happen from the in-app entry up to six hours before start. The
+  // Arming may happen from the in-app entry up to one hour before start. The
   // two-hour safety cap therefore begins with movement (or the T-30 detection
   // window), not with that early, location-free consent tap.
   const hardStopBase = state.startedAt
@@ -115,6 +120,22 @@ function journeyExpiry(state: StoredJourney, now: number) {
     ? Date.parse(state.activity.endsAt) + EVENT_END_BUFFER_MS
     : Infinity;
   return Math.min(hardStopAt, eventStopAt, now + HARD_MAX_MS);
+}
+
+function locationPointExpiry(state: StoredJourney, now: number) {
+  return Math.min(journeyExpiry(state, now), now + LOCATION_POINT_TTL_MS);
+}
+
+async function refreshAuthorizedActivity(state: StoredJourney) {
+  const authorized = await journeyService.ensureJourneyMember(state.actor, state.activity.id, {
+    sessionId: state.sessionId,
+  });
+  state.activity = {
+    ...authorized,
+    participants: state.activity.participants,
+  };
+  state.updatedAt = new Date().toISOString();
+  await writeStoredJourney(state);
 }
 
 function recordFromStored(state: StoredJourney): UserJourneyRecord {
@@ -141,10 +162,9 @@ async function readStoredJourney(): Promise<StoredJourney | null> {
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as StoredJourney | LegacyStoredJourney;
-    if ((parsed as StoredJourney).version !== 2) {
-      // v1 stored destinations could have passed through the obsolete Berlin
-      // canvas projection. End that consent instead of continuing to share a
-      // journey against a potentially wrong destination.
+    if ((parsed as StoredJourney).version !== 3) {
+      // Older records have no per-device session. End them instead of letting
+      // an old onDisconnect remove a newer device's point.
       const legacy = parsed as LegacyStoredJourney;
       if (typeof legacy.armTriggerNotificationId === 'string') {
         await Notifications.cancelScheduledNotificationAsync(legacy.armTriggerNotificationId).catch(
@@ -152,14 +172,17 @@ async function readStoredJourney(): Promise<StoredJourney | null> {
         );
       }
       if (legacy.actor?.uid && legacy.activity?.id) {
-        await journeyService.stopJourney(legacy.actor, legacy.activity.id).catch(() => {});
+        await journeyService
+          .stopJourney(legacy.actor, legacy.activity.id, legacy.actor.uid)
+          .catch(() => {});
         await stopNativeLocationUpdates().catch(() => {});
       }
       await AsyncStorage.removeItem(STORAGE_KEY);
       return null;
     }
     const state = parsed as StoredJourney;
-    if (!state.activity?.id || !state.actor?.uid) {
+    if (!state.activity?.id || !state.actor?.uid || !state.sessionId) {
+      await stopNativeLocationUpdates().catch(() => {});
       await AsyncStorage.removeItem(STORAGE_KEY);
       return null;
     }
@@ -169,6 +192,7 @@ async function readStoredJourney(): Promise<StoredJourney | null> {
     }
     return state;
   } catch {
+    await stopNativeLocationUpdates().catch(() => {});
     await AsyncStorage.removeItem(STORAGE_KEY);
     return null;
   }
@@ -205,6 +229,15 @@ async function hasMatchingSignedInUser(state: StoredJourney) {
   return uid === state.actor.uid;
 }
 
+async function abandonJourneyForAccountChange(state: StoredJourney) {
+  await cancelArmTrigger(state);
+  await stopNativeLocationUpdates().catch(() => {});
+  await journeyService
+    .stopJourney(state.actor, state.activity.id, state.sessionId)
+    .catch(() => {});
+  await writeStoredJourney(null);
+}
+
 function locationIsUsable(location: Location.LocationObject) {
   const accuracy = location.coords.accuracy;
   return accuracy == null || accuracy <= MAX_USABLE_ACCURACY_METERS;
@@ -224,7 +257,11 @@ function isMeaningfulMovement(
     reportedSpeed != null && reportedSpeed >= 0 ? reportedSpeed : 0,
     calculatedSpeed,
   );
-  return movedMeters >= MIN_MOVEMENT_METERS && speed >= MIN_MOVEMENT_SPEED_MPS;
+  const accuracyFloor = (previous.accuracyMeters ?? 0) + (next.accuracyMeters ?? 0);
+  return (
+    movedMeters >= Math.max(MIN_MOVEMENT_METERS, accuracyFloor) &&
+    speed >= MIN_MOVEMENT_SPEED_MPS
+  );
 }
 
 function activityFromPayload(value: unknown): JourneyActivityContext | null {
@@ -304,7 +341,7 @@ async function cancelArmTrigger(state: StoredJourney) {
   }
 }
 
-async function startNativeLocationUpdates() {
+async function startNativeLocationUpdates(status: 'armed' | 'underway' = 'armed') {
   const alreadyStarted = await Location.hasStartedLocationUpdatesAsync(JOURNEY_LOCATION_TASK);
   if (alreadyStarted) return;
 
@@ -318,14 +355,24 @@ async function startNativeLocationUpdates() {
     ...(Platform.OS === 'android'
       ? {
           foregroundService: {
-            notificationTitle: 'Mica: Anreise vorbereitet',
-            notificationBody: 'Dein Standort wird erst bei Bewegung mit Teilnehmern geteilt.',
-            notificationColor: '#3B82F6',
+            notificationTitle:
+              status === 'underway' ? 'Mica: Anreise wird geteilt' : 'Mica: Anreise vorbereitet',
+            notificationBody:
+              status === 'underway'
+                ? 'Nur dein aktueller Punkt ist für die Teilnehmer sichtbar.'
+                : 'Dein Standort wird erst bei bestätigter Bewegung geteilt.',
+            notificationColor: '#7657A8',
             killServiceOnDestroy: true,
           },
         }
       : {}),
   });
+}
+
+async function showUnderwayForegroundService() {
+  if (Platform.OS !== 'android') return;
+  await stopNativeLocationUpdates();
+  await startNativeLocationUpdates('underway');
 }
 
 async function stopNativeLocationUpdates() {
@@ -341,7 +388,7 @@ async function publishLocation(
   now: number,
   initial = false,
 ) {
-  const expiresAt = journeyExpiry(state, now);
+  const expiresAt = locationPointExpiry(state, now);
   const location = {
     lat: coordinate.latitude,
     lng: coordinate.longitude,
@@ -350,15 +397,22 @@ async function publishLocation(
     expiresAt,
   };
   if (initial) {
-    await journeyService.startJourney(state.actor, state.activity, location);
+    await journeyService.startJourney(state.actor, state.activity, state.sessionId, location);
   } else {
-    await journeyService.updateJourney(state.actor, state.activity.id, location);
+    await journeyService.updateJourney(
+      state.actor,
+      state.activity.id,
+      state.sessionId,
+      location,
+    );
   }
 }
 
 async function finishForExpiry(state: StoredJourney) {
   await cancelArmTrigger(state);
-  await journeyService.stopJourney(state.actor, state.activity.id).catch(() => {});
+  await journeyService
+    .stopJourney(state.actor, state.activity.id, state.sessionId)
+    .catch(() => {});
   await stopNativeLocationUpdates().catch(() => {});
   await writeStoredJourney(null);
 }
@@ -368,7 +422,7 @@ async function finishForArrival(state: StoredJourney, now: number) {
   // The RTDB node is removed before the local state says "arrived". That way
   // the confirmation is never shown while a participant could still read a
   // final coordinate.
-  await journeyService.stopJourney(state.actor, state.activity.id);
+  await journeyService.stopJourney(state.actor, state.activity.id, state.sessionId);
   await stopNativeLocationUpdates().catch(() => {});
   state.status = 'arrived';
   state.arrivalExpiresAt = Math.min(now + ARRIVAL_STATUS_RETENTION_MS, journeyExpiry(state, now));
@@ -392,15 +446,25 @@ async function finishForArrival(state: StoredJourney, now: number) {
 export async function ensureBackgroundWatcherArmed() {
   if (Platform.OS === 'web') return;
   const state = await readStoredJourney();
-  if (!state || state.status !== 'armed') return;
-  if (!(await hasMatchingSignedInUser(state))) return;
+  if (!state) return;
+  if (!(await hasMatchingSignedInUser(state))) {
+    await abandonJourneyForAccountChange(state);
+    return;
+  }
 
   const now = Date.now();
   if (now >= journeyExpiry(state, now)) {
     await finishForExpiry(state);
     return;
   }
+  if (state.status !== 'armed') return;
   if (now < state.detectionStartsAt) return;
+  try {
+    await refreshAuthorizedActivity(state);
+  } catch {
+    await finishForExpiry(state);
+    return;
+  }
   await cancelArmTrigger(state);
   await startNativeLocationUpdates();
 }
@@ -408,7 +472,10 @@ export async function ensureBackgroundWatcherArmed() {
 async function processLocation(location: Location.LocationObject, allowPublish = true) {
   const state = await readStoredJourney();
   if (!state || state.status === 'arrived') return;
-  if (!(await hasMatchingSignedInUser(state))) return;
+  if (!(await hasMatchingSignedInUser(state))) {
+    await abandonJourneyForAccountChange(state);
+    return;
+  }
 
   const now = Date.now();
   if (now >= journeyExpiry(state, now)) {
@@ -430,8 +497,20 @@ async function processLocation(location: Location.LocationObject, allowPublish =
     const previous = state.lastObservation;
     state.lastObservation = observation;
     state.updatedAt = new Date(now).toISOString();
-    if (!previous || !isMeaningfulMovement(previous, observation, location.coords.speed)) {
+    const movementConfirmed =
+      previous && isMeaningfulMovement(previous, observation, location.coords.speed);
+    state.movementHits = movementConfirmed ? state.movementHits + 1 : 0;
+    if (!movementConfirmed || state.movementHits < 2) {
       await writeStoredJourney(state);
+      return;
+    }
+
+    try {
+      // The host may have edited time or place after this device was armed.
+      // Re-authorize once at real departure and use only the server's current target.
+      await refreshAuthorizedActivity(state);
+    } catch {
+      await finishForExpiry(state);
       return;
     }
 
@@ -442,6 +521,7 @@ async function processLocation(location: Location.LocationObject, allowPublish =
       await publishLocation(state, observation.coordinate, 'onTheWay', now, true);
     }
     await writeStoredJourney(state);
+    await showUnderwayForegroundService().catch(() => {});
     await notificationService.showJourneyStatus({
       activityId: state.activity.id,
       title: state.activity.title,
@@ -561,7 +641,7 @@ export async function prepareJourneyAutomation() {
   await Notifications.setNotificationCategoryAsync(JOURNEY_REMINDER_CATEGORY, [
     {
       identifier: JOURNEY_AUTO_SHARE_ACTION,
-      buttonTitle: 'Anreise teilen',
+      buttonTitle: 'Ja, teilen',
       // Opens the app so the foreground arm path can REQUEST background
       // permission on first use — a headless action cannot prompt, so a fresh
       // install would otherwise tap "Aktivieren" and silently do nothing.
@@ -570,10 +650,10 @@ export async function prepareJourneyAutomation() {
     },
     {
       identifier: JOURNEY_NOT_NOW_ACTION,
-      buttonTitle: 'Nicht jetzt',
-      // A deliberate decline must never start tracking or wake the app. The
-      // person can still enable Anreise later from the activity.
-      options: { opensAppToForeground: false },
+      buttonTitle: 'Nein',
+      // Opening consistently on iOS and Android lets the app record the choice
+      // and remove the already-resolved reminder from the Postfach.
+      options: { opensAppToForeground: true },
     },
   ]);
 
@@ -597,6 +677,20 @@ export async function prepareJourneyAutomation() {
   return true;
 }
 
+function explainBackgroundPermission() {
+  return new Promise<boolean>((resolve) => {
+    Alert.alert(
+      'Anreise im Hintergrund',
+      'Damit Anreise auch bei gesperrtem Handy automatisch stoppen und aktualisieren kann, braucht Mica Standortzugriff im Hintergrund. Geteilt wird erst nach bestätigter Bewegung.',
+      [
+        { text: 'Abbrechen', style: 'cancel', onPress: () => resolve(false) },
+        { text: 'Weiter', onPress: () => resolve(true) },
+      ],
+      { cancelable: true, onDismiss: () => resolve(false) },
+    );
+  });
+}
+
 /** Requests the explicit, system-level permission required before any silent action can work. */
 export async function requestJourneyAutomationPermission() {
   if (Platform.OS === 'web') return false;
@@ -607,9 +701,20 @@ export async function requestJourneyAutomationPermission() {
   if (!foregroundResult.granted) return false;
 
   const background = await Location.getBackgroundPermissionsAsync();
-  const backgroundResult = background.granted
-    ? background
-    : await Location.requestBackgroundPermissionsAsync();
+  if (background.granted) return true;
+  if (!background.canAskAgain) {
+    Alert.alert(
+      'Standort in Einstellungen erlauben',
+      'Wähle für Mica den Standortzugriff „Immer“, damit Anreise bei gesperrtem Handy funktioniert.',
+      [
+        { text: 'Abbrechen', style: 'cancel' },
+        { text: 'Einstellungen öffnen', onPress: () => void Linking.openSettings() },
+      ],
+    );
+    return false;
+  }
+  if (!(await explainBackgroundPermission())) return false;
+  const backgroundResult = await Location.requestBackgroundPermissionsAsync();
   return backgroundResult.granted;
 }
 
@@ -621,7 +726,6 @@ export async function armBackgroundJourney(input: {
   if (Platform.OS === 'web') {
     return { ok: false, reason: 'background-unavailable' };
   }
-  if (!input.activity.targetCoordinate) return { ok: false, reason: 'destination-required' };
   if (
     !(await TaskManager.isAvailableAsync()) ||
     !(await Location.isBackgroundLocationAvailableAsync())
@@ -640,26 +744,41 @@ export async function armBackgroundJourney(input: {
   if (current && current.status !== 'arrived' && current.activity.id !== input.activity.id) {
     return { ok: false, conflict: recordFromStored(current) };
   }
-  if (current?.activity.id === input.activity.id) return { ok: true };
+  if (current?.activity.id === input.activity.id) {
+    try {
+      await refreshAuthorizedActivity(current);
+      return { ok: true };
+    } catch {
+      await finishForExpiry(current);
+      return { ok: false, reason: 'activity-unavailable' };
+    }
+  }
 
+  const sessionId = Crypto.randomUUID();
   try {
-    // Membership is authorized before tracking is armed, but deliberately no
-    // live location node is created until movement is confirmed.
-    await journeyService.ensureJourneyMember(input.actor, input.activity.id);
+    const authorized = await journeyService.ensureJourneyMember(input.actor, input.activity.id, {
+      sessionId,
+    });
     const now = Date.now();
-    const startsAt = input.activity.startsAt ? Date.parse(input.activity.startsAt) : NaN;
+    const activity: JourneyActivityContext = {
+      ...authorized,
+      participants: input.activity.participants,
+    };
+    const startsAt = activity.startsAt ? Date.parse(activity.startsAt) : NaN;
     const detectionStartsAt = Number.isFinite(startsAt)
       ? Math.max(now, startsAt - DETECTION_LEAD_MS)
       : now;
     const state: StoredJourney = {
-      version: 2,
+      version: 3,
+      sessionId,
       actor: input.actor,
-      activity: input.activity,
+      activity,
       status: 'armed',
       armedAt: new Date(now).toISOString(),
       detectionStartsAt,
       updatedAt: new Date(now).toISOString(),
       arrivalHits: 0,
+      movementHits: 0,
     };
     await writeStoredJourney(state);
     if (now >= detectionStartsAt) {
@@ -672,9 +791,16 @@ export async function armBackgroundJourney(input: {
     }
     return { ok: true };
   } catch (error) {
+    await journeyService.stopJourney(input.actor, input.activity.id, sessionId).catch(() => {});
     await writeStoredJourney(null);
     console.warn('[journey] Automatische Anreise konnte nicht vorbereitet werden:', error);
-    return { ok: false, reason: 'location-unavailable' };
+    const message = error instanceof Error ? error.message : '';
+    return {
+      ok: false,
+      reason: /Ort auf der Karte|destination/i.test(message)
+        ? 'destination-required'
+        : 'activity-unavailable',
+    };
   }
 }
 
@@ -687,8 +813,16 @@ export async function stopBackgroundJourney(
   if (!state || state.activity.id !== activityId) return;
   await cancelArmTrigger(state);
   await stopNativeLocationUpdates().catch(() => {});
-  if (!options?.skipRemoteStop) await journeyService.stopJourney(actor, activityId).catch(() => {});
+  let remoteError: unknown;
+  if (!options?.skipRemoteStop) {
+    try {
+      await journeyService.stopJourney(actor, activityId, state.sessionId);
+    } catch (error) {
+      remoteError = error;
+    }
+  }
   await writeStoredJourney(null);
+  if (remoteError) throw remoteError;
 }
 
 export async function markBackgroundJourneyArrived(actor: JourneyActor, activityId: string) {
@@ -712,12 +846,50 @@ export async function markBackgroundJourneyArrived(actor: JourneyActor, activity
  */
 export async function getBackgroundJourneyRecord(expectedActorUid?: string) {
   const state = await readStoredJourney();
-  if (state && expectedActorUid && state.actor.uid !== expectedActorUid) return null;
+  if (state && expectedActorUid && state.actor.uid !== expectedActorUid) {
+    await abandonJourneyForAccountChange(state);
+    return null;
+  }
   return state ? recordFromStored(state) : null;
+}
+
+export async function stopJourneyBeforeAccountExit() {
+  const state = await readStoredJourney();
+  if (!state) {
+    await stopNativeLocationUpdates().catch(() => {});
+    return;
+  }
+  await cancelArmTrigger(state);
+  await stopNativeLocationUpdates().catch(() => {});
+  await journeyService
+    .stopJourney(state.actor, state.activity.id, state.sessionId)
+    .catch(() => {});
+  await writeStoredJourney(null);
 }
 
 export function isJourneyAutoShareResponse(response: Notifications.NotificationResponse) {
   return isAutoShareResponse(response);
+}
+
+export function isJourneyDecisionResponse(response: Notifications.NotificationResponse) {
+  const data = responseData(response);
+  return (
+    data.kind === 'journey_reminder' &&
+    (response.actionIdentifier === JOURNEY_AUTO_SHARE_ACTION ||
+      response.actionIdentifier === JOURNEY_NOT_NOW_ACTION)
+  );
+}
+
+export function journeyDecisionFromNotification(response: Notifications.NotificationResponse) {
+  if (!isJourneyDecisionResponse(response)) return null;
+  const data = responseData(response);
+  const activityId = typeof data.activityId === 'string' ? data.activityId : undefined;
+  if (!activityId) return null;
+  return {
+    activityId,
+    notificationId: typeof data.notificationId === 'string' ? data.notificationId : undefined,
+    share: response.actionIdentifier === JOURNEY_AUTO_SHARE_ACTION,
+  };
 }
 
 export function journeyContextFromNotification(response: Notifications.NotificationResponse) {

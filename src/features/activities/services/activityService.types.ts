@@ -12,6 +12,8 @@ export interface ActivityParticipant {
   uid: string;
   displayName: string;
   initials: string;
+  /** Optional identity snapshot for existing activity documents. */
+  avatarUrl?: string;
 }
 
 export type ActivityPlace =
@@ -73,6 +75,13 @@ export interface ActivityDocUpdate {
   category?: ActivityCategory | null;
   /** Host toggle for participant guest invites; undefined leaves it unchanged. */
   guestInvitesEnabled?: boolean;
+  /**
+   * Who may see it, as a CONTEXT — never a uid list. The server re-resolves it
+   * against the host's confirmed friendships (same rule as creation) and keeps
+   * current participants and vouched guests regardless, since the host's friend
+   * selection cannot express either. Undefined leaves the audience untouched.
+   */
+  audienceContext?: ActivityVisibility;
 }
 
 /**

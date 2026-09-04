@@ -68,6 +68,7 @@ const {
   pxPerHourFromPxPerMs,
   pxPerMsFromPxPerHour,
   requestDelta,
+  resolveHitTarget,
   resolveRange,
   safeLeft,
   safeRight,
@@ -230,6 +231,22 @@ function definitionOrderProblems(fileName) {
 check('no core worklet is called before it is defined', () => {
   const problems = CORE_FILES.flatMap(definitionOrderProblems);
   assert.deepEqual(problems, [], `\n      ${problems.join('\n      ')}`);
+});
+
+console.log('\nHit targets\n');
+
+check('normal mode keeps start, end and range as separate targets', () => {
+  assert.equal(resolveHitTarget(80, 80, 240, 44, 44, 'range'), 'start');
+  assert.equal(resolveHitTarget(240, 80, 240, 44, 44, 'range'), 'end');
+  assert.equal(resolveHitTarget(160, 80, 240, 44, 44, 'range'), 'range');
+});
+
+check('end-only mode turns the bar into an end target but leaves its fixed anchor inert', () => {
+  assert.equal(resolveHitTarget(80, 80, 240, 44, 44, 'end-only'), null);
+  assert.equal(resolveHitTarget(81, 80, 240, 44, 44, 'end-only'), 'end');
+  assert.equal(resolveHitTarget(160, 80, 240, 44, 44, 'end-only'), 'end');
+  assert.equal(resolveHitTarget(240, 80, 240, 44, 44, 'end-only'), 'end');
+  assert.equal(resolveHitTarget(40, 80, 240, 44, 44, 'end-only'), null);
 });
 
 console.log('\nTransformation and safe bounds\n');
@@ -682,7 +699,15 @@ check('4: moving the whole range never triggers the rule', () => {
   assert.equal(released.viewport.startMs, dragged.viewport.startMs);
 });
 
-check('5: a new pointer abandons the settle where it stands, with no jump', () => {
+check('5: a constrained picker can keep its scale fixed after a handle release', () => {
+  const { geo, state } = grabbedAtRatio(0.4, 4, 'end');
+  const released = endGesture(state, geo, false);
+  assert.equal(released.settle, null, 'a fixed picker scheduled a re-zoom');
+  assert.equal(released.viewport.pxPerMs, state.viewport.pxPerMs);
+  assert.equal(released.viewport.startMs, state.viewport.startMs);
+});
+
+check('6: a new pointer abandons the settle where it stands, with no jump', () => {
   const { geo, state } = grabbedAtRatio(0.4, 4, 'end');
   let s = endGesture(state, geo);
   for (let i = 0; i < 3; i += 1) s = tickSettle(s, 16);

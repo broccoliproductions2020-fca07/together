@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, {
   Easing,
   FadeIn,
@@ -80,7 +80,19 @@ export interface ComposerTabsProps {
   active: ComposerBench | null;
   accent: string;
   onSelect: (id: ComposerBench) => void;
+  /** Keeps the original card and panel while omitting the control strip. */
+  showTabStrip?: boolean;
   children: ReactNode;
+}
+
+export function ComposerBenchCard({ children }: { children: ReactNode }) {
+  return (
+    <View style={styles.card}>
+      <View style={styles.panel}>
+        <View style={[styles.panelContent, styles.staticPanelContent]}>{children}</View>
+      </View>
+    </View>
+  );
 }
 
 /**
@@ -103,9 +115,11 @@ export function ComposerTabs({
   active,
   accent,
   onSelect,
+  showTabStrip = true,
   children,
 }: ComposerTabsProps) {
   const reducedMotion = useReducedMotion();
+  const nativeMotion = Platform.OS !== 'web' && !reducedMotion;
   const [width, setWidth] = useState(0);
   const open = active != null;
   // While closed the indicator keeps its LAST position and only fades, so
@@ -128,27 +142,30 @@ export function ComposerTabs({
   const activeWidth = unit * (tabs[activeIndex]?.weight ?? 1);
 
   const offset = useDerivedValue(() => {
-    return reducedMotion || unit === 0
+    return !nativeMotion || unit === 0
       ? activeLeft
       : withTiming(activeLeft, { duration: DURATION, easing: EASE });
-  }, [activeLeft, unit, reducedMotion]);
+  }, [activeLeft, nativeMotion, unit]);
 
   const indicatorWidth = useDerivedValue(() => {
-    return reducedMotion || unit === 0
+    return !nativeMotion || unit === 0
       ? activeWidth
       : withTiming(activeWidth, { duration: DURATION, easing: EASE });
-  }, [activeWidth, unit, reducedMotion]);
+  }, [activeWidth, nativeMotion, unit]);
 
   const fade = useDerivedValue(() => {
     const target = open ? 1 : 0;
-    return reducedMotion ? target : withTiming(target, { duration: DURATION, easing: EASE });
-  }, [open, reducedMotion]);
+    return nativeMotion ? withTiming(target, { duration: DURATION, easing: EASE }) : target;
+  }, [nativeMotion, open]);
 
-  const indicatorStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: offset.value }],
-    width: indicatorWidth.value,
-    opacity: unit > 0 ? fade.value : 0,
-  }));
+  const indicatorStyle = useAnimatedStyle(
+    () => ({
+      transform: [{ translateX: offset.value }],
+      width: indicatorWidth.value,
+      opacity: unit > 0 ? fade.value : 0,
+    }),
+    [unit],
+  );
 
 
   /**
@@ -171,11 +188,9 @@ export function ComposerTabs({
     (height: number) => {
       if (height <= 0 || Math.abs(measuredRef.current - height) < 0.5) return;
       measuredRef.current = height;
-      panelHeight.value = reducedMotion
-        ? height
-        : withTiming(height, { duration: DURATION, easing: EASE });
+      panelHeight.value = nativeMotion ? withTiming(height, { duration: DURATION, easing: EASE }) : height;
     },
-    [panelHeight, reducedMotion],
+    [nativeMotion, panelHeight],
   );
 
   useEffect(() => {
@@ -187,77 +202,79 @@ export function ComposerTabs({
     panelHeight.value = 0;
   }, [open, panelHeight]);
 
-  const panelStyle = useAnimatedStyle(() => ({ height: panelHeight.value }));
+  const panelStyle = useAnimatedStyle(() => ({ height: panelHeight.value }), [panelHeight]);
 
   return (
     <Animated.View style={styles.card}>
-      <View style={styles.strip} onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
-        <Animated.View pointerEvents="none" style={[styles.indicator, indicatorStyle]} />
-        {tabs.map((tab) => {
-          const isActive = tab.id === active;
-          const missing = tab.required === true && tab.satisfied === false;
-          return (
-            <Pressable
-              key={tab.id}
-              accessibilityRole="tab"
-              accessibilityState={{ selected: isActive, disabled: tab.disabled }}
-              accessibilityLabel={`${tab.label}: ${tab.value}${missing ? ', fehlt noch' : ''}`}
-              disabled={tab.disabled}
-              // Reported even for the already-active tab: a tap on a tab always
-              // means "I am done typing", and the sheet needs to hear it so it
-              // can put the keyboard away. The haptic and the state change stay
-              // guarded by the caller, so a re-tap is otherwise a no-op.
-              onPress={() => onSelect(tab.id)}
-              style={[
-                styles.tab,
-                { flexGrow: tab.weight ?? 1 },
-                tab.disabled && styles.tabDisabled,
-              ]}
-            >
-              <View style={styles.labelRow}>
-                {/* The label carries the colour, so it follows the SAME rule as
-                    the value: grey until the walk has passed this step, accent
-                    once it has. An accent label on an untouched tab was the
-                    whole strip claiming to be decided from the first frame —
-                    and it made the greyed value read as a rendering fault
-                    rather than as "not your turn yet". */}
+      {showTabStrip ? (
+        <View style={styles.strip} onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
+          <Animated.View pointerEvents="none" style={[styles.indicator, indicatorStyle]} />
+          {tabs.map((tab) => {
+            const isActive = tab.id === active;
+            const missing = tab.required === true && tab.satisfied === false;
+            return (
+              <Pressable
+                key={tab.id}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: isActive, disabled: tab.disabled }}
+                accessibilityLabel={`${tab.label}: ${tab.value}${missing ? ', fehlt noch' : ''}`}
+                disabled={tab.disabled}
+                // Reported even for the already-active tab: a tap on a tab always
+                // means "I am done typing", and the sheet needs to hear it so it
+                // can put the keyboard away. The haptic and the state change stay
+                // guarded by the caller, so a re-tap is otherwise a no-op.
+                onPress={() => onSelect(tab.id)}
+                style={[
+                  styles.tab,
+                  { flexGrow: tab.weight ?? 1 },
+                  tab.disabled && styles.tabDisabled,
+                ]}
+              >
+                <View style={styles.labelRow}>
+                  {/* The label carries the colour, so it follows the SAME rule as
+                      the value: grey until the walk has passed this step, accent
+                      once it has. An accent label on an untouched tab was the
+                      whole strip claiming to be decided from the first frame —
+                      and it made the greyed value read as a rendering fault
+                      rather than as "not your turn yet". */}
+                  <Text
+                    style={[
+                      styles.label,
+                      {
+                        color: missing ? MISSING : isActive || tab.set ? accent : PENDING,
+                      },
+                    ]}
+                    numberOfLines={1}
+                    {...TEXT_CAPPED}
+                  >
+                    {tab.label}
+                  </Text>
+                  {/* Only ever on a required tab that is still unanswered. A
+                      satisfied tab carries NO badge: two of four tabs wearing a
+                      permanent tick is decoration, and the value's own contrast
+                      already separates "meine Entscheidung" from "Default". */}
+                  {missing ? <View style={styles.missingDot} /> : null}
+                </View>
                 <Text
                   style={[
-                    styles.label,
+                    styles.value,
                     {
-                      color: missing ? MISSING : isActive || tab.set ? accent : PENDING,
+                      color: missing ? MISSING : isActive || tab.set ? '#F4F5F7' : PENDING,
                     },
+                    // Full weight is the "someone decided this" signal. A default
+                    // stays visibly lighter, so the strip reads at a glance.
+                    !missing && !tab.set && styles.valueDefault,
                   ]}
                   numberOfLines={1}
                   {...TEXT_CAPPED}
                 >
-                  {tab.label}
+                  {tab.value}
                 </Text>
-                {/* Only ever on a required tab that is still unanswered. A
-                    satisfied tab carries NO badge: two of four tabs wearing a
-                    permanent tick is decoration, and the value's own contrast
-                    already separates "meine Entscheidung" from "Default". */}
-                {missing ? <View style={styles.missingDot} /> : null}
-              </View>
-              <Text
-                style={[
-                  styles.value,
-                  {
-                    color: missing ? MISSING : isActive || tab.set ? '#F4F5F7' : PENDING,
-                  },
-                  // Full weight is the "someone decided this" signal. A default
-                  // stays visibly lighter, so the strip reads at a glance.
-                  !missing && !tab.set && styles.valueDefault,
-                ]}
-                numberOfLines={1}
-                {...TEXT_CAPPED}
-              >
-                {tab.value}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
+              </Pressable>
+            );
+          })}
+        </View>
+      ) : null}
 
       {/* Unmounted, not merely hidden, while closed: a zero-height panel still
           holds its padding and its border, which reads as an empty strip glued
@@ -274,7 +291,7 @@ export function ComposerTabs({
               and the panel resizing already reads as the swap. */}
           <Animated.View
             key={active}
-            entering={reducedMotion ? undefined : FadeIn.duration(190)}
+            entering={nativeMotion ? FadeIn.duration(190) : undefined}
             onLayout={(event) => measurePanel(event.nativeEvent.layout.height)}
             style={styles.panelContent}
           >
@@ -335,6 +352,7 @@ const styles = StyleSheet.create({
     right: 0,
     top: 0,
   },
+  staticPanelContent: { position: 'relative' },
   strip: { backgroundColor: TAB_STRIP, flexDirection: 'row', height: TAB_HEIGHT },
   /** `flexGrow` comes from the tab's own weight — see `ComposerTab.weight`. */
   tab: {

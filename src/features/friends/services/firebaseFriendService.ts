@@ -5,7 +5,6 @@ import {
   limit,
   onSnapshot,
   query,
-  setDoc,
   where,
   type DocumentData,
 } from '@react-native-firebase/firestore';
@@ -161,6 +160,13 @@ export const firebaseFriendService: FriendService = {
     )({ friendshipId, accept });
   },
 
+  async withdrawFriendRequest(_actor, uid) {
+    await httpsCallable<{ uid: string }, { ok: true }>(
+      getFirebaseFunctions(),
+      'withdrawFriendRequest',
+    )({ uid });
+  },
+
   async removeFriend(_actor, uid) {
     await httpsCallable<{ uid: string }, { ok: true }>(
       getFirebaseFunctions(),
@@ -177,14 +183,16 @@ export const firebaseFriendService: FriendService = {
     )({ uid, isClose });
   },
 
-  async setHeimwegGroup(actor, uids) {
-    // merge:true — the rules validate the WHOLE future document, and this must
-    // not disturb the server-owned fields (pushTokens, friendshipsVersion …).
-    await setDoc(
-      doc(getFirebaseDb(), 'users', actor.uid),
-      { heimwegGroupUids: [...new Set(uids)].slice(0, 20) },
-      { merge: true },
-    );
+  async setHeimwegGroup(_actor, uids) {
+    // Callable, never a direct write: `users/{uid}` accepts exactly one client
+    // update (`notificationsSeenAt`), so the `setDoc` this used to be was
+    // rejected every time — and the provider's optimistic rollback swallowed
+    // it, so the selection simply sprang back. The server also re-checks every
+    // uid against a confirmed friendship, which a client write never could.
+    await httpsCallable<{ uids: string[] }, { ok: true }>(
+      getFirebaseFunctions(),
+      'setHeimwegGroup',
+    )({ uids: [...new Set(uids)].slice(0, 20) });
   },
 
   async setFriendRequestPolicy(_actor, policy) {

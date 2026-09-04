@@ -1,7 +1,16 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from 'react';
 import {
   Alert,
+  FlatList,
   Image,
   Modal,
   Pressable,
@@ -10,6 +19,7 @@ import {
   Text,
   useWindowDimensions,
   View,
+  type ViewToken,
 } from 'react-native';
 import Animated, {
   Easing,
@@ -26,12 +36,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useActivityEntities, type ActivityInfo } from '@/features/activities';
 import { useAuth } from '@/features/auth';
-import {
-  activityChatAccent,
-  formatListTimestamp,
-  GROUP_CHAT_ACCENT,
-  useActivityChat,
-} from '@/features/chat';
+import { activityChatAccent, formatListTimestamp, useActivityChat } from '@/features/chat';
 import { useFriends, type FriendRequest } from '@/features/friends';
 import { useJourney } from '@/features/journey';
 import { colorWithAlpha } from '@/features/map/utils/markerStyles';
@@ -45,7 +50,7 @@ import {
 } from '@/features/safety';
 import { useThemeColors } from '@/features/theme';
 import { PressableScale, SquircleButton, TogetherLoader } from '@/shared/components';
-import { FONT, TEXT_CAPPED, TEXT_FLEXIBLE, TYPE } from '@/shared/theme';
+import { FONT, shadow, TEXT_CAPPED, TEXT_FLEXIBLE, TYPE } from '@/shared/theme';
 import { DIAGNOSTICS_VISIBLE } from '@/shared/utils/buildInfo';
 import { haptics } from '@/shared/utils/haptics';
 import { SEMANTIC_COLOR } from '@/shared/utils/semanticColors';
@@ -55,12 +60,16 @@ import {
   relativeMailboxTime,
   type NotificationGroup,
 } from '../mailboxModel';
+import { markNewForYouSeen, useNewForYouCursor } from '../newForYouCursor';
 import { useMailboxNow } from '../useMailboxNow';
 import { usePostfachBadge } from '../usePostfachBadgeCount';
 
-const ACCENT = SEMANTIC_COLOR.action;
-const SUCCESS = SEMANTIC_COLOR.social;
-const WARNING = SEMANTIC_COLOR.safetyAttention;
+const OPEN_ACCENT = activityChatAccent('open');
+const PLANNING_ACCENT = activityChatAccent('soon');
+const NOW_ACCENT = activityChatAccent('now');
+const ACCENT = OPEN_ACCENT;
+const SUCCESS = NOW_ACCENT;
+const WARNING = PLANNING_ACCENT;
 const DANGER = SEMANTIC_COLOR.danger;
 type IconName = ComponentProps<typeof Ionicons>['name'];
 
@@ -224,6 +233,65 @@ function ChatRow({
   );
 }
 
+/**
+ * One activity a friend published while you were away.
+ *
+ * Costs nothing to produce: `newActivitiesSince` filters the activity feed the
+ * device already holds against the seen cursor, so there is no notification
+ * document, no extra query and no per-recipient write behind this row. It is
+ * the recovery path for a push that never arrived — notifications switched off,
+ * phone silent, notification swiped away — and for those people it IS the
+ * feature.
+ */
+function NewActivityRow({
+  activity,
+  onPress,
+}: {
+  activity: ActivityInfo;
+  onPress: (activityId: string) => void;
+}) {
+  const colors = useThemeColors();
+  const accent = activityChatAccent(activity.mode);
+  const host = activity.participants[0];
+  const meta = [activity.timeLabel, activity.placeLabel].filter(Boolean).join(' · ');
+
+  return (
+    <PressableScale
+      accessibilityRole="button"
+      accessibilityLabel={`${activity.title}${host ? `, von ${host.displayName}` : ''}${
+        meta ? `, ${meta}` : ''
+      }`}
+      onPress={() => onPress(activity.id)}
+      className="flex-row items-center gap-3 rounded-[18px] px-3 py-2.5"
+      style={{ backgroundColor: colors.card }}
+    >
+      <View
+        className="h-10 w-10 items-center justify-center rounded-[15px]"
+        style={{ backgroundColor: colorWithAlpha(accent, 0.14) }}
+      >
+        <Ionicons name="sparkles-outline" size={18} color={accent} />
+      </View>
+      <View className="min-w-0 flex-1">
+        <Text
+          {...TEXT_FLEXIBLE}
+          numberOfLines={1}
+          style={{ ...TYPE.label, fontFamily: FONT.semibold, color: colors.foreground }}
+        >
+          {activity.title}
+        </Text>
+        <Text
+          {...TEXT_FLEXIBLE}
+          numberOfLines={1}
+          style={{ ...TYPE.caption, fontFamily: FONT.medium, color: colors.mutedForeground }}
+        >
+          {[host ? `von ${host.displayName}` : null, meta].filter(Boolean).join(' · ')}
+        </Text>
+      </View>
+      <Ionicons name="chevron-forward" size={16} color={colors.mutedForeground} />
+    </PressableScale>
+  );
+}
+
 function SectionLabel({ children, trailing }: { children: ReactNode; trailing?: string }) {
   const colors = useThemeColors();
   const style = {
@@ -265,15 +333,19 @@ interface StackPreview {
 function MitteilungenRow({
   count,
   preview,
+  hasError,
   onPress,
 }: {
   count: number;
   preview: StackPreview | null;
+  hasError: boolean;
   onPress: () => void;
 }) {
   const colors = useThemeColors();
-  const color = preview?.color ?? colors.mutedForeground;
   const hasNews = count > 0 && preview !== null;
+  const color = hasNews ? preview.color : hasError ? WARNING : colors.mutedForeground;
+  const highlighted = hasNews || hasError;
+  const title = hasNews ? preview.title : hasError ? 'Abgleich nicht möglich' : 'Alles gelesen';
 
   return (
     <Animated.View
@@ -303,21 +375,29 @@ function MitteilungenRow({
       ) : null}
       <PressableScale
         accessibilityRole="button"
-        accessibilityLabel={hasNews ? `Mitteilungen, ${count} neu` : 'Mitteilungen, alles gelesen'}
+        accessibilityLabel={
+          hasNews
+            ? `Mitteilungen, ${count} neu`
+            : hasError
+              ? 'Mitteilungen, Abgleich nicht möglich'
+              : 'Mitteilungen, alles gelesen'
+        }
         haptic={false}
         style={[
           styles.stackFront,
           {
             backgroundColor: colors.card,
-            borderColor: hasNews ? colorWithAlpha(color, 0.32) : colors.border,
-            shadowColor: hasNews ? color : 'transparent',
-            shadowOpacity: hasNews ? 0.18 : 0,
-            elevation: hasNews ? 5 : 0,
+            borderColor: highlighted ? colorWithAlpha(color, 0.32) : colors.border,
+            // The whole shadow lives here, not half here and half in
+            // `stackFront`: it exists only while the card is highlighted.
+            ...(highlighted
+              ? shadow({ color, offsetY: 9, radius: 18, opacity: 0.18, elevation: 5 })
+              : null),
           },
         ]}
         onPress={onPress}
       >
-        {hasNews ? (
+        {highlighted ? (
           <View
             pointerEvents="none"
             style={[styles.stackGlow, { backgroundColor: colorWithAlpha(color, 0.14) }]}
@@ -329,7 +409,13 @@ function MitteilungenRow({
             style={{ backgroundColor: colorWithAlpha(color, hasNews ? 0.14 : 0.1) }}
           >
             <Ionicons
-              name={hasNews ? (preview?.icon ?? 'mail-unread-outline') : 'mail-outline'}
+              name={
+                hasNews
+                  ? (preview.icon ?? 'mail-unread-outline')
+                  : hasError
+                    ? 'cloud-offline-outline'
+                    : 'mail-outline'
+              }
               size={21}
               color={color}
             />
@@ -368,9 +454,9 @@ function MitteilungenRow({
               className="mt-1"
               style={{ ...TYPE.label, fontFamily: FONT.bold, color: colors.foreground }}
             >
-              {hasNews ? preview.title : 'Alles gelesen'}
+              {title}
             </Text>
-            {hasNews ? (
+            {hasNews || hasError ? (
               <Text
                 {...TEXT_FLEXIBLE}
                 numberOfLines={1}
@@ -381,7 +467,7 @@ function MitteilungenRow({
                   color: colors.mutedForeground,
                 }}
               >
-                {preview.body}
+                {hasNews ? preview.body : 'Tippe, um es erneut zu versuchen.'}
               </Text>
             ) : null}
           </View>
@@ -428,7 +514,7 @@ function FriendRequestCard({ request }: { request: FriendRequest }) {
       <View className="flex-row items-center gap-3">
         <View
           className="h-12 w-12 items-center justify-center overflow-hidden rounded-[17px]"
-          style={{ backgroundColor: colorWithAlpha(ACCENT, 0.14) }}
+          style={{ backgroundColor: colorWithAlpha(WARNING, 0.14) }}
         >
           {request.friend.avatarUrl ? (
             <Image
@@ -437,7 +523,7 @@ function FriendRequestCard({ request }: { request: FriendRequest }) {
               className="h-full w-full"
             />
           ) : (
-            <Text {...TEXT_CAPPED} style={{ ...TYPE.label, fontFamily: FONT.bold, color: ACCENT }}>
+            <Text {...TEXT_CAPPED} style={{ ...TYPE.label, fontFamily: FONT.bold, color: WARNING }}>
               {request.friend.initials}
             </Text>
           )}
@@ -467,13 +553,14 @@ function FriendRequestCard({ request }: { request: FriendRequest }) {
             Möchte mit dir befreundet sein.
           </Text>
         </View>
-        <View className="h-2 w-2 rounded-full" style={{ backgroundColor: ACCENT }} />
+        <View className="h-2 w-2 rounded-full" style={{ backgroundColor: WARNING }} />
       </View>
       <View className="mt-3 flex-row gap-2 pl-[60px]">
         <View className="flex-1">
           <SquircleButton
             label="Ablehnen"
             variant="tonal"
+            surface={colors.card}
             color={colors.mutedForeground}
             size="sm"
             loading={response === 'decline'}
@@ -484,7 +571,7 @@ function FriendRequestCard({ request }: { request: FriendRequest }) {
         <View className="flex-1">
           <SquircleButton
             label="Annehmen"
-            color={ACCENT}
+            color={WARNING}
             size="sm"
             loading={response === 'accept'}
             disabled={response !== null}
@@ -539,17 +626,17 @@ function GroupInviteCard({
       style={[
         styles.messageCard,
         {
-          backgroundColor: isNew ? colorWithAlpha(GROUP_CHAT_ACCENT, 0.07) : colors.card,
-          borderColor: isNew ? colorWithAlpha(GROUP_CHAT_ACCENT, 0.3) : colors.border,
+          backgroundColor: isNew ? colorWithAlpha(PLANNING_ACCENT, 0.07) : colors.card,
+          borderColor: isNew ? colorWithAlpha(PLANNING_ACCENT, 0.3) : colors.border,
         },
       ]}
     >
       <View className="flex-row items-start gap-3">
         <View
           className="h-11 w-11 items-center justify-center rounded-[16px]"
-          style={{ backgroundColor: colorWithAlpha(GROUP_CHAT_ACCENT, 0.14) }}
+          style={{ backgroundColor: colorWithAlpha(PLANNING_ACCENT, 0.14) }}
         >
-          <Ionicons name="people-outline" size={20} color={GROUP_CHAT_ACCENT} />
+          <Ionicons name="people-outline" size={20} color={PLANNING_ACCENT} />
         </View>
         <View className="flex-1">
           <View className="flex-row items-start justify-between gap-2">
@@ -578,7 +665,7 @@ function GroupInviteCard({
         {isNew ? (
           <View
             className="mt-1.5 h-2 w-2 rounded-full"
-            style={{ backgroundColor: GROUP_CHAT_ACCENT }}
+            style={{ backgroundColor: PLANNING_ACCENT }}
           />
         ) : null}
       </View>
@@ -587,6 +674,7 @@ function GroupInviteCard({
           <SquircleButton
             label="Ablehnen"
             variant="tonal"
+            surface={colors.card}
             color={colors.mutedForeground}
             size="sm"
             loading={response === 'decline'}
@@ -597,7 +685,7 @@ function GroupInviteCard({
         <View className="flex-1">
           <SquircleButton
             label="Beitreten"
-            color={GROUP_CHAT_ACCENT}
+            color={PLANNING_ACCENT}
             size="sm"
             loading={response === 'accept'}
             disabled={response !== null || !roomId}
@@ -642,7 +730,7 @@ function safetyCopy(session: SafetySession, now: number) {
   return {
     title: `${session.displayName} ist auf dem Heimweg`,
     body: 'Du kannst den Live-Status begleiten.',
-    color: ACCENT,
+    color: SUCCESS,
     icon: 'shield-checkmark-outline' as IconName,
   };
 }
@@ -728,6 +816,7 @@ function LiveSafetyCard({
             label="Öffnen"
             icon="map-outline"
             variant="tonal"
+            surface={colors.card}
             color={copy.color}
             size="sm"
             onPress={onOpen}
@@ -770,6 +859,7 @@ function LiveJourneyCard({
   onOpen: () => void;
 }) {
   const colors = useThemeColors();
+  const accent = status === 'armed' ? PLANNING_ACCENT : NOW_ACCENT;
   return (
     <Animated.View
       entering={FadeInDown.duration(220)}
@@ -778,12 +868,12 @@ function LiveJourneyCard({
       <View className="flex-row items-center gap-3">
         <View
           className="h-11 w-11 items-center justify-center rounded-[16px]"
-          style={{ backgroundColor: colorWithAlpha(ACCENT, 0.14) }}
+          style={{ backgroundColor: colorWithAlpha(accent, 0.14) }}
         >
           <Ionicons
             name={status === 'armed' ? 'time-outline' : 'navigate'}
             size={21}
-            color={ACCENT}
+            color={accent}
           />
         </View>
         <View className="flex-1">
@@ -806,10 +896,10 @@ function LiveJourneyCard({
         <PressableScale
           accessibilityRole="button"
           accessibilityLabel="Activity öffnen"
-          style={[styles.roundAction, { backgroundColor: colorWithAlpha(ACCENT, 0.12) }]}
+          style={[styles.roundAction, { backgroundColor: colorWithAlpha(accent, 0.12) }]}
           onPress={onOpen}
         >
-          <Ionicons name="chevron-forward" size={18} color={ACCENT} />
+          <Ionicons name="chevron-forward" size={18} color={accent} />
         </PressableScale>
       </View>
     </Animated.View>
@@ -821,25 +911,21 @@ function notificationVisual(kind: NotificationKind): { icon: IconName; color: st
   if (kind === 'activity_updated') return { icon: 'create-outline', color: WARNING };
   if (kind === 'activity_joined') return { icon: 'people-outline', color: SUCCESS };
   if (kind === 'activity_left') return { icon: 'exit-outline', color: WARNING };
-  if (kind === 'activity_host_changed') return { icon: 'swap-horizontal-outline', color: ACCENT };
-  if (kind === 'activity_invite') return { icon: 'person-add-outline', color: ACCENT };
-  if (kind === 'spontaneous_round_invite') return { icon: 'hand-left-outline', color: ACCENT };
-  if (kind === 'group_chat_invite') return { icon: 'people-outline', color: GROUP_CHAT_ACCENT };
+  if (kind === 'activity_host_changed') return { icon: 'swap-horizontal-outline', color: WARNING };
+  if (kind === 'activity_invite') return { icon: 'person-add-outline', color: WARNING };
+  if (kind === 'spontaneous_round_invite') return { icon: 'hand-left-outline', color: OPEN_ACCENT };
+  if (kind === 'group_chat_invite') return { icon: 'people-outline', color: PLANNING_ACCENT };
   if (kind === 'time_plan_invite') return { icon: 'calendar-outline', color: WARNING };
   if (kind === 'time_plan_locked') return { icon: 'calendar-number-outline', color: SUCCESS };
-  if (kind === 'journey_reminder') return { icon: 'navigate-outline', color: ACCENT };
+  if (kind === 'journey_reminder') return { icon: 'navigate-outline', color: WARNING };
   if (kind === 'safety_emergency') return { icon: 'warning-outline', color: DANGER };
   if (kind === 'safety_unwell' || kind === 'safety_timed_out' || kind === 'safety_unavailable') {
     return { icon: 'alert-circle-outline', color: WARNING };
   }
-  if (
-    kind === 'safety_request' ||
-    kind === 'safety_confirmed' ||
-    kind === 'safety_alert_seen' ||
-    kind === 'safety_resolved'
-  ) {
+  if (kind === 'safety_confirmed' || kind === 'safety_alert_seen' || kind === 'safety_resolved') {
     return { icon: 'shield-checkmark-outline', color: SUCCESS };
   }
+  if (kind === 'safety_request') return { icon: 'shield-checkmark-outline', color: WARNING };
   return { icon: 'sparkles-outline', color: ACCENT };
 }
 
@@ -862,7 +948,7 @@ function NotificationCard({
   safetyAvailable: boolean;
 }) {
   const colors = useThemeColors();
-  const { findActivityById } = useActivityEntities();
+  const { findActivityById, initialFeedReady } = useActivityEntities();
   const notification = group.primary;
   const visual = notificationVisual(notification.kind);
   const activityAvailable = Boolean(
@@ -871,7 +957,8 @@ function NotificationCard({
   const safety = notification.kind.startsWith('safety_');
   const spontaneousRoundInvite =
     notification.kind === 'spontaneous_round_invite' && Boolean(notification.roomId);
-  const timePlanInvite = notification.kind === 'time_plan_invite' && Boolean(notification.timePlanId);
+  const timePlanInvite =
+    notification.kind === 'time_plan_invite' && Boolean(notification.timePlanId);
   const onPress = activityAvailable
     ? () => onOpenActivity(notification.activityId!)
     : safety && safetyAvailable
@@ -884,7 +971,7 @@ function NotificationCard({
           () => onOpenSpontaneousRoundInvite(notification.roomId!)
         : timePlanInvite
           ? () => onOpenTimePlan(notification.timePlanId!)
-        : undefined;
+          : undefined;
   const isGroupedJoin = notification.kind === 'activity_joined' && group.count > 1;
   const isGroupedUpdate = notification.kind === 'activity_updated' && group.count > 1;
   const title = isGroupedJoin
@@ -896,23 +983,23 @@ function NotificationCard({
     ? `${group.count} Personen sind deiner Activity beigetreten.`
     : isGroupedUpdate
       ? `Neueste Änderung: ${notification.body}`
-      : // The reminder's body is written by the server at send time and says
-        // "Anreise teilen? Zum Aktivieren tippen." Once the activity is gone
-        // the card is already not tappable — so that sentence instructs you to
-        // do something the card cannot do. Say what is true instead.
+      : // Never present the server's invitation copy while the card cannot act
+        // on it. A missing activity can still mean the feed is loading.
         notification.kind === 'journey_reminder' && !activityAvailable
-        ? 'Diese Activity ist vorbei.'
+        ? initialFeedReady
+          ? 'Diese Activity ist nicht mehr verfügbar.'
+          : 'Die Activity wird noch geladen.'
         : notification.body;
   const actionLabel = timePlanInvite
     ? // The card opens the round; it does not join. Joining IS answering, and
       // that happens in the sheet — so the label must not promise otherwise.
       'Zeiten angeben'
     : spontaneousRoundInvite
-    ? // The card no longer joins, so it must not promise that it does.
-      'Einladung ansehen'
-    : safety
-      ? 'Heimweg öffnen'
-      : 'Activity ansehen';
+      ? // The card no longer joins, so it must not promise that it does.
+        'Einladung ansehen'
+      : safety
+        ? 'Heimweg öffnen'
+        : 'Activity ansehen';
 
   return (
     <Animated.View entering={FadeInDown.duration(200)} layout={LinearTransition.duration(220)}>
@@ -988,6 +1075,7 @@ export interface PostfachSheetProps {
   visible: boolean;
   covered?: boolean;
   onClose: () => void;
+  onBrowseActivities: () => void;
   onOpenChat: (target: PostfachChatTarget) => void;
   onEditActivity?: (activity: ActivityInfo) => void;
   onOpenActivity: (activityId: string) => void;
@@ -1000,6 +1088,7 @@ export function PostfachSheet({
   visible,
   covered = false,
   onClose,
+  onBrowseActivities,
   onOpenChat,
   onEditActivity,
   onOpenActivity,
@@ -1015,8 +1104,9 @@ export function PostfachSheet({
   const currentUid = user?.id ?? 'u_you';
   const { joinedIds, getGroup, getRoom, setRoomsListActive, respondToGroupInvite } =
     useActivityChat();
-  const { findActivityById } = useActivityEntities();
+  const { findActivityById, newActivitiesSince } = useActivityEntities();
   const { incomingRequests } = useFriends();
+  const newForYouCursor = useNewForYouCursor();
   const { activeJourney } = useJourney();
   const { friendSessions, session: ownSafetySession } = useSafety();
   const { mitteilungenCount } = usePostfachBadge();
@@ -1027,17 +1117,20 @@ export function PostfachSheet({
     listErrorCode,
     unreadCount,
     isUnread,
-    markAllSeen,
+    markSeen,
     retryList,
     setListActive,
   } = useNotifications();
   const [view, setView] = useState<'home' | 'notifications'>('home');
   const [notificationSurfaceMounted, setNotificationSurfaceMounted] = useState(false);
   // Ids that were unread when the Mitteilungen view opened. They keep their
-  // "neu" treatment for the whole visit, because the seen cursor only moves
-  // when the user leaves — otherwise everything went grey the instant the
-  // list appeared and nobody could tell what had arrived.
+  // "neu" treatment for this visit even after their visible card is persisted.
   const [newIds, setNewIds] = useState<Set<string>>(() => new Set());
+  const viewedNotificationIdsRef = useRef(new Set<string>());
+  const notificationViewActiveRef = useRef(false);
+  const notificationViewWasActiveRef = useRef(false);
+  const markSeenRef = useRef(markSeen);
+  markSeenRef.current = markSeen;
   const unmountTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const viewProgress = useSharedValue(0);
   const maximumSheetHeight = Math.max(320, viewportHeight - Math.max(insets.top, 8));
@@ -1053,6 +1146,30 @@ export function PostfachSheet({
     setListActive(visible && !covered);
     return () => setListActive(false);
   }, [covered, setListActive, visible]);
+
+  /**
+   * The seen cursor as it stood when this visit began.
+   *
+   * `notificationsSeenAt` is live from the friends listener and advances on the
+   * way OUT of the Postfach, so reading it directly would empty "Neu für dich"
+   * mid-visit — the rows would vanish under the reader's thumb the moment the
+   * write landed. Snapshotting on open is the same trick the notification list
+   * uses for its unread ids, and for the same reason.
+   */
+  const cursorRef = useRef(newForYouCursor);
+  cursorRef.current = newForYouCursor;
+  const [visitCursor, setVisitCursor] = useState<number | null>(null);
+  useEffect(() => {
+    setVisitCursor(visible ? cursorRef.current : null);
+  }, [visible]);
+
+  /** Recomputed as the feed changes — an activity created while you are looking
+   * at this list is exactly the case worth showing — but always measured
+   * against the frozen cursor above. */
+  const newForYou = useMemo(
+    () => (visitCursor === null ? [] : newActivitiesSince(visitCursor)),
+    [newActivitiesSince, visitCursor],
+  );
 
   useEffect(() => {
     if (visible) return;
@@ -1080,6 +1197,36 @@ export function PostfachSheet({
   const unreadGroups = notificationGroups.filter((group) => group.unread);
   const loadedUnreadCount = notifications.filter(isUnread).length;
   const pushOnlyHintCount = Math.max(0, unreadCount - loadedUnreadCount);
+  const flushViewedNotifications = useCallback(() => {
+    const ids = [...viewedNotificationIdsRef.current];
+    viewedNotificationIdsRef.current.clear();
+    if (ids.length > 0) markSeenRef.current(ids);
+  }, []);
+  const notificationViewActive = visible && !covered && view === 'notifications';
+  notificationViewActiveRef.current = notificationViewActive;
+
+  useEffect(() => {
+    if (notificationViewWasActiveRef.current && !notificationViewActive) {
+      flushViewedNotifications();
+    }
+    notificationViewWasActiveRef.current = notificationViewActive;
+  }, [flushViewedNotifications, notificationViewActive]);
+
+  useEffect(() => () => flushViewedNotifications(), [flushViewedNotifications]);
+
+  const onNotificationItemsViewable = useRef(
+    ({ viewableItems }: { viewableItems: ViewToken<NotificationGroup>[] }) => {
+      if (!notificationViewActiveRef.current) return;
+      viewableItems.forEach(({ isViewable, item }) => {
+        if (!isViewable) return;
+        item.ids.forEach((id) => viewedNotificationIdsRef.current.add(id));
+      });
+    },
+  ).current;
+  const notificationViewabilityConfig = useRef({
+    itemVisiblePercentThreshold: 50,
+    minimumViewTime: 300,
+  }).current;
 
   /**
    * A group counts as new while it is either still unread (so notifications
@@ -1095,10 +1242,7 @@ export function PostfachSheet({
   const rooms: PostfachRoom[] = joinedIds
     .map((id): PostfachRoom | null => {
       const room = getRoom(id);
-      // An activity or group gets a room at creation/join time so anyone can
-      // start a conversation from its detail. It belongs in the Postfach only
-      // once there is an actual conversation to return to.
-      if (!room || (room.messageCount ?? 0) < 1) return null;
+      if (!room) return null;
 
       const activity = findActivityById(id);
       if (activity) {
@@ -1116,6 +1260,9 @@ export function PostfachSheet({
           },
         };
       }
+      // Empty Activity rooms disappear with the Activity feed. Empty planning
+      // groups stay hidden until there is an actual conversation to return to.
+      if ((room.messageCount ?? 0) < 1) return null;
       const group = getGroup(id);
       // A planning round is its own kind of room with its own colour. It is
       // NOT an activity in mode 'open' — that fake made every Planung look
@@ -1125,7 +1272,7 @@ export function PostfachSheet({
             kind: 'group',
             id,
             title: group.title,
-            accent: GROUP_CHAT_ACCENT,
+            accent: PLANNING_ACCENT,
             memberCount: group.memberIds.length,
           }
         : null;
@@ -1145,7 +1292,12 @@ export function PostfachSheet({
     };
     return rank(b) - rank(a);
   });
-  const urgentSafety = sortedFriendSessions[0];
+  const urgentSafety = sortedFriendSessions.find((session) => {
+    const confirmation = session.companions?.[currentUid];
+    return session.alert
+      ? !isCompanionWatchingAlert(confirmation, session.alert, safetyNow)
+      : !isCompanionConfirmationActive(confirmation, safetyNow);
+  });
   const firstUnreadGroup = unreadGroups[0];
   const firstUnread = firstUnreadGroup?.primary;
   const stackPreview: StackPreview | null = urgentSafety
@@ -1155,7 +1307,7 @@ export function PostfachSheet({
           title: `${incomingRequests[0].friend.displayName} möchte dich hinzufügen`,
           body: 'Freundschaftsanfrage beantworten',
           icon: 'person-add-outline',
-          color: ACCENT,
+          color: WARNING,
         }
       : firstUnread
         ? {
@@ -1173,7 +1325,7 @@ export function PostfachSheet({
                 activeJourney.status === 'armed' ? 'Anreise vorbereitet' : 'Anreise wird geteilt',
               body: activeJourney.title,
               icon: activeJourney.status === 'armed' ? 'time-outline' : 'navigate',
-              color: ACCENT,
+              color: activeJourney.status === 'armed' ? PLANNING_ACCENT : NOW_ACCENT,
             }
           : unreadCount > 0
             ? {
@@ -1196,10 +1348,11 @@ export function PostfachSheet({
       clearTimeout(unmountTimerRef.current);
       unmountTimerRef.current = null;
     }
-    // Snapshot BEFORE anything is marked seen. markAllSeen deliberately does
-    // not run here — it runs on the way out (showHome / closeSheet), so the
-    // list can actually show what was new.
+    // Keep the visible treatment stable while only cards that enter the
+    // viewport are collected for persistence on the way out.
     setNewIds(new Set(notifications.filter(isUnread).map((notification) => notification.id)));
+    viewedNotificationIdsRef.current.clear();
+    if (listError) retryList();
     setNotificationSurfaceMounted(true);
     setView('notifications');
     haptics.medium();
@@ -1210,7 +1363,8 @@ export function PostfachSheet({
   }
 
   function showHome() {
-    markAllSeen();
+    flushViewedNotifications();
+    markNewForYouSeen();
     setView('home');
     haptics.selection();
     viewProgress.value = withTiming(0, {
@@ -1228,7 +1382,10 @@ export function PostfachSheet({
   }
 
   function closeSheet() {
-    if (view === 'notifications') markAllSeen();
+    if (view === 'notifications') flushViewedNotifications();
+    // On the way OUT, never on open — the section has to stay readable for the
+    // whole visit, same rule the notification list follows.
+    markNewForYouSeen();
     onClose();
   }
 
@@ -1357,8 +1514,26 @@ export function PostfachSheet({
                 <MitteilungenRow
                   count={mitteilungenCount}
                   preview={stackPreview}
+                  hasError={Boolean(listError)}
                   onPress={openNotifications}
                 />
+
+                {newForYou.length ? (
+                  <>
+                    <View className="px-2">
+                      <SectionLabel trailing={`${newForYou.length}`}>Neu für dich</SectionLabel>
+                    </View>
+                    <View className="gap-0.5">
+                      {newForYou.map((activity) => (
+                        <NewActivityRow
+                          key={activity.id}
+                          activity={activity}
+                          onPress={onOpenActivity}
+                        />
+                      ))}
+                    </View>
+                  </>
+                ) : null}
 
                 <View className="px-2">
                   <SectionLabel trailing={rooms.length ? `${rooms.length}` : undefined}>
@@ -1389,8 +1564,20 @@ export function PostfachSheet({
                         color: colors.mutedForeground,
                       }}
                     >
-                      Tritt einer Activity bei. Der zugehörige Chat erscheint dann hier.
+                      Tritt einer aktiven oder kommenden Aktivität bei. Der Chat erscheint dann
+                      direkt hier.
                     </Text>
+                    <View className="mt-5 w-full max-w-[230px]">
+                      <SquircleButton
+                        label="Aktivitäten entdecken"
+                        icon="map-outline"
+                        variant="tonal"
+                        surface={colors.card}
+                        color={ACCENT}
+                        size="sm"
+                        onPress={onBrowseActivities}
+                      />
+                    </View>
                   </View>
                 ) : (
                   <View className="gap-0.5">
@@ -1418,170 +1605,173 @@ export function PostfachSheet({
                 pointerEvents={view === 'notifications' ? 'auto' : 'none'}
                 style={[StyleSheet.absoluteFill, notificationsStyle]}
               >
-                <ScrollView
+                <FlatList
                   className="px-4"
+                  data={notificationGroups}
+                  keyExtractor={(group) => group.id}
                   contentContainerStyle={{ paddingBottom: 20 }}
                   showsVerticalScrollIndicator={false}
-                >
-                  {hasLiveItems ? <SectionLabel>Jetzt wichtig</SectionLabel> : null}
-                  <View className="gap-2.5">
-                    {sortedFriendSessions.map((session) => (
-                      <LiveSafetyCard
-                        key={`safety-${session.uid}`}
-                        session={session}
-                        currentUid={currentUid}
-                        now={safetyNow}
-                        onOpen={() => onOpenSafety(session.uid)}
-                      />
-                    ))}
-                    {incomingRequests.map((request) => (
-                      <FriendRequestCard key={request.id} request={request} />
-                    ))}
-                    {activeJourney ? (
-                      <LiveJourneyCard
-                        title={activeJourney.title}
-                        status={activeJourney.status === 'armed' ? 'armed' : 'underway'}
-                        onOpen={() => onOpenActivity(activeJourney.activityId)}
-                      />
-                    ) : null}
-                  </View>
-
-                  {notificationGroups.length ? (
-                    <View className="mt-5">
-                      <SectionLabel trailing={`${notificationGroups.length}`}>
-                        Weitere Mitteilungen
-                      </SectionLabel>
+                  onViewableItemsChanged={onNotificationItemsViewable}
+                  viewabilityConfig={notificationViewabilityConfig}
+                  ItemSeparatorComponent={() => <View className="h-2.5" />}
+                  ListHeaderComponent={
+                    <>
+                      {hasLiveItems ? <SectionLabel>Jetzt wichtig</SectionLabel> : null}
                       <View className="gap-2.5">
-                        {notificationGroups.map((group) =>
-                          group.primary.kind === 'group_chat_invite' ? (
-                            <GroupInviteCard
-                              key={group.id}
-                              group={group}
-                              isNew={isGroupNew(group)}
-                              onRespond={respondToGroupInvite}
-                            />
-                          ) : (
-                            <NotificationCard
-                              key={group.id}
-                              group={group}
-                              isNew={isGroupNew(group)}
-                              onOpenActivity={onOpenActivity}
-                              onOpenSafety={onOpenSafety}
-                          onOpenSpontaneousRoundInvite={onOpenSpontaneousRoundInvite}
-                          onOpenTimePlan={onOpenTimePlan}
-                              safetyAvailable={Boolean(
-                                group.primary.safetyOwnerUid &&
-                                (activeSafetyOwnerUids.has(group.primary.safetyOwnerUid) ||
-                                  ownSafetySession?.uid === group.primary.safetyOwnerUid),
-                              )}
-                            />
-                          ),
+                        {sortedFriendSessions.map((session) => (
+                          <LiveSafetyCard
+                            key={`safety-${session.uid}`}
+                            session={session}
+                            currentUid={currentUid}
+                            now={safetyNow}
+                            onOpen={() => onOpenSafety(session.uid)}
+                          />
+                        ))}
+                        {incomingRequests.map((request) => (
+                          <FriendRequestCard key={request.id} request={request} />
+                        ))}
+                        {activeJourney ? (
+                          <LiveJourneyCard
+                            title={activeJourney.title}
+                            status={activeJourney.status === 'armed' ? 'armed' : 'underway'}
+                            onOpen={() => onOpenActivity(activeJourney.activityId)}
+                          />
+                        ) : null}
+                      </View>
+                      {notificationGroups.length ? (
+                        <View className="mt-5">
+                          <SectionLabel trailing={`${notificationGroups.length}`}>
+                            Weitere Mitteilungen
+                          </SectionLabel>
+                        </View>
+                      ) : null}
+                    </>
+                  }
+                  renderItem={({ item: group }) =>
+                    group.primary.kind === 'group_chat_invite' ? (
+                      <GroupInviteCard
+                        group={group}
+                        isNew={isGroupNew(group)}
+                        onRespond={respondToGroupInvite}
+                      />
+                    ) : (
+                      <NotificationCard
+                        group={group}
+                        isNew={isGroupNew(group)}
+                        onOpenActivity={onOpenActivity}
+                        onOpenSafety={onOpenSafety}
+                        onOpenSpontaneousRoundInvite={onOpenSpontaneousRoundInvite}
+                        onOpenTimePlan={onOpenTimePlan}
+                        safetyAvailable={Boolean(
+                          group.primary.safetyOwnerUid &&
+                          (activeSafetyOwnerUids.has(group.primary.safetyOwnerUid) ||
+                            ownSafetySession?.uid === group.primary.safetyOwnerUid),
                         )}
+                      />
+                    )
+                  }
+                  ListFooterComponent={
+                    isLoading ? (
+                      <View className="items-center px-8 py-12">
+                        <TogetherLoader size={44} tile />
+                        <Text
+                          {...TEXT_FLEXIBLE}
+                          className="mt-4"
+                          style={{ ...TYPE.label, fontFamily: FONT.bold, color: colors.foreground }}
+                        >
+                          Mitteilungen werden abgeglichen
+                        </Text>
                       </View>
-                    </View>
-                  ) : null}
-
-                  {isLoading ? (
-                    <View className="items-center px-8 py-12">
-                      <TogetherLoader size={44} tile />
-                      <Text
-                        {...TEXT_FLEXIBLE}
-                        className="mt-4"
-                        style={{ ...TYPE.label, fontFamily: FONT.bold, color: colors.foreground }}
-                      >
-                        Mitteilungen werden abgeglichen
-                      </Text>
-                    </View>
-                  ) : listError ? (
-                    <View
-                      className="mt-5 items-center rounded-[22px] border px-6 py-6"
-                      style={{ backgroundColor: colors.card, borderColor: colors.border }}
-                    >
+                    ) : listError ? (
                       <View
-                        className="mb-3 h-12 w-12 items-center justify-center rounded-[17px]"
-                        style={{ backgroundColor: colorWithAlpha(WARNING, 0.14) }}
+                        className="mt-5 items-center rounded-[22px] border px-6 py-6"
+                        style={{ backgroundColor: colors.card, borderColor: colors.border }}
                       >
-                        <Ionicons name="cloud-offline-outline" size={22} color={WARNING} />
-                      </View>
-                      <Text
-                        {...TEXT_FLEXIBLE}
-                        className="text-center"
-                        style={{ ...TYPE.label, fontFamily: FONT.bold, color: colors.foreground }}
-                      >
-                        Abgleich nicht möglich
-                      </Text>
-                      <Text
-                        {...TEXT_FLEXIBLE}
-                        className="mt-1 text-center"
-                        style={{
-                          ...TYPE.label,
-                          fontFamily: FONT.medium,
-                          color: colors.mutedForeground,
-                        }}
-                      >
-                        {listError}
-                      </Text>
-                      {/* Dev/staging only: the Firestore code IS the diagnosis
+                        <View
+                          className="mb-3 h-12 w-12 items-center justify-center rounded-[17px]"
+                          style={{ backgroundColor: colorWithAlpha(WARNING, 0.14) }}
+                        >
+                          <Ionicons name="cloud-offline-outline" size={22} color={WARNING} />
+                        </View>
+                        <Text
+                          {...TEXT_FLEXIBLE}
+                          className="text-center"
+                          style={{ ...TYPE.label, fontFamily: FONT.bold, color: colors.foreground }}
+                        >
+                          Abgleich nicht möglich
+                        </Text>
+                        <Text
+                          {...TEXT_FLEXIBLE}
+                          className="mt-1 text-center"
+                          style={{
+                            ...TYPE.label,
+                            fontFamily: FONT.medium,
+                            color: colors.mutedForeground,
+                          }}
+                        >
+                          {listError}
+                        </Text>
+                        {/* Dev/staging only: the Firestore code IS the diagnosis
                           (permission-denied vs unavailable vs failed-precondition
                           are three unrelated bugs behind one German sentence).
                           Never shown in production — it is noise to a real user. */}
-                      {DIAGNOSTICS_VISIBLE && listErrorCode ? (
+                        {DIAGNOSTICS_VISIBLE && listErrorCode ? (
+                          <Text
+                            {...TEXT_FLEXIBLE}
+                            className="mt-2 text-center"
+                            style={{
+                              ...TYPE.micro,
+                              fontFamily: FONT.medium,
+                              color: colors.mutedForeground,
+                              opacity: 0.7,
+                            }}
+                          >
+                            {listErrorCode}
+                          </Text>
+                        ) : null}
+                        <View className="mt-4 w-full max-w-[220px]">
+                          <SquircleButton
+                            label="Erneut versuchen"
+                            icon="refresh"
+                            variant="tonal"
+                            surface={colors.card}
+                            color={ACCENT}
+                            size="sm"
+                            onPress={retryList}
+                          />
+                        </View>
+                      </View>
+                    ) : notificationsEmpty ? (
+                      <View className="items-center px-8 py-14">
+                        <View
+                          className="mb-4 h-16 w-16 items-center justify-center rounded-[24px]"
+                          style={{ backgroundColor: colorWithAlpha(SUCCESS, 0.12) }}
+                        >
+                          <Ionicons name="checkmark-done" size={28} color={SUCCESS} />
+                        </View>
                         <Text
                           {...TEXT_FLEXIBLE}
-                          className="mt-2 text-center"
+                          className="text-center"
+                          style={{ ...TYPE.body, fontFamily: FONT.bold, color: colors.foreground }}
+                        >
+                          Keine Mitteilungen
+                        </Text>
+                        <Text
+                          {...TEXT_FLEXIBLE}
+                          className="mt-2 max-w-[280px] text-center"
                           style={{
-                            ...TYPE.micro,
+                            ...TYPE.label,
                             fontFamily: FONT.medium,
                             color: colors.mutedForeground,
-                            opacity: 0.7,
                           }}
                         >
-                          {listErrorCode}
+                          Hier erscheinen nur Dinge, die für dich wichtig oder handlungsrelevant
+                          sind.
                         </Text>
-                      ) : null}
-                      <View className="mt-4 w-full max-w-[220px]">
-                        <SquircleButton
-                          label="Erneut versuchen"
-                          icon="refresh"
-                          variant="tonal"
-                          color={ACCENT}
-                          size="sm"
-                          onPress={retryList}
-                        />
                       </View>
-                    </View>
-                  ) : notificationsEmpty ? (
-                    // A real empty state. Reaching Mitteilungen with nothing in
-                    // them is a normal, expected outcome now that the entry is
-                    // always there — it must look intentional, not broken.
-                    <View className="items-center px-8 py-14">
-                      <View
-                        className="mb-4 h-16 w-16 items-center justify-center rounded-[24px]"
-                        style={{ backgroundColor: colorWithAlpha(SUCCESS, 0.12) }}
-                      >
-                        <Ionicons name="checkmark-done" size={28} color={SUCCESS} />
-                      </View>
-                      <Text
-                        {...TEXT_FLEXIBLE}
-                        className="text-center"
-                        style={{ ...TYPE.body, fontFamily: FONT.bold, color: colors.foreground }}
-                      >
-                        Keine Mitteilungen
-                      </Text>
-                      <Text
-                        {...TEXT_FLEXIBLE}
-                        className="mt-2 max-w-[280px] text-center"
-                        style={{
-                          ...TYPE.label,
-                          fontFamily: FONT.medium,
-                          color: colors.mutedForeground,
-                        }}
-                      >
-                        Hier erscheinen nur Dinge, die für dich wichtig oder handlungsrelevant sind.
-                      </Text>
-                    </View>
-                  ) : null}
-                </ScrollView>
+                    ) : null
+                  }
+                />
               </Animated.View>
             ) : null}
           </View>
@@ -1619,9 +1809,9 @@ const styles = StyleSheet.create({
   headerButton: {
     alignItems: 'center',
     borderRadius: 16,
-    height: 40,
+    height: 44,
     justifyContent: 'center',
-    width: 40,
+    width: 44,
   },
   messageCard: {
     borderRadius: 20,
@@ -1632,9 +1822,9 @@ const styles = StyleSheet.create({
   roundAction: {
     alignItems: 'center',
     borderRadius: 16,
-    height: 38,
+    height: 44,
     justifyContent: 'center',
-    width: 38,
+    width: 44,
   },
   stackBack: {
     borderRadius: 20,
@@ -1660,8 +1850,6 @@ const styles = StyleSheet.create({
     minHeight: 88,
     overflow: 'hidden',
     padding: 16,
-    shadowOffset: { width: 0, height: 9 },
-    shadowRadius: 18,
   },
   stackGlow: {
     borderRadius: 80,

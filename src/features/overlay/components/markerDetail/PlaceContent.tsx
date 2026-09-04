@@ -27,7 +27,7 @@ export function PlaceContent({
 }) {
   return (
     <View className="gap-3">
-      <View className="flex-row items-center gap-3">
+      <View className="flex-row items-center gap-3 pr-12">
         <View
           className="h-10 w-10 items-center justify-center rounded-full"
           style={{ backgroundColor: `${CREATE_ACCENT}1F` }}

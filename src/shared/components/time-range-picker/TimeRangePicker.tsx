@@ -32,6 +32,7 @@ import {
   isEdgePhase,
   pxPerHourFromPxPerMs,
   pxPerMsFromPxPerHour,
+  resolveHitTarget,
   resolveRange,
   snapRange,
   snappedRange,
@@ -153,10 +154,16 @@ export interface TimeRangePickerProps {
    * without a `min` never fights a range it was given. */
   min?: Date;
   max?: Date;
+  /** Time frame shown on first open, independent from the selected range. */
+  viewportRange?: TimeRangeValue;
 
   stepMinutes?: number;
   minDurationMinutes?: number;
   maxDurationMinutes?: number;
+  /** Keep the current time scale after a handle release instead of re-zooming. */
+  rezoomOnRelease?: boolean;
+  /** Lock the start and let the complete selected bar extend only the end. */
+  interactionMode?: 'range' | 'end-only';
 
   /** Pointer travel past the safe edge that reaches full edge speed. */
   edgeZonePx?: number;
@@ -230,10 +237,13 @@ export function TimeRangePicker({
   value,
   min,
   max,
+  viewportRange,
   stepMinutes = 5,
   minDurationMinutes = 15,
   maxDurationMinutes = 720,
-  edgeZonePx = 52,
+  rezoomOnRelease = true,
+  interactionMode = 'range',
+  edgeZonePx,
   safeInsetPx,
   layers,
   density = 'default',
@@ -262,6 +272,7 @@ export function TimeRangePicker({
     [density, accent, themeOverride],
   );
   const insetPx = safeInsetPx ?? theme.interaction.safeInsetPx;
+  const resolvedEdgeZonePx = edgeZonePx ?? theme.interaction.edgeZonePx;
 
   const [width, setWidth] = useState(0);
 
@@ -281,6 +292,8 @@ export function TimeRangePicker({
   const valueEndMs = value.end.getTime();
   const minMs = min ? min.getTime() : undefined;
   const maxMs = max ? max.getTime() : undefined;
+  const viewportStartMs = viewportRange?.start.getTime();
+  const viewportEndMs = viewportRange?.end.getTime();
 
   const geometry = useMemo<PickerGeometry>(() => {
     const minTimeMs = minMs ?? valueStartMs;
@@ -300,7 +313,7 @@ export function TimeRangePicker({
         // Measured from the SAFE edge, so the pedal starts at exactly zero the
         // moment the handle pins. The default lands full speed on the picker's
         // physical edge, which is the furthest a finger can reliably reach.
-        travelPx: Math.max(1, edgeZonePx - insetPx),
+        travelPx: Math.max(1, resolvedEdgeZonePx - insetPx),
         maxSpeedMsPerSecond: edgeSpeed?.maxMsPerSecond ?? EDGE_MAX_SPEED_MS_PER_SECOND,
         minStrength: edgeSpeed?.minStrength ?? EDGE_MIN_STRENGTH,
       },
@@ -317,7 +330,7 @@ export function TimeRangePicker({
     valueStartMs,
     minDurationMinutes,
     maxDurationMinutes,
-    edgeZonePx,
+    resolvedEdgeZonePx,
     stepMinutes,
     edgeSpeed?.maxMsPerSecond,
     edgeSpeed?.minStrength,
@@ -397,10 +410,17 @@ export function TimeRangePicker({
     if (!didInit.current) {
       didInit.current = true;
       const clamped = clampRangeIntoLimits(state.value.range, geometry.limits);
+      const framingRange =
+        viewportStartMs != null && viewportEndMs != null && viewportEndMs > viewportStartMs
+          ? clampRangeIntoLimits(
+              { startMs: viewportStartMs, endMs: viewportEndMs },
+              geometry.limits,
+            )
+          : clamped;
       state.value = createPickerState(
         clamped,
         fitRange(
-          clamped,
+          framingRange,
           geometry.bounds,
           geometry.scale,
           pxPerMsFromPxPerHour(DEFAULT_PREFERRED_PX_PER_HOUR),
@@ -422,10 +442,10 @@ export function TimeRangePicker({
       geometry.scale,
     );
     if (repaired !== current.viewport) state.value = { ...current, viewport: repaired };
-  }, [geometry, width, geo, state, lastReported]);
+  }, [geometry, width, geo, state, lastReported, viewportEndMs, viewportStartMs]);
 
   useEffect(() => {
-    if (!__DEV__ || width <= 0) return;
+    if (typeof __DEV__ === 'undefined' || !__DEV__ || width <= 0) return;
     const verdict = validateScaleConfiguration(
       geometry.bounds,
       geometry.scale,
@@ -519,17 +539,14 @@ export function TimeRangePicker({
           const current = state.value;
           const startHandleX = timeToX(current.viewport, current.range.startMs);
           const endHandleX = timeToX(current.viewport, current.range.endMs);
-          const startDistance = Math.abs(event.x - startHandleX);
-          const endDistance = Math.abs(event.x - endHandleX);
-
-          // Handle beats range beats track; between the two handles the nearer
-          // one wins, so an overlap at the minimum duration is never ambiguous.
-          let kind: RangeEdge | null = null;
-          if (startDistance <= hitWidths.start / 2 || endDistance <= hitWidths.end / 2) {
-            kind = startDistance <= endDistance ? 'start' : 'end';
-          } else if (event.x > startHandleX && event.x < endHandleX) {
-            kind = 'range';
-          }
+          const kind = resolveHitTarget(
+            event.x,
+            startHandleX,
+            endHandleX,
+            hitWidths.start,
+            hitWidths.end,
+            interactionMode,
+          );
           pendingKind.value = kind === 'start' ? 1 : kind === 'end' ? 2 : kind === 'range' ? 3 : 0;
           pendingPointerX.value = event.x;
         })
@@ -575,7 +592,7 @@ export function TimeRangePicker({
           if (!gestureActive.value) return;
           gestureActive.value = false;
           activeEdge.value = 0;
-          state.value = endGesture(state.value, geo.value);
+          state.value = endGesture(state.value, geo.value, rezoomOnRelease);
           const final = state.value.range;
           lastReported.value = final;
           runOnJS(emitChangeEnd)(final.startMs, final.endMs);
@@ -592,6 +609,8 @@ export function TimeRangePicker({
       lastReported,
       emitChange,
       emitChangeEnd,
+      rezoomOnRelease,
+      interactionMode,
     ],
   );
 
@@ -734,7 +753,7 @@ export function TimeRangePicker({
       width: Math.max(0, durationOf(range) * viewport.pxPerMs),
       transform: [{ translateX: timeToX(viewport, range.startMs) }],
     };
-  });
+  }, [state]);
 
   const rangeFillStyle = useAnimatedStyle(() => ({
     backgroundColor: interpolateColor(progress.value, [0, 1], [sequence[0], sequence[1]]),
@@ -743,21 +762,21 @@ export function TimeRangePicker({
       [0, 1],
       [borderSequence[0], borderSequence[1]],
     ),
-  }));
+  }), [progress, sequence, borderSequence]);
 
   const startHandleStyle = useAnimatedStyle(() => {
     const { viewport, range } = state.value;
     return {
       transform: [{ translateX: timeToX(viewport, range.startMs) - theme.startHandle.width / 2 }],
     };
-  });
+  }, [state, theme.startHandle.width]);
 
   const endHandleStyle = useAnimatedStyle(() => {
     const { viewport, range } = state.value;
     return {
       transform: [{ translateX: timeToX(viewport, range.endMs) - theme.endHandle.width / 2 }],
     };
-  });
+  }, [state, theme.endHandle.width]);
 
   /**
    * The duration only speaks when the bar has room for it.
@@ -772,14 +791,14 @@ export function TimeRangePicker({
     const barWidth = durationOf(range) * viewport.pxPerMs;
     const minWidth = theme.rangeLabel.fontSize * 8.2;
     return { opacity: Math.max(0, Math.min(1, (barWidth - minWidth) / RANGE_LABEL_FADE_PX)) };
-  });
+  }, [state, theme.rangeLabel.fontSize]);
 
   const pastStyle = useAnimatedStyle(() => {
     const { viewport } = state.value;
     const limit = geo.value.limits.minTimeMs;
     const edge = timeToX(viewport, limit);
     return { width: Math.max(0, Math.min(geo.value.bounds.width, edge)) };
-  });
+  }, [state, geo]);
 
   const durationText = formatDuration(snapped.endMs - snapped.startMs);
   const rangeValue: TimeRangeValue = useMemo(
@@ -789,6 +808,7 @@ export function TimeRangePicker({
 
   const adjust = useCallback(
     (edge: 'start' | 'end', steps: number) => {
+      if (disabled || (interactionMode === 'end-only' && edge === 'start')) return;
       const geometryNow = geo.value;
       const current = state.value;
       const target =
@@ -815,7 +835,7 @@ export function TimeRangePicker({
       emitChange(next.startMs, next.endMs);
       onChangeEndRef.current?.({ start: new Date(next.startMs), end: new Date(next.endMs) });
     },
-    [geo, state, lastReported, emitChange],
+    [disabled, interactionMode, geo, state, lastReported, emitChange],
   );
 
   return (
@@ -915,14 +935,16 @@ export function TimeRangePicker({
         </Animated.View>
 
         <Animated.View
-          accessible
+          accessible={!disabled && interactionMode !== 'end-only'}
           accessibilityRole="adjustable"
           accessibilityLabel={accessibilityLabelStart}
+          accessibilityState={{ disabled: disabled || interactionMode === 'end-only' }}
           accessibilityValue={{ text: formatTime(rangeValue.start) }}
           accessibilityActions={ACCESSIBILITY_ACTIONS}
-          onAccessibilityAction={(event) =>
-            adjust('start', event.nativeEvent.actionName === 'increment' ? 1 : -1)
-          }
+          onAccessibilityAction={(event) => {
+            if (disabled || interactionMode === 'end-only') return;
+            adjust('start', event.nativeEvent.actionName === 'increment' ? 1 : -1);
+          }}
           style={[styles.handleHit, { top: barTop, width: theme.startHandle.hitWidth, marginLeft: -theme.startHandle.hitWidth / 2 + theme.startHandle.width / 2, height: theme.range.height }, startHandleStyle]}
         >
           {renderStartHandle ? (
@@ -942,14 +964,16 @@ export function TimeRangePicker({
         </Animated.View>
 
         <Animated.View
-          accessible
+          accessible={!disabled}
           accessibilityRole="adjustable"
           accessibilityLabel={accessibilityLabelEnd}
+          accessibilityState={{ disabled }}
           accessibilityValue={{ text: formatTime(rangeValue.end) }}
           accessibilityActions={ACCESSIBILITY_ACTIONS}
-          onAccessibilityAction={(event) =>
-            adjust('end', event.nativeEvent.actionName === 'increment' ? 1 : -1)
-          }
+          onAccessibilityAction={(event) => {
+            if (disabled) return;
+            adjust('end', event.nativeEvent.actionName === 'increment' ? 1 : -1);
+          }}
           style={[styles.handleHit, { top: barTop, width: theme.endHandle.hitWidth, marginLeft: -theme.endHandle.hitWidth / 2 + theme.endHandle.width / 2, height: theme.range.height }, endHandleStyle]}
         >
           {renderEndHandle ? (
@@ -1008,7 +1032,7 @@ function Layer({
       transform: [{ translateX: left }],
       width: Math.max(0, timeToX(viewport, layer.endMs) - left),
     };
-  });
+  }, [state, layer]);
   const color =
     theme.layers.colors[Math.min(layer.level, theme.layers.colors.length) - 1] ??
     theme.layers.colors[theme.layers.colors.length - 1];
@@ -1042,10 +1066,10 @@ function Layer({
 function Tick({ tickMs, state, labelInterval, theme, formatTime, renderTickLabel }: TickProps) {
   const style = useAnimatedStyle(() => ({
     transform: [{ translateX: timeToX(state.value.viewport, tickMs) }],
-  }));
+  }), [state, tickMs]);
   const labelStyle = useAnimatedStyle(() => ({
     opacity: hoursSinceEpoch(tickMs) % labelInterval.value === 0 ? 1 : 0,
-  }));
+  }), [tickMs, labelInterval]);
   const date = useMemo(() => new Date(tickMs), [tickMs]);
 
   return (

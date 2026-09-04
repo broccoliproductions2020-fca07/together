@@ -639,28 +639,6 @@ export function ChatRoomInfoSheet({
                     </View>
                   )}
 
-                  {invitableFriends.length > 0 ? (
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={`Einladen (${selectedInvitees.length})`}
-                      disabled={busy || selectedInvitees.length === 0}
-                      onPress={sendInvites}
-                      className="min-h-13 items-center justify-center rounded-2xl py-4 active:opacity-90"
-                      style={{
-                        backgroundColor: accent,
-                        opacity: busy || selectedInvitees.length === 0 ? 0.4 : 1,
-                      }}
-                    >
-                      <Text
-                        {...TEXT_CAPPED}
-                        style={{ ...TYPE.label, fontFamily: FONT.bold, color: '#ffffff' }}
-                      >
-                        {selectedInvitees.length > 0
-                          ? `Einladen (${selectedInvitees.length})`
-                          : 'Einladen'}
-                      </Text>
-                    </Pressable>
-                  ) : null}
                 </>
               ) : null}
 
@@ -810,6 +788,31 @@ export function ChatRoomInfoSheet({
                 </>
               ) : null}
             </ScrollView>
+
+            {view.kind === 'invite' && invitableFriends.length > 0 ? (
+              <View className="border-t border-border pt-3">
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Einladen (${selectedInvitees.length})`}
+                  disabled={busy || selectedInvitees.length === 0}
+                  onPress={sendInvites}
+                  className="min-h-13 items-center justify-center rounded-2xl py-4 active:opacity-90"
+                  style={{
+                    backgroundColor: accent,
+                    opacity: busy || selectedInvitees.length === 0 ? 0.4 : 1,
+                  }}
+                >
+                  <Text
+                    {...TEXT_CAPPED}
+                    style={{ ...TYPE.label, fontFamily: FONT.bold, color: '#ffffff' }}
+                  >
+                    {selectedInvitees.length > 0
+                      ? `Einladen (${selectedInvitees.length})`
+                      : 'Einladen'}
+                  </Text>
+                </Pressable>
+              </View>
+            ) : null}
           </View>
         </View>
       </Modal>

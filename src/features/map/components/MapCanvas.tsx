@@ -1,5 +1,19 @@
-import { useEffect, useImperativeHandle, useRef, useState, type ReactNode } from 'react';
-import { Platform, StyleSheet, View, type LayoutChangeEvent } from 'react-native';
+import {
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
+import {
+  Image,
+  Platform,
+  StyleSheet,
+  View,
+  type LayoutChangeEvent,
+} from 'react-native';
 import MapView, {
   Marker,
   type LongPressEvent,
@@ -10,6 +24,7 @@ import MapView, {
 } from 'react-native-maps';
 
 import { MAP_PROVIDER } from '../utils/mapProvider';
+
 
 import {
   cancelAnimation,
@@ -24,25 +39,48 @@ import { useActivityEntities } from '@/features/activities';
 import { useActivityChatActivity } from '@/features/chat';
 
 import { useMapStyle } from '../mapStyle/useMapStyle';
-import type { MapCoordinate } from '../types/map.types';
+import type { MapCoordinate, MapMarker } from '../types/map.types';
 import { countdownBucket } from '../utils/countdown';
+import {
+  focusCameraCenterFromProjection,
+  focusCameraOffset,
+  focusTargetY,
+  type FocusFrame,
+} from '../utils/focusFraming';
+import {
+  activityStackCoordinate,
+  activityStackId,
+  groupMarkersByProjectedCollision,
+  type MarkerCollisionBox,
+  type MarkerCollisionCandidate,
+  type ProjectedMarkerPoint,
+} from '../utils/markerCollision';
 import { markerModeStyles } from '../utils/markerStyles';
 import { participantDisplay } from '../utils/markerParticipants';
-import { zoomProgressForDelta } from '../utils/markerDetailLevel';
+import { visibleMarkerFaceCount, zoomProgressForDelta } from '../utils/markerDetailLevel';
+import { MAP_PERSPECTIVE_PITCH } from '../utils/mapPerspective';
+import {
+  CAPTURE_ZOOM_OUT,
+  QUIET_CAPTURE_STYLE,
+  QUIET_MAP_CAPTURE,
+} from '../utils/quietCaptureStyle';
 import { DEFAULT_MAP_REGION } from '../utils/defaultRegion';
 import { AvatarMarker } from './AvatarMarker';
+import { ActivityStackMarker } from './ActivityStackMarker';
 import { ClusterMarker } from './ClusterMarker';
 import { JourneyAvatarMarker } from './JourneyAvatarMarker';
 import {
   ACTIVITY_MARKER_ANCHOR,
-  ACTIVITY_MARKER_AURA_OFFSET_Y,
-  activityMarkerShellWidth,
+  ACTIVITY_MARKER_CAPTURE_HEIGHT,
+  ACTIVITY_MARKER_CAPTURE_WIDTH,
+  ACTIVITY_MARKER_GROUND_HEIGHT,
+  ACTIVITY_MARKER_GROUND_Y,
+  ACTIVITY_MARKER_SHELL_TOP,
+  activityMarkerCardWidth,
 } from './activityMarkerLayout';
-import { MapLiveAuraOverlay, type LiveAuraTarget } from './MapLiveAuraOverlay';
 import { MapMarkerMorphOverlay, type MorphCameraValues } from './MapMarkerMorphOverlay';
 import { MarkerDismissOverlay, type MarkerDismissRequest } from './MarkerDismissOverlay';
 import { MarkerLaunchOverlay, type MarkerLaunchRequest } from './MarkerLaunchOverlay';
-import { OpenPresenceMarker } from './OpenPresenceMarker';
 import { useMarkerImages } from './markerCapture';
 import { PreviewMapCanvas, type PreviewMapCanvasProps } from './PreviewMapCanvas';
 
@@ -62,23 +100,26 @@ import { PreviewMapCanvas, type PreviewMapCanvasProps } from './PreviewMapCanvas
 // place preview cannot pick a different renderer than the main map.
 
 /**
- * "Centred" means centred in the map the user can actually SEE.
- *
- * A sheet covering the lower part of the screen moves the visible centre up, so
- * the camera centre has to move the opposite way — south by half the covered
- * height. This used to be a hard-coded 0.28 of the viewport, calibrated for one
- * particular sheet; every other sheet (and no sheet at all) then put the pin
- * somewhere between slightly and badly off. Deriving it from the real covered
- * height is self-calibrating: 0 obstruction → dead centre, and a sheet covering
- * 56% of the screen reproduces exactly the old 0.28.
- *
- * Capped at 80% because past that there is no meaningful map strip left to
- * centre anything in, and the correction would fling the target off-screen.
+ * The sheet covers the screen's BOTTOM, not geographic south. A latitude-only
+ * correction drifts sideways once someone rotates the map, because south is no
+ * longer screen-down. Move the camera along the rotated screen axis instead.
  */
-function focusCenterOffset(coveredHeight: number, viewportHeight: number) {
-  if (viewportHeight <= 0) return 0;
-  const covered = Math.max(0, Math.min(coveredHeight, viewportHeight * 0.8));
-  return covered / (2 * viewportHeight);
+function focusCenterInVisibleMap(
+  coordinate: MapCoordinate,
+  latitudeDelta: number,
+  longitudeDelta: number,
+  frame: FocusFrame,
+  viewportHeight: number,
+  heading: number,
+): MapCoordinate {
+  const offset = focusCameraOffset(frame, viewportHeight);
+  if (offset === 0) return coordinate;
+
+  const radians = (heading * Math.PI) / 180;
+  return {
+    latitude: coordinate.latitude + latitudeDelta * offset * Math.cos(radians),
+    longitude: coordinate.longitude + longitudeDelta * offset * Math.sin(radians),
+  };
 }
 
 function zoomForLongitudeDelta(longitudeDelta: number, viewportWidth: number) {
@@ -114,10 +155,15 @@ interface MarkerDescriptor {
   /** Encodes full visual state; drives the captured-image cache. */
   captureKey: string;
   coordinate: MapCoordinate;
+  /** Pixel bounds of the captured PNG. iOS renders the raster as a normal
+   * React Native image because Google Maps' native `image` loader is broken in
+   * bridgeless Fabric builds. */
+  rasterSize: { width: number; height: number };
   /** Activity pins point to their tail; Journey/Safety avatars remain centered. */
   anchor?: { x: number; y: number };
   node: ReactNode;
   onPress?: () => void;
+  accessibilityLabel: string;
   morphable?: boolean;
   /**
    * Native marker stacking. A concrete activity must never be hidden behind a
@@ -129,16 +175,34 @@ interface MarkerDescriptor {
 }
 
 /** Marker layers, low to high. */
-const Z_OPEN_PRESENCE = 1;
 const Z_ACTIVITY = 2;
 const Z_SELECTED = 3;
+
+// iOS+Google under Fabric never loads the `image` prop: react-native-maps
+// resolves it through `[RCTBridge currentBridge]`, which is nil in bridgeless
+// mode, so the marker stays blank without raising an error. Passing the same
+// captured PNG as a child view sidesteps that loader entirely. Android keeps
+// the prop — there the child path is the one that clips.
+const MARKER_IMAGE_AS_CHILD = Platform.OS === 'ios';
+
+/**
+ * Collision geometry shared by single markers and the stacks that replace
+ * them. Neither value depends on a marker, and the stack has to be measured
+ * against the same box as its members or grouping would compare two rulers.
+ */
+const MARKER_COLLISION_HEIGHT =
+  ACTIVITY_MARKER_GROUND_Y + ACTIVITY_MARKER_GROUND_HEIGHT - ACTIVITY_MARKER_SHELL_TOP;
+const MARKER_COLLISION_ANCHOR: ProjectedMarkerPoint = {
+  x: 0.5,
+  y: (ACTIVITY_MARKER_GROUND_Y - ACTIVITY_MARKER_SHELL_TOP) / MARKER_COLLISION_HEIGHT,
+};
 
 // Frame count for the captured avatar morph (2×2 quad → unfolded row when an
 // activity has several people). These captures ARE the animation: each step is
 // a distinct PNG rendered from the node at that `zoomProgress`. Lowering it
 // makes the reordering coarse — do not "optimise" this to cut native image
 // swaps while zooming, the swaps are the frames.
-const ACTIVITY_MARKER_VISUAL_VERSION = 'avatar-squircle-160-v3';
+const ACTIVITY_MARKER_VISUAL_VERSION = 'squircle-ring-160-v13';
 const ZOOM_FRAME_EPSILON = 0.0005;
 const MORPH_VIEWPORT_RADIUS = 2.5;
 const MORPH_SETTLE_POINTS = [0, 0.5, 1] as const;
@@ -158,10 +222,21 @@ const MORPH_MAX_OVERLAYS = 4;
  * animation", never to "no marker".
  */
 const MORPH_HANDOFF_TIMEOUT_MS = 900;
+/** One extra viewport catches edge collisions without projecting off-screen feed items. */
+const COLLISION_VIEWPORT_RADIUS = 1;
 
-/** Camera pitch for the perspective button. Enough to read building height
- * without turning the map into a diorama. Independent of heading — the button
- * only tilts; turning the map is the user's two-finger gesture. */
+function collisionGroupSignature(groups: MarkerCollisionCandidate[][]) {
+  return groups
+    .map((group) =>
+      group
+        .map(({ marker }) => marker.id)
+        .sort()
+        .join(','),
+    )
+    .sort()
+    .join('|');
+}
+
 /**
  * The ONE zoom the camera uses whenever it jumps to a single place the user
  * was not already looking at: `focusCoordinate` without `focusKeepZoom`, and
@@ -173,10 +248,10 @@ const MORPH_HANDOFF_TIMEOUT_MS = 900;
  * POI labels only above a zoom threshold, and the old value sat just under it —
  * so a place sent to the camera arrived centred but unnamed.
  */
-const PLACE_FOCUS_LATITUDE_DELTA = 0.006;
-const PLACE_FOCUS_LONGITUDE_DELTA = 0.005;
+/** `CAPTURE_ZOOM_OUT` is 1 outside a capture run — see `quietCaptureStyle`. */
+const PLACE_FOCUS_LATITUDE_DELTA = 0.006 * CAPTURE_ZOOM_OUT;
+const PLACE_FOCUS_LONGITUDE_DELTA = 0.005 * CAPTURE_ZOOM_OUT;
 
-const PERSPECTIVE_PITCH = 38;
 const PERSPECTIVE_DURATION = 420;
 
 /**
@@ -269,6 +344,7 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
     [props.ref],
   );
   const regionRef = useRef<Region>(DEFAULT_MAP_REGION);
+  const collisionRegionRef = useRef<Region>(DEFAULT_MAP_REGION);
   const zoomingRef = useRef(false);
   const settlingZoomRef = useRef(false);
   const settleTargetRef = useRef(zoomProgressForDelta(DEFAULT_MAP_REGION.latitudeDelta));
@@ -292,8 +368,8 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
   const [cameraBusy, setCameraBusy] = useState(false);
   const cameraSettleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pitchRestoreTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cameraCommandRevisionRef = useRef(0);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
-  const [auraProjectionKey, setAuraProjectionKey] = useState(0);
   const reducedMotion = useReducedMotion();
   // Camera projection and marker shape deliberately use separate shared values.
   // That lets the marker finish its morph after release without forcing the
@@ -322,8 +398,219 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
     if (mapMoving || mapZooming) return;
     setAppliedMapStyle(mapStyle);
   }, [mapStyle, mapMoving, mapZooming]);
+  /**
+   * Capture runs quieten the ground (see `quietCaptureStyle`). APPENDED, never
+   * merged: the solar palettes blend by array index and must stay untouched.
+   */
+  const shownMapStyle = useMemo(
+    () => (QUIET_MAP_CAPTURE ? [...appliedMapStyle, ...QUIET_CAPTURE_STYLE] : appliedMapStyle),
+    [appliedMapStyle],
+  );
   const focusActivityId = props.journeyFocus?.activityId;
-  const { uris, imageUriFor, renderCaptureLayer } = useMarkerImages();
+
+  /** The captured image belongs to one of three settled geometry stages. */
+  const morphStage = Math.round(settledMorphProgressRef.current * 2) / 2;
+
+  const renderableMarkers = [
+    ...mapMarkers,
+    ...(focusActivityId ? [] : (props.planningMarkers ?? [])),
+  ].filter(
+    (marker) =>
+      marker.mode !== 'open' &&
+      (!marker.maxParticipants ||
+        (marker.participantCount ?? 0) < marker.maxParticipants ||
+        isJoined(marker.id)) &&
+      (!focusActivityId || marker.id === focusActivityId),
+  );
+  const collisionCandidates: MarkerCollisionCandidate[] = renderableMarkers.map((marker) => {
+    const joined = isJoined(marker.id);
+    const display = participantDisplay(
+      marker.avatars,
+      marker.participantCount,
+      {
+        userId: marker.userId,
+        displayName: marker.displayName,
+        initials: marker.initials,
+        avatarUrl: marker.avatarUrl,
+      },
+      joined,
+      props.currentUser,
+    );
+    const faceCount = visibleMarkerFaceCount(display.avatars, display.count);
+    const title = marker.title ?? marker.displayName;
+    const titlePriority = joined;
+    const journeyCount = props.journeyUnderwayCounts?.[marker.id] ?? 0;
+    return {
+      marker,
+      // What this marker ACTUALLY covers. It used to be floored at the width of
+      // a fully-labelled stack pin, which is 31 px wider at street zoom — so
+      // two pins stayed merged until there was 31 px more room between them
+      // than either needed. The stack's own width is accounted for by
+      // `stackCollisionBox` below, on the groups that really become one.
+      width: activityMarkerCardWidth(
+        faceCount,
+        display.count <= 1,
+        morphStage,
+        titlePriority,
+        title,
+        journeyCount,
+      ),
+      height: MARKER_COLLISION_HEIGHT,
+      anchor: MARKER_COLLISION_ANCHOR,
+    };
+  });
+  const collisionProjectionKey = collisionCandidates
+    .map(
+      ({ marker, width, height, anchor }) =>
+        `${marker.id}:${marker.coordinate.latitude}:${marker.coordinate.longitude}:${width}:${height}:${anchor?.x ?? 0.5}:${anchor?.y ?? 0.5}`,
+    )
+    .join('|');
+  const [projectedMarkerPoints, setProjectedMarkerPoints] = useState<
+    Record<string, ProjectedMarkerPoint>
+  >({});
+
+  /**
+   * The box a merged group occupies, mirroring exactly what
+   * `ActivityStackMarker` renders: one overflow face, solo shell, the count as
+   * its title. Kept in step with that component — a stack measured smaller than
+   * it draws would overlap its neighbours.
+   */
+  const stackCollisionBox = (members: MarkerCollisionCandidate[]): MarkerCollisionBox => ({
+    width: activityMarkerCardWidth(1, true, morphStage, false, `${members.length} Activities`),
+    height: MARKER_COLLISION_HEIGHT,
+    anchor: MARKER_COLLISION_ANCHOR,
+  });
+
+  const independentCollisionIds = props.selectedActivityId
+    ? new Set([props.selectedActivityId])
+    : new Set<string>();
+  const markerCollisionGroups = groupMarkersByProjectedCollision(
+    collisionCandidates,
+    projectedMarkerPoints,
+    independentCollisionIds,
+    stackCollisionBox,
+  );
+  const collisionCandidatesRef = useRef(collisionCandidates);
+  const collisionProjectionKeyRef = useRef(collisionProjectionKey);
+  const independentCollisionIdsRef = useRef(independentCollisionIds);
+  const stackCollisionBoxRef = useRef(stackCollisionBox);
+  const collisionGroupSignatureRef = useRef(collisionGroupSignature(markerCollisionGroups));
+  const collisionProjectionFrameRef = useRef<number | null>(null);
+  const collisionProjectionInFlightRef = useRef(false);
+  const collisionProjectionPendingRef = useRef(false);
+  const collisionProjectionActiveRef = useRef(true);
+  const mapReadyRef = useRef(mapReady);
+
+  collisionCandidatesRef.current = collisionCandidates;
+  collisionProjectionKeyRef.current = collisionProjectionKey;
+  independentCollisionIdsRef.current = independentCollisionIds;
+  stackCollisionBoxRef.current = stackCollisionBox;
+  collisionGroupSignatureRef.current = collisionGroupSignature(markerCollisionGroups);
+  mapReadyRef.current = mapReady;
+
+  const requestCollisionProjection = useCallback(() => {
+    collisionProjectionPendingRef.current = true;
+    if (collisionProjectionFrameRef.current != null || collisionProjectionInFlightRef.current) {
+      return;
+    }
+
+    const projectLatest = () => {
+      collisionProjectionFrameRef.current = null;
+      if (!collisionProjectionActiveRef.current || !mapReadyRef.current) return;
+
+      collisionProjectionPendingRef.current = false;
+      const allCandidates = collisionCandidatesRef.current;
+      const projectionKey = collisionProjectionKeyRef.current;
+      const map = mapRef.current;
+
+      if (!map || allCandidates.length === 0) {
+        collisionGroupSignatureRef.current = '';
+        setProjectedMarkerPoints((current) => (Object.keys(current).length === 0 ? current : {}));
+        return;
+      }
+
+      const liveRegion = collisionRegionRef.current;
+      const candidates = allCandidates.filter(
+        ({ marker }) =>
+          Math.abs(marker.coordinate.latitude - liveRegion.latitude) <=
+            liveRegion.latitudeDelta * COLLISION_VIEWPORT_RADIUS &&
+          Math.abs(marker.coordinate.longitude - liveRegion.longitude) <=
+            liveRegion.longitudeDelta * COLLISION_VIEWPORT_RADIUS,
+      );
+
+      collisionProjectionInFlightRef.current = true;
+      void Promise.all(
+        candidates.map(async ({ marker }) => {
+          try {
+            const point = await map.pointForCoordinate(marker.coordinate);
+            return point && Number.isFinite(point.x) && Number.isFinite(point.y)
+              ? ([marker.id, point] as const)
+              : null;
+          } catch {
+            return null;
+          }
+        }),
+      )
+        .then((entries) => {
+          if (
+            !collisionProjectionActiveRef.current ||
+            projectionKey !== collisionProjectionKeyRef.current ||
+            entries.some((entry) => entry == null)
+          ) {
+            return;
+          }
+
+          const points = Object.fromEntries(
+            entries as Array<readonly [string, ProjectedMarkerPoint]>,
+          );
+          const groups = groupMarkersByProjectedCollision(
+            allCandidates,
+            points,
+            independentCollisionIdsRef.current,
+            stackCollisionBoxRef.current,
+          );
+          const signature = collisionGroupSignature(groups);
+          if (signature === collisionGroupSignatureRef.current) return;
+
+          collisionGroupSignatureRef.current = signature;
+          setProjectedMarkerPoints(points);
+        })
+        .finally(() => {
+          collisionProjectionInFlightRef.current = false;
+          if (
+            collisionProjectionActiveRef.current &&
+            collisionProjectionPendingRef.current &&
+            collisionProjectionFrameRef.current == null
+          ) {
+            collisionProjectionFrameRef.current = requestAnimationFrame(projectLatest);
+          }
+        });
+    };
+
+    collisionProjectionFrameRef.current = requestAnimationFrame(projectLatest);
+  }, []);
+
+  useEffect(() => {
+    collisionProjectionActiveRef.current = true;
+    return () => {
+      collisionProjectionActiveRef.current = false;
+      if (collisionProjectionFrameRef.current != null) {
+        cancelAnimationFrame(collisionProjectionFrameRef.current);
+        collisionProjectionFrameRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    requestCollisionProjection();
+  }, [
+    collisionProjectionKey,
+    mapReady,
+    props.selectedActivityId,
+    requestCollisionProjection,
+    viewport.height,
+    viewport.width,
+  ]);
 
   const updateMorphCamera = (region: Region) => {
     morphFrame.value = {
@@ -336,6 +623,7 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
 
   const finishRegionChange = (region: Region, progress: number, completedZoom: boolean) => {
     regionRef.current = region;
+    collisionRegionRef.current = region;
     updateMorphCamera(region);
     if (completedZoom) {
       settlingZoomRef.current = false;
@@ -353,7 +641,6 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
     });
     movingRef.current = false;
     setMapMoving(false);
-    setAuraProjectionKey((current) => current + 1);
   };
 
   const finishMarkerSettle = (target: number) => {
@@ -380,10 +667,14 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
   // Safety split deck. Read at focus time, so the camera compensates for what is
   // actually on screen at that moment.
   const coveredHeight = Math.max(props.bottomOverlayHeight ?? 0, props.bottomSheetHeight ?? 0);
-  const coveredRef = useRef(coveredHeight);
-  coveredRef.current = coveredHeight;
-  const viewportRef = useRef(viewport.height);
-  viewportRef.current = viewport.height;
+  const focusFrame: FocusFrame = {
+    topCoveredHeight: props.topOverlayHeight ?? 0,
+    bottomCoveredHeight: coveredHeight,
+  };
+  const focusFrameRef = useRef(focusFrame);
+  focusFrameRef.current = focusFrame;
+  const viewportRef = useRef(viewport);
+  viewportRef.current = viewport;
 
   // The permanent tilted camera is kept in a ref because callbacks run after
   // programmatic viewport changes.
@@ -403,7 +694,6 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
     cameraSettleTimer.current = setTimeout(() => {
       cameraSettleTimer.current = null;
       setCameraBusy(false);
-      setAuraProjectionKey((current) => current + 1);
     }, duration + 90);
   };
 
@@ -422,8 +712,9 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
     if (pitchRestoreTimer.current) clearTimeout(pitchRestoreTimer.current);
     pitchRestoreTimer.current = setTimeout(() => {
       pitchRestoreTimer.current = null;
+      cameraCommandRevisionRef.current += 1;
       mapRef.current?.animateCamera(
-        { pitch: PERSPECTIVE_PITCH, heading: userHeadingRef.current },
+        { pitch: MAP_PERSPECTIVE_PITCH, heading: userHeadingRef.current },
         { duration: 220 },
       );
       markCameraBusy(220);
@@ -435,27 +726,111 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
     latitudeDelta: number,
     longitudeDelta: number,
     duration: number,
+    keepZoom = false,
+    frame = focusFrameRef.current,
   ) => {
-    const zoom = zoomForLongitudeDelta(longitudeDelta, viewport.width);
-    mapRef.current?.animateCamera(
-      {
-        center: {
-          latitude:
-            coordinate.latitude -
-            latitudeDelta * focusCenterOffset(coveredRef.current, viewportRef.current),
-          longitude: coordinate.longitude,
+    const map = mapRef.current;
+    if (!map) return;
+    const revision = ++cameraCommandRevisionRef.current;
+    const cameraDuration = reducedMotion ? 0 : duration;
+    const animate = (
+      zoom?: number,
+      heading = userHeadingRef.current,
+      projectedCenter?: MapCoordinate,
+    ) => {
+      if (revision !== cameraCommandRevisionRef.current || mapRef.current !== map) return;
+      map.animateCamera(
+        {
+          center:
+            projectedCenter ??
+            focusCenterInVisibleMap(
+              coordinate,
+              latitudeDelta,
+              longitudeDelta,
+              frame,
+              viewportRef.current.height,
+              heading,
+            ),
+          heading,
+          pitch: MAP_PERSPECTIVE_PITCH,
+          ...(zoom == null ? {} : { zoom }),
         },
-        heading: userHeadingRef.current,
-        pitch: PERSPECTIVE_PITCH,
-        ...(zoom == null ? {} : { zoom }),
+        { duration: cameraDuration },
+      );
+      markCameraBusy(cameraDuration);
+    };
+
+    if (!keepZoom) {
+      animate(zoomForLongitudeDelta(longitudeDelta, viewport.width));
+      return revision;
+    }
+
+    // A partial camera update may be interpreted differently by each provider.
+    // Reusing the native camera value makes "keep zoom" exact.
+    void map.getCamera().then(
+      (camera) => {
+        if (revision !== cameraCommandRevisionRef.current || mapRef.current !== map) return;
+
+        /*
+         * A growing sheet may request a corrected frame while the previous
+         * camera animation is still travelling. `getCamera()` and
+         * `coordinateForPoint()` must describe the SAME native frame; sampling
+         * both concurrently mixed two positions and made repeated opens walk
+         * the marker farther down the screen. Freeze the sampled camera before
+         * asking the native projection, then launch the one visible movement.
+         */
+        map.animateCamera(camera, { duration: 0 });
+        requestAnimationFrame(() => {
+          if (revision !== cameraCommandRevisionRef.current || mapRef.current !== map) return;
+          void map
+            .coordinateForPoint({
+              x: viewportRef.current.width / 2,
+              y: focusTargetY(frame, viewportRef.current.height),
+            })
+            .then(
+              (coordinateAtTargetPoint) =>
+                animate(
+                  Number.isFinite(camera.zoom) ? camera.zoom : undefined,
+                  Number.isFinite(camera.heading) ? (camera.heading ?? 0) : userHeadingRef.current,
+                  focusCameraCenterFromProjection(
+                    camera.center,
+                    coordinate,
+                    coordinateAtTargetPoint,
+                  ),
+                ),
+              () =>
+                animate(
+                  Number.isFinite(camera.zoom) ? camera.zoom : undefined,
+                  Number.isFinite(camera.heading) ? (camera.heading ?? 0) : userHeadingRef.current,
+                ),
+            );
+        });
       },
-      { duration },
+      () => animate(),
     );
-    markCameraBusy(duration);
+    return revision;
+  };
+
+  const cancelCameraCommand = (revision: number | undefined) => {
+    if (revision == null || revision !== cameraCommandRevisionRef.current) return;
+    const map = mapRef.current;
+    const cancellationRevision = ++cameraCommandRevisionRef.current;
+    if (!map) return;
+
+    void map.getCamera().then((camera) => {
+      if (cancellationRevision !== cameraCommandRevisionRef.current || mapRef.current !== map) {
+        return;
+      }
+      map.animateCamera(camera, { duration: 0 });
+      if (cameraSettleTimer.current) clearTimeout(cameraSettleTimer.current);
+      cameraSettleTimer.current = null;
+      setCameraBusy(false);
+    });
   };
 
   useEffect(
     () => () => {
+      cameraCommandRevisionRef.current += 1;
       if (cameraSettleTimer.current) clearTimeout(cameraSettleTimer.current);
       if (pitchRestoreTimer.current) clearTimeout(pitchRestoreTimer.current);
     },
@@ -466,8 +841,9 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
     if (!mapReady) return;
     // Establish the permanent tilt without resetting a heading the user may
     // already have chosen while the map was becoming ready.
+    cameraCommandRevisionRef.current += 1;
     mapRef.current?.animateCamera(
-      { pitch: PERSPECTIVE_PITCH, heading: userHeadingRef.current },
+      { pitch: MAP_PERSPECTIVE_PITCH, heading: userHeadingRef.current },
       { duration: PERSPECTIVE_DURATION },
     );
     markCameraBusy(PERSPECTIVE_DURATION);
@@ -490,12 +866,10 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
       props.focusKeepZoom ? region.latitudeDelta : PLACE_FOCUS_LATITUDE_DELTA,
       props.focusKeepZoom ? region.longitudeDelta : PLACE_FOCUS_LONGITUDE_DELTA,
       focusDuration,
+      props.focusKeepZoom,
     );
     const focused = props.focusCoordinate;
-    const completionTimer = setTimeout(
-      () => props.onFocusComplete?.(focused),
-      focusDuration + 90,
-    );
+    const completionTimer = setTimeout(() => props.onFocusComplete?.(focused), focusDuration + 90);
     return () => clearTimeout(completionTimer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapReady, props.focusCoordinate, viewport.width]);
@@ -509,14 +883,23 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
     // that is by definition looking at it. Taking it literally pulled the
     // camera back OUT from under a user who had zoomed in on purpose — the
     // same complaint the publish path had. No request → keep the zoom exactly.
-    focusCamera(
+    const revision = focusCamera(
       props.selectionFocus.coordinate,
       Math.min(props.selectionFocus.latitudeDelta ?? Infinity, region.latitudeDelta),
       Math.min(props.selectionFocus.longitudeDelta ?? Infinity, region.longitudeDelta),
-      300,
+      props.selectionFocus.duration ?? 340,
+      props.selectionFocus.latitudeDelta == null && props.selectionFocus.longitudeDelta == null,
+      {
+        topCoveredHeight:
+          props.selectionFocus.topCoveredHeight ?? focusFrameRef.current.topCoveredHeight,
+        bottomCoveredHeight:
+          props.selectionFocus.coveredHeight ?? focusFrameRef.current.bottomCoveredHeight,
+        targetInsets: props.selectionFocus.targetInsets,
+      },
     );
+    return () => cancelCameraCommand(revision);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mapReady, props.bottomSheetHeight, props.selectionFocus, viewport.width]);
+  }, [mapReady, props.selectionFocus, viewport.width]);
 
   useEffect(() => {
     const coordinates = props.fitRequest?.coordinates ?? [];
@@ -535,6 +918,7 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
       focusCamera(coordinates[0], PLACE_FOCUS_LATITUDE_DELTA, PLACE_FOCUS_LONGITUDE_DELTA, 320);
       return;
     }
+    cameraCommandRevisionRef.current += 1;
     mapRef.current?.fitToCoordinates(coordinates, {
       animated: true,
       edgePadding: {
@@ -553,11 +937,10 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
   // renders `<Marker image>` from the captured PNG (see markerCapture.tsx for
   // why — react-native-maps clips custom marker Views on Android/Fabric).
   const descriptors: MarkerDescriptor[] = [];
-  const auraTargets: LiveAuraTarget[] = [];
 
   // Countdown ring: `countdownBucket` (utils/countdown.ts) quantizes the
   // remaining share of a running `now` activity to 8 steps, so the cached
-  // marker image only re-captures on a step change (the provider's 30s mode
+  // marker image only re-captures on a step change (the provider's minute mode
   // tick re-renders this component and advances the step).
   // hideActivities = Heimweg-Fokus: the map shows ONLY the shared walks.
   if (!props.pickingLocation && !props.hideActivities) {
@@ -586,22 +969,29 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
         const bucket = countdownBucket(cluster.mode, cluster.startsAt, cluster.endsAt);
         descriptors.push({
           id: cluster.id,
-          captureKey: `${ACTIVITY_MARKER_VISUAL_VERSION}:cluster:${display.count}:${cluster.mode}:${cluster.maxParticipants ?? 0}:${cluster.category ?? ''}:${bucket ?? ''}:${avatarKey}:${props.journeyUnderwayCounts?.[cluster.id] ?? 0}:${selected}:${cluster.label ?? ''}`,
+          captureKey: `${ACTIVITY_MARKER_VISUAL_VERSION}:z${morphStage}:cluster:${joined ? getUnreadCount(cluster.id) : 0}:${display.count}:${cluster.mode}:${cluster.maxParticipants ?? 0}:${cluster.category ?? ''}:${bucket ?? ''}:${avatarKey}:${props.journeyUnderwayCounts?.[cluster.id] ?? 0}:${selected}:${cluster.label ?? ''}`,
           coordinate:
             focusActivityId === cluster.id && props.journeyTargetCoordinate
               ? props.journeyTargetCoordinate
               : cluster.coordinate,
+          rasterSize: {
+            width: ACTIVITY_MARKER_CAPTURE_WIDTH,
+            height: ACTIVITY_MARKER_CAPTURE_HEIGHT,
+          },
           anchor: ACTIVITY_MARKER_ANCHOR,
           morphable: true,
           onPress: () => props.onClusterPress?.(cluster),
+          accessibilityLabel: `${cluster.label}, ${display.count} dabei`,
+          zIndex: selected ? Z_SELECTED : Z_ACTIVITY,
           node: (
             <ClusterMarker
+              unreadCount={joined ? getUnreadCount(cluster.id) : 0}
               avatars={display.avatars}
               count={display.count}
               label={cluster.label}
               mode={cluster.mode}
               progress={zoomProgress}
-              titlePriority={selected || joined}
+              titlePriority={joined}
               maxParticipants={cluster.maxParticipants}
               category={cluster.category}
               remainingFraction={bucket}
@@ -610,159 +1000,119 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
             />
           ),
         });
-        if (
-          cluster.mode === 'now' ||
-          selected ||
-          (props.journeyUnderwayCounts?.[cluster.id] ?? 0) > 0
-        ) {
-          auraTargets.push({
-            id: cluster.id,
-            coordinate:
-              focusActivityId === cluster.id && props.journeyTargetCoordinate
-                ? props.journeyTargetCoordinate
-                : cluster.coordinate,
-            color: markerModeStyles[cluster.mode].color,
-            offsetY: ACTIVITY_MARKER_AURA_OFFSET_Y,
-            // The pulse is the marker's own squircle, so it needs the marker's
-            // settled width. The aura only renders while the map is still, so
-            // the settled morph progress is the right (and only) sample.
-            width: activityMarkerShellWidth(
-              Math.max(1, Math.min(4, display.count)),
-              display.count <= 1,
-              settledMorphProgressRef.current,
-            ),
-            selected,
-          });
-        }
       });
 
-    // Presence rides in the same descriptor pass as activities so the two share
-    // one z-order and one capture cache — but it is appended, never merged into
-    // the activity feed, and it drops out entirely under a Heimweg/journey focus
-    // just like the activities do.
-    [
-      ...mapMarkers,
-      ...(focusActivityId ? [] : (props.openPresenceMarkers ?? [])),
-      ...(focusActivityId ? [] : (props.planningMarkers ?? [])),
-    ]
-      .filter(
-        (marker) =>
-          (!marker.maxParticipants ||
-            (marker.participantCount ?? 0) < marker.maxParticipants ||
-            isJoined(marker.id)) &&
-          (!focusActivityId || marker.id === focusActivityId),
-      )
-      .forEach((marker) => {
-        const selectedMarker = props.selectedActivityId === marker.id;
-
-        /**
-         * Open presence — a friend who is available AND chose to share their
-         * location. Not an activity: it gets a plain round avatar, sits on the
-         * lowest layer so it can never cover a real plan, and is deliberately
-         * NOT `morphable` — the zoom morph is the activity marker's language,
-         * and a status has nothing to morph between.
-         *
-         * The captureKey holds appearance only. Coordinate, distance, expiry and
-         * zoom stay out of it on purpose: a friend walking around, or their
-         * window ticking down, must never re-capture the PNG.
-         */
-        if (marker.mode === 'open' && marker.friendId) {
-          descriptors.push({
-            id: marker.id,
-            captureKey: `open-presence-v1:${marker.avatarUrl ?? marker.initials}:${selectedMarker}`,
-            coordinate: marker.coordinate,
-            anchor: { x: 0.5, y: 0.5 },
-            morphable: false,
-            zIndex: selectedMarker ? Z_SELECTED : Z_OPEN_PRESENCE,
-            onPress: () => props.onMarkerPress?.(marker),
-            node: (
-              <OpenPresenceMarker
-                avatarUrl={marker.avatarUrl}
-                initials={marker.initials}
-                selected={selectedMarker}
-              />
-            ),
-          });
-          return;
-        }
-
-        const joined = isJoined(marker.id);
-        const selected = selectedMarker;
-        const unreadCount = joined ? getUnreadCount(marker.id) : 0;
-        // The ring is a clock. A round with no fixed time has no clock, so it
-        // never gets one — not even the plain mode ring.
-        const bucket = marker.planning
-          ? undefined
-          : countdownBucket(marker.mode, marker.startsAt, marker.endsAt);
-        const display = participantDisplay(
-          marker.avatars,
-          marker.participantCount,
-          {
-            userId: marker.userId,
-            displayName: marker.displayName,
-            initials: marker.initials,
-            avatarUrl: marker.avatarUrl,
-          },
-          joined,
-          props.currentUser,
-        );
-        const avatarKey = display.avatars
-          .slice(0, 4)
-          .map((avatar) => `${avatar.userId}:${avatar.avatarUrl ?? avatar.initials}`)
-          .join(',');
+    markerCollisionGroups.forEach((group) => {
+      const groupedMarkers = group
+        .map(({ marker }) => marker)
+        .sort((left, right) => {
+          const leftRank = left.planning ? 2 : left.mode === 'now' ? 0 : 1;
+          const rightRank = right.planning ? 2 : right.mode === 'now' ? 0 : 1;
+          return (
+            leftRank - rightRank ||
+            Date.parse(left.startsAt ?? '') - Date.parse(right.startsAt ?? '') ||
+            (left.title ?? left.displayName).localeCompare(right.title ?? right.displayName)
+          );
+        });
+      if (groupedMarkers.length > 1) {
+        const id = activityStackId(groupedMarkers);
+        const coordinate = activityStackCoordinate(groupedMarkers);
+        const selected = props.selectedActivityId === id;
+        const mode: MapMarker['mode'] = groupedMarkers.some((marker) => marker.mode === 'now')
+          ? 'now'
+          : 'soon';
         descriptors.push({
-          id: marker.id,
-          captureKey: `${ACTIVITY_MARKER_VISUAL_VERSION}:avatar:${marker.mode}:${marker.avatarUrl ?? marker.initials}:${marker.displayName}:${avatarKey}:${joined}:${unreadCount}:${display.count}:${marker.maxParticipants ?? 0}:${marker.category ?? ''}:${bucket ?? ''}:${marker.planning ? 'plan' : ''}:${props.journeyUnderwayCounts?.[marker.id] ?? 0}:${selected}:${marker.title ?? ''}:${marker.friendId ?? ''}`,
-          coordinate:
-            focusActivityId === marker.id && props.journeyTargetCoordinate
-              ? props.journeyTargetCoordinate
-              : marker.coordinate,
+          id,
+          // Stack membership changes continuously at a collision boundary, but
+          // its bitmap only depends on these visual values. Sharing the capture
+          // keeps a newly formed stack from waiting on an identical fresh PNG.
+          captureKey: `${ACTIVITY_MARKER_VISUAL_VERSION}:z${morphStage}:activity-stack:${groupedMarkers.length}:${mode}:${selected}`,
+          coordinate,
+          rasterSize: {
+            width: ACTIVITY_MARKER_CAPTURE_WIDTH,
+            height: ACTIVITY_MARKER_CAPTURE_HEIGHT,
+          },
           anchor: ACTIVITY_MARKER_ANCHOR,
           morphable: true,
-          onPress: () => props.onMarkerPress?.(marker),
+          accessibilityLabel: `${groupedMarkers.length} Activities an dieser Stelle`,
+          onPress: () => props.onActivityStackPress?.(groupedMarkers, coordinate, id),
+          zIndex: selected ? Z_SELECTED : Z_ACTIVITY,
           node: (
-            <AvatarMarker
-              avatarUrl={marker.avatarUrl}
-              displayName={marker.displayName}
-              initials={marker.initials}
-              avatars={display.avatars}
-              label={marker.friendId ? marker.displayName : (marker.title ?? marker.displayName)}
+            <ActivityStackMarker
+              count={groupedMarkers.length}
+              mode={mode}
               progress={zoomProgress}
-              titlePriority={selected || joined}
-              mode={marker.mode}
-              planning={marker.planning}
-              unreadCount={unreadCount}
-              participantCount={display.count}
-              maxParticipants={marker.maxParticipants}
-              category={marker.category}
-              remainingFraction={bucket}
-              journeyUnderwayCount={props.journeyUnderwayCounts?.[marker.id] ?? 0}
               selected={selected}
             />
           ),
         });
-        if (
-          marker.mode === 'now' ||
-          selected ||
-          (props.journeyUnderwayCounts?.[marker.id] ?? 0) > 0
-        ) {
-          auraTargets.push({
-            id: marker.id,
-            coordinate:
-              focusActivityId === marker.id && props.journeyTargetCoordinate
-                ? props.journeyTargetCoordinate
-                : marker.coordinate,
-            color: markerModeStyles[marker.mode].color,
-            offsetY: ACTIVITY_MARKER_AURA_OFFSET_Y,
-            width: activityMarkerShellWidth(
-              Math.max(1, Math.min(4, display.count)),
-              display.count <= 1,
-              settledMorphProgressRef.current,
-            ),
-            selected,
-          });
-        }
+        return;
+      }
+
+      const marker = groupedMarkers[0];
+      if (!marker) return;
+      const joined = isJoined(marker.id);
+      const selected = props.selectedActivityId === marker.id;
+      const unreadCount = joined ? getUnreadCount(marker.id) : 0;
+      const bucket = marker.planning
+        ? undefined
+        : countdownBucket(marker.mode, marker.startsAt, marker.endsAt);
+      const display = participantDisplay(
+        marker.avatars,
+        marker.participantCount,
+        {
+          userId: marker.userId,
+          displayName: marker.displayName,
+          initials: marker.initials,
+          avatarUrl: marker.avatarUrl,
+        },
+        joined,
+        props.currentUser,
+      );
+      const avatarKey = display.avatars
+        .slice(0, 4)
+        .map((avatar) => `${avatar.userId}:${avatar.avatarUrl ?? avatar.initials}`)
+        .join(',');
+      descriptors.push({
+        id: marker.id,
+        captureKey: `${ACTIVITY_MARKER_VISUAL_VERSION}:z${morphStage}:avatar:${marker.mode}:${marker.avatarUrl ?? marker.initials}:${marker.displayName}:${avatarKey}:${joined}:${unreadCount}:${display.count}:${marker.maxParticipants ?? 0}:${marker.category ?? ''}:${bucket ?? ''}:${marker.planning ? 'plan' : ''}:${props.journeyUnderwayCounts?.[marker.id] ?? 0}:${selected}:${marker.title ?? ''}:${marker.friendId ?? ''}`,
+        coordinate:
+          focusActivityId === marker.id && props.journeyTargetCoordinate
+            ? props.journeyTargetCoordinate
+            : marker.coordinate,
+        rasterSize: {
+          width: ACTIVITY_MARKER_CAPTURE_WIDTH,
+          height: ACTIVITY_MARKER_CAPTURE_HEIGHT,
+        },
+        anchor: ACTIVITY_MARKER_ANCHOR,
+        morphable: true,
+        onPress: () => props.onMarkerPress?.(marker),
+        accessibilityLabel: `${marker.title ?? marker.displayName}, ${
+          marker.planning ? 'Terminfindung' : marker.mode === 'now' ? 'jetzt' : 'bald'
+        }, ${display.count} dabei`,
+        zIndex: selected ? Z_SELECTED : Z_ACTIVITY,
+        node: (
+          <AvatarMarker
+            avatarUrl={marker.avatarUrl}
+            displayName={marker.displayName}
+            initials={marker.initials}
+            avatars={display.avatars}
+            label={marker.title ?? marker.displayName}
+            progress={zoomProgress}
+            titlePriority={joined}
+            mode={marker.mode}
+            planning={marker.planning}
+            unreadCount={unreadCount}
+            participantCount={display.count}
+            maxParticipants={marker.maxParticipants}
+            category={marker.category}
+            remainingFraction={bucket}
+            journeyUnderwayCount={props.journeyUnderwayCounts?.[marker.id] ?? 0}
+            selected={selected}
+          />
+        ),
       });
+    });
   }
 
   if (!props.pickingLocation && !props.hideActivities && focusActivityId) {
@@ -779,7 +1129,9 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
           // `<Marker coordinate>` separately.
           captureKey: `journey:${participant.userId}:${participant.status}:${participant.avatarUrl ?? participant.initials}:${highlighted}`,
           coordinate: participant.coordinate!,
+          rasterSize: { width: 100, height: 100 },
           onPress: () => props.onJourneyParticipantPress?.(participant),
+          accessibilityLabel: `${participant.displayName}, auf dem Weg`,
           node: <JourneyAvatarMarker participant={participant} highlighted={highlighted} />,
         });
       });
@@ -794,6 +1146,8 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
         id: `heimweg-${marker.uid}`,
         captureKey: `heimweg:${marker.uid}:${marker.color}:${marker.initials}:${marker.displayName}:${marker.subLabel ?? ''}`,
         coordinate: marker.coordinate,
+        rasterSize: { width: 100, height: 100 },
+        accessibilityLabel: `${marker.displayName}, Heimweg${marker.subLabel ? `, ${marker.subLabel}` : ''}`,
         onPress: props.onHeimwegMarkerPress
           ? () => props.onHeimwegMarkerPress?.(marker.uid)
           : undefined,
@@ -816,9 +1170,10 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
     });
   }
 
-  const visibleAuraTargets = auraTargets
-    .sort((left, right) => Number(Boolean(right.selected)) - Number(Boolean(left.selected)))
-    .slice(0, 4);
+  const { uris, imageUriFor, renderCaptureLayer } = useMarkerImages(
+    descriptors.map((descriptor) => descriptor.id),
+  );
+
 
   const activeMorphIdSet = new Set(activeMorphIds);
   const morphDescriptors = descriptors.filter((descriptor) => activeMorphIdSet.has(descriptor.id));
@@ -985,16 +1340,20 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
         })),
       )}
       <MapView
+        // Android reads userInterfaceStyle only while creating the native map;
+        // its runtime setter is a no-op in react-native-maps. Remounting keeps
+        // the style switch reliable without moving the user to another place.
+        key={Platform.OS === 'android' ? `map-${colorScheme}` : 'map'}
         ref={mapRef}
         provider={MAP_PROVIDER}
         mapType="standard"
         // Ignored on the Apple fallback (PROVIDER_DEFAULT) — see MAP_PROVIDER above.
-        customMapStyle={appliedMapStyle}
+        customMapStyle={shownMapStyle}
         // Sets `overrideUserInterfaceStyle` on the native Google map view. With
         // an empty customMapStyle this is what renders Google's OWN dark map,
         // which no style JSON can reproduce.
         userInterfaceStyle={colorScheme}
-        initialRegion={DEFAULT_MAP_REGION}
+        initialRegion={regionRef.current}
         loadingEnabled
         mapPadding={{ top: 0, right: 0, bottom: props.bottomOverlayHeight ?? 0, left: 0 }}
         poiClickEnabled={!props.hideActivities}
@@ -1044,10 +1403,12 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
         zoomEnabled
         onMapReady={() => {
           setMapReady(true);
-          setAuraProjectionKey((current) => current + 1);
           props.onMapReady?.();
         }}
-        onPanDrag={props.onUserMapGesture}
+        onPanDrag={() => {
+          cameraCommandRevisionRef.current += 1;
+          props.onUserMapGesture?.();
+        }}
         onLongPress={(event: LongPressEvent) => {
           if (props.pickingLocation || props.hideActivities) return;
           props.onPlacePress?.(placeFromLongPress(event));
@@ -1057,6 +1418,8 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
           props.onPlacePress?.(placeFromPoi(event));
         }}
         onRegionChange={(region: Region) => {
+          collisionRegionRef.current = region;
+          requestCollisionProjection();
           // Compare to the last SETTLED viewport, not just the previous frame.
           // Otherwise a deliberately slow pinch can move less than the epsilon
           // per callback and never be recognized as zooming at all.
@@ -1157,6 +1520,8 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
           }
         }}
         onRegionChangeComplete={(region: Region, details?: { isGesture?: boolean }) => {
+          collisionRegionRef.current = region;
+          requestCollisionProjection();
           // Remember the heading only when the USER turned the map. A
           // programmatic animateToRegion levels the camera to north as a side
           // effect, so reading it back there would erase the very rotation the
@@ -1245,11 +1610,21 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
           return (
             <Marker
               key={descriptor.id}
+              accessible
+              accessibilityLabel={descriptor.accessibilityLabel}
+              accessibilityRole="button"
               anchor={descriptor.anchor ?? { x: 0.5, y: 0.5 }}
               coordinate={descriptor.coordinate}
-              image={{ uri }}
-              onPress={descriptor.onPress}
-              tracksViewChanges={false}
+              image={MARKER_IMAGE_AS_CHILD ? undefined : { uri }}
+              onPress={
+                descriptor.onPress
+                  ? (event) => {
+                      event.stopPropagation();
+                      descriptor.onPress?.();
+                    }
+                  : undefined
+              }
+              tracksViewChanges={MARKER_IMAGE_AS_CHILD}
               zIndex={descriptor.zIndex ?? Z_ACTIVITY}
               opacity={
                 props.launchMarkerId === descriptor.id ||
@@ -1259,7 +1634,17 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
                   ? 0
                   : 1
               }
-            />
+            >
+              {MARKER_IMAGE_AS_CHILD ? (
+                // react-native-maps#5980: Fabric flattens a wrapper view that
+                // carries no drawing of its own, so the marker measures the
+                // inner node instead and renders nothing. collapsable={false}
+                // keeps the wrapper alive and is the documented fix.
+                <View collapsable={false} style={descriptor.rasterSize}>
+                  <Image source={{ uri }} style={descriptor.rasterSize} />
+                </View>
+              ) : null}
+            </Marker>
           );
         })}
       </MapView>
@@ -1270,16 +1655,6 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
         targets={morphDescriptors}
         visible={morphOverlayVisible}
         width={viewport.width}
-      />
-      <MapLiveAuraOverlay
-        mapReady={mapReady}
-        mapRef={mapRef}
-        // A travelling perspective camera counts as movement: the aura is
-        // projected through `pointForCoordinate`, so sampling it mid-flight
-        // would place the glow away from its marker. Hidden beats misplaced.
-        moving={mapMoving || cameraBusy}
-        projectionKey={auraProjectionKey}
-        targets={visibleAuraTargets}
       />
       <MarkerLaunchOverlay
         request={launchRequest}
@@ -1296,3 +1671,4 @@ export function MapCanvas(props: PreviewMapCanvasProps) {
     </View>
   );
 }
+

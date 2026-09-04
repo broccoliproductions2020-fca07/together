@@ -1,9 +1,10 @@
-import DateTimePicker from '@react-native-community/datetimepicker';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useState } from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, Text, View, useColorScheme } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { FONT, TEXT_CAPPED, TYPE } from '@/shared/theme';
+
+import { DayStripDatePicker } from './DayStripDatePicker';
 
 /** How far ahead the one-tap chips reach. Anything beyond goes through the
  * calendar button — the strip is a shortcut, never a ceiling. */
@@ -64,7 +65,6 @@ const CHIP_IDLE_FILL = 'rgba(255,255,255,0.04)';
 const CHIP_IDLE_TEXT = 'rgba(244,245,247,0.72)';
 
 export function DayStrip({ value, onChange }: DayStripProps) {
-  const scheme = useColorScheme() === 'dark' ? 'dark' : 'light';
   const [pickerOpen, setPickerOpen] = useState(false);
   const today = new Date();
   const days = Array.from({ length: QUICK_DAYS }, (_, index) => {
@@ -83,11 +83,11 @@ export function DayStrip({ value, onChange }: DayStripProps) {
   }
 
   return (
-    <View className="flex-row items-center gap-2">
+    <View style={styles.root}>
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ gap: 6, paddingRight: 4 }}
+        contentContainerStyle={styles.days}
       >
         {days.map((day) => {
           const active = sameDay(day, value);
@@ -103,11 +103,14 @@ export function DayStrip({ value, onChange }: DayStripProps) {
                 month: 'long',
               })}
               onPress={() => applyDate(day)}
-              className="min-w-11 items-center justify-center rounded-2xl border px-3 py-1.5 active:opacity-80"
-              style={{
-                borderColor: active ? CHIP_SELECTED_BORDER : CHIP_IDLE_BORDER,
-                backgroundColor: active ? CHIP_SELECTED_FILL : CHIP_IDLE_FILL,
-              }}
+              style={({ pressed }) => [
+                styles.chip,
+                {
+                  borderColor: active ? CHIP_SELECTED_BORDER : CHIP_IDLE_BORDER,
+                  backgroundColor: active ? CHIP_SELECTED_FILL : CHIP_IDLE_FILL,
+                },
+                pressed && styles.pressed,
+              ]}
             >
               <Text
                 style={[styles.chipTop, { color: active ? CHIP_SELECTED_TEXT : CHIP_IDLE_TEXT }]}
@@ -129,11 +132,14 @@ export function DayStrip({ value, onChange }: DayStripProps) {
         accessibilityRole="button"
         accessibilityLabel="Anderes Datum wählen"
         onPress={() => setPickerOpen(true)}
-        className="h-10 w-10 items-center justify-center rounded-2xl border active:opacity-80"
-        style={{
-          borderColor: beyondStrip ? CHIP_SELECTED_BORDER : CHIP_IDLE_BORDER,
-          backgroundColor: beyondStrip ? CHIP_SELECTED_FILL : CHIP_IDLE_FILL,
-        }}
+        style={({ pressed }) => [
+          styles.calendar,
+          {
+            borderColor: beyondStrip ? CHIP_SELECTED_BORDER : CHIP_IDLE_BORDER,
+            backgroundColor: beyondStrip ? CHIP_SELECTED_FILL : CHIP_IDLE_FILL,
+          },
+          pressed && styles.pressed,
+        ]}
       >
         <Ionicons
           name="calendar-outline"
@@ -143,15 +149,12 @@ export function DayStrip({ value, onChange }: DayStripProps) {
       </Pressable>
 
       {pickerOpen ? (
-        <DateTimePicker
+        <DayStripDatePicker
           value={value}
-          mode="date"
-          display={Platform.OS === 'ios' ? 'inline' : 'default'}
           minimumDate={startOfDay(today)}
-          themeVariant={scheme}
-          onChange={(event, date) => {
+          onChange={(date) => {
             setPickerOpen(false);
-            if (event.type === 'set' && date) applyDate(date);
+            if (date) applyDate(date);
           }}
         />
       ) : null}
@@ -164,10 +167,30 @@ export function DayStrip({ value, onChange }: DayStripProps) {
  * sheet that is Schibsted throughout. Weight comes from the family, never from
  * `fontWeight`. */
 const styles = StyleSheet.create({
+  calendar: {
+    alignItems: 'center',
+    borderRadius: 16,
+    borderWidth: 1,
+    height: 40,
+    justifyContent: 'center',
+    width: 40,
+  },
+  chip: {
+    alignItems: 'center',
+    borderRadius: 16,
+    borderWidth: 1,
+    justifyContent: 'center',
+    minWidth: 44,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
   chipBottom: {
     color: 'rgba(244,245,247,0.42)',
     fontFamily: FONT.medium,
     fontSize: TYPE.micro.fontSize,
   },
   chipTop: { fontFamily: FONT.bold, fontSize: TYPE.caption.fontSize },
+  days: { gap: 6, paddingRight: 4 },
+  pressed: { opacity: 0.8 },
+  root: { alignItems: 'center', flexDirection: 'row', gap: 8 },
 });

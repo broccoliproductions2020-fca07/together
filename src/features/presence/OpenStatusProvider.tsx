@@ -11,14 +11,22 @@ import {
   type ReactNode,
 } from 'react';
 
+import { useActivityEntities } from '@/features/activities';
 import { useAuth } from '@/features/auth';
 
+import {
+  constrainOpenExpiry,
+  OPEN_DURATION_MS,
+  OPEN_MAX_DURATION_MS,
+  OPEN_MIN_DURATION_MS,
+} from './openWindow';
 import { presenceService } from './services/presenceService';
 import type {
   CoarseLocation,
   OpenVibe,
   PresenceActor,
   PresenceDoc,
+  PresenceWriteResult,
 } from './services/presenceService.types';
 
 const STORAGE_KEY_PREFIX = 'together.open.status.v2.';
@@ -27,11 +35,6 @@ const LEGACY_STORAGE_KEY = 'together.open.status.v1';
 function storageKeyFor(accountUid: string) {
   return `${STORAGE_KEY_PREFIX}${accountUid}`;
 }
-
-/** How long "open" lasts before it auto-expires, so the pool never rots. */
-export const OPEN_DURATION_MS = 3 * 60 * 60 * 1000;
-/** A deliberate hard ceiling: an open status must stay trustworthy, never stale. */
-export const OPEN_MAX_DURATION_MS = 12 * 60 * 60 * 1000;
 
 /** Debounce for the Firestore write-through: the free-text vibe field fires a
  * status change on every keystroke, and each one is a full `setDoc` — without
@@ -56,9 +59,7 @@ interface PersistedStatus {
   isOpen: boolean;
   vibe: OpenVibe | null;
   expiresAt: number | null;
-  /** When this open window began. Local only — friends never need it; it exists
-   * so the map pill can draw how much of YOUR window is left, the same way an
-   * activity marker draws its countdown ring. */
+  /** Local start time used only for the owner's Core countdown ring. */
   openedAt: number | null;
   /** Whether friends may see your location (pin) while you're open, vs. list-only
    * (none). Privacy-first: resets to false each time you go open. */
@@ -91,11 +92,15 @@ export interface OpenStatusValue {
    * Become open. The explicit core tap may use the safe defaults (no vibe, +3 h,
    * no location); refinements use the same write path from the status card.
    */
-  goOpen: (input?: GoOpenInput) => void;
+  goOpen: (input?: GoOpenInput) => boolean;
   /** Optional refinement while open; pass null to clear the vibe. */
   setVibe: (vibe: OpenVibe | null) => void;
   /** Adjust when the open status ends (absolute epoch ms). */
   setExpiresAt: (ts: number) => void;
+  /** Confirmed next Activity that limits this Open window. */
+  openLimitAt: number | null;
+  /** Present when a running or imminent Activity leaves no useful Open window. */
+  openBlockedByActivity: { id: string; title: string; startsAt: number } | null;
   /** Whether friends may see your location on the map (pin) while you're open. */
   shareLocation: boolean;
   setShareLocation: (value: boolean) => void;
@@ -155,12 +160,13 @@ function presenceSyncErrorMessage(error: unknown, target: PersistedStatus): stri
 
 /**
  * Holds the current user's own "I'm open" presence AND the live list of friends
- * who are open (both through the presence service seam: mock offline by default,
- * Firestore when `EXPO_PUBLIC_BACKEND=firebase`). Open is a lightweight status,
- * not an event. Auto-expires; going private removes the shared location.
+ * who are open through the Firebase presence service seam. Open is a
+ * lightweight status, not an event. It auto-expires and going private removes
+ * the shared location.
  */
 export function OpenStatusProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
+  const { openPresenceConstraint } = useActivityEntities();
 
   const actor = useMemo<PresenceActor>(
     () => ({
@@ -208,9 +214,12 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
       .catch(() => {});
   }, []);
 
-  const queuePresenceWrite = useCallback((write: () => Promise<void> | void) => {
+  const queuePresenceWrite = useCallback((write: () => Promise<unknown> | unknown) => {
     const next = presenceWriteChainRef.current.catch(() => {}).then(write);
-    presenceWriteChainRef.current = next.catch(() => {});
+    presenceWriteChainRef.current = next.then(
+      () => undefined,
+      () => undefined,
+    );
     return next;
   }, []);
 
@@ -368,17 +377,33 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
       setSyncError(presenceSyncErrorMessage(error, target));
     };
 
-    const complete = () => {
-      confirmedStatusRef.current = target;
-      remotePresenceRef.current = target.isOpen;
-      if (!target.isOpen) hasIssuedOpenWriteRef.current = false;
+    const complete = (rawResult: unknown) => {
       if (revision !== statusRevisionRef.current) return;
+      const result = (rawResult ?? {}) as PresenceWriteResult;
+      const serverExpiry =
+        target.isOpen && Number.isFinite(result.expiresAt) ? (result.expiresAt ?? null) : null;
+      const confirmed =
+        target.isOpen && result.closed === true
+          ? CLOSED
+          : serverExpiry != null && target.expiresAt != null && serverExpiry < target.expiresAt
+            ? { ...target, expiresAt: serverExpiry }
+            : target;
+      confirmedStatusRef.current = confirmed;
+      remotePresenceRef.current = confirmed.isOpen;
+      if (!confirmed.isOpen) hasIssuedOpenWriteRef.current = false;
+      if (confirmed !== target) {
+        const confirmedRevision = ++statusRevisionRef.current;
+        suppressedWriteRevisionRef.current = confirmedRevision;
+        statusRef.current = confirmed;
+        setStatus(confirmed);
+        queueStorageWrite(actor.uid, confirmed);
+      }
       failedTargetRef.current = null;
       setSyncError(null);
       setSyncing(false);
     };
 
-    const submit = (write: () => Promise<void> | void) => {
+    const submit = (write: () => Promise<unknown> | unknown) => {
       setSyncing(true);
       void queuePresenceWrite(write).then(complete, fail);
     };
@@ -438,27 +463,74 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
     [persist],
   );
 
+  const openLimitAt = openPresenceConstraint?.isRunning
+    ? null
+    : (openPresenceConstraint?.startsAt ?? null);
+  const openBlockedByActivity = useMemo(() => {
+    if (
+      !openPresenceConstraint ||
+      (!openPresenceConstraint.isRunning &&
+        openPresenceConstraint.startsAt - Date.now() >= OPEN_MIN_DURATION_MS)
+    ) {
+      return null;
+    }
+    return {
+      id: openPresenceConstraint.id,
+      title: openPresenceConstraint.title,
+      startsAt: openPresenceConstraint.startsAt,
+    };
+  }, [openPresenceConstraint]);
+
+  // Activity changes can arrive from another device. They may shorten an Open
+  // promise, never extend or resurrect it when a plan moves or disappears.
+  useEffect(() => {
+    if (!status.isOpen || !openPresenceConstraint) return;
+    const now = Date.now();
+    if (openPresenceConstraint.isRunning || openPresenceConstraint.startsAt <= now) {
+      persist(CLOSED);
+      return;
+    }
+    if (status.expiresAt && status.expiresAt > openPresenceConstraint.startsAt) {
+      patch({ expiresAt: openPresenceConstraint.startsAt });
+    }
+  }, [openPresenceConstraint, patch, persist, status.expiresAt, status.isOpen]);
+
   const goOpen = useCallback(
     (input?: GoOpenInput) => {
       const now = Date.now();
+      const boundary = openPresenceConstraint?.startsAt ?? null;
+      if (
+        openPresenceConstraint?.isRunning ||
+        (boundary != null && boundary - now < OPEN_MIN_DURATION_MS)
+      ) {
+        return false;
+      }
       // The explicit core tap is a real server-bound action. Show that it is
       // pending before the first render, while keeping every exit control live.
       setSyncing(true);
       persist({
         isOpen: true,
         vibe: input?.vibe ?? null,
-        expiresAt: Math.min(input?.expiresAt ?? now + OPEN_DURATION_MS, now + OPEN_MAX_DURATION_MS),
+        expiresAt: constrainOpenExpiry(
+          input?.expiresAt ?? now + OPEN_DURATION_MS,
+          now,
+          boundary,
+        ),
         openedAt: now,
         shareLocation: input?.shareLocation ?? false,
       });
+      return true;
     },
-    [persist],
+    [openPresenceConstraint, persist],
   );
 
   const setVibe = useCallback((vibe: OpenVibe | null) => patch({ vibe }), [patch]);
   const setExpiresAt = useCallback(
-    (ts: number) => patch({ expiresAt: Math.min(ts, Date.now() + OPEN_MAX_DURATION_MS) }),
-    [patch],
+    (ts: number) => {
+      const now = Date.now();
+      patch({ expiresAt: constrainOpenExpiry(ts, now, openLimitAt) });
+    },
+    [openLimitAt, patch],
   );
   const setShareLocation = useCallback(
     (value: boolean) => patch({ shareLocation: value }),
@@ -482,6 +554,8 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
       goOpen,
       setVibe,
       setExpiresAt,
+      openLimitAt,
+      openBlockedByActivity,
       shareLocation: status.shareLocation,
       setShareLocation,
       shareLocationBlocked,
@@ -497,6 +571,8 @@ export function OpenStatusProvider({ children }: { children: ReactNode }) {
       goOpen,
       setVibe,
       setExpiresAt,
+      openLimitAt,
+      openBlockedByActivity,
       setShareLocation,
       shareLocationBlocked,
       syncing,

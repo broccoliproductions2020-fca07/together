@@ -4,27 +4,28 @@ import { clockLabel } from './matchingSummary';
 /**
  * The one line the compact row carries, and the only place its wording lives.
  *
- * It answers a different question than the timeline below it. Here "3 von 5"
- * counts PEOPLE — how much of the round has answered — while the `x/y` inside
- * the matching card counts availability WITHIN those who already did. Mixing
- * the two would make a round look answered because the few who replied happen
- * to agree, so the two numbers are deliberately derived from different things
- * and never share a formatter.
+ * It leads with the ANSWER — day, time, and how many of the answers cover it —
+ * because that is what someone opens a round to learn. The progress used to
+ * come first and the favourite second.
  *
- * Nothing is computed here that is not already computed elsewhere: the
- * progress is `memberUids` against `audienceUids` (joining IS answering, so a
- * member IS an answer), and the favourite is whatever `bestAcrossWindows`
- * already picked for the card.
+ * There is deliberately no "N von M haben geantwortet" any more (September
+ * 2026). M was `audienceCount`: everyone the round was addressed to, i.e. the
+ * host's friend list. Set the audience to all friends and the line reads
+ * "5 von 40" for ever — not a task list, just the size of a contact list, and
+ * it makes every round look like a failure. What the counts below refer to is
+ * the number of ANSWERS, which is stated without a denominator.
+ *
+ * Nothing is computed here that is not already computed elsewhere: the count
+ * is the server-written member count (joining IS answering, so a member IS an
+ * answer), and the favourite is whatever `bestAcrossWindows` already picked.
  */
 
 export interface PlanSummaryInput {
   /** People who have answered — i.e. members, since there is no member
    * without a response. */
   respondedCount: number;
-  /** Everyone the round was addressed to. */
-  expectedCount: number;
-  /** The winning slots the matching card is already showing. Empty means no
-   * stretch works for anybody yet. */
+  /** The winning slots the overview is already showing. Empty means no stretch
+   * works for anybody yet. */
   highlights: MatchingHighlight[];
   /** Suppresses the favourite where the reader may not see member data. */
   canSeeFavourite?: boolean;
@@ -43,28 +44,27 @@ function favouriteLabel(highlights: MatchingHighlight[]): string | null {
 /**
  * Never states a time as decided. The word in front of it is always
  * "Favorit" — a locked round does not show this row at all, so the row has no
- * state in which a bare time could be mistaken for the appointment.
+ * state in which a bare time could be mistaken for the appointment. That word
+ * is doing more work now that the time comes first.
  */
 export function describePlanStatus({
   respondedCount,
-  expectedCount,
   highlights,
   canSeeFavourite = true,
 }: PlanSummaryInput): string {
-  const progress = `${respondedCount} von ${Math.max(respondedCount, expectedCount)} Antworten`;
   if (respondedCount === 0) return 'Noch keine Antworten';
+  const answers = respondedCount === 1 ? '1 Antwort' : `${respondedCount} Antworten`;
 
   const favourite = canSeeFavourite ? favouriteLabel(highlights) : null;
-  if (canSeeFavourite && !favourite) return `${progress} · Noch kein gemeinsamer Zeitraum`;
-  if (!favourite) return progress;
+  if (canSeeFavourite && !favourite) return `${answers} · Noch kein gemeinsamer Zeitraum`;
+  // An invitee cannot read `timePlanMembers`, so there is no aggregate to
+  // report — only that the round is running.
+  if (!favourite) return answers;
 
-  const prefix = favourite === 'Mehrere Favoriten' ? '' : 'Favorit: ';
-  // "Aktueller Favorit" only while answers are still outstanding — once
-  // everyone has replied the qualifier would suggest it can still move on its
-  // own, and it cannot; only the host locking it changes anything now.
-  if (respondedCount >= expectedCount) return `Alle Antworten da · ${prefix}${favourite}`;
-  const openPrefix = favourite === 'Mehrere Favoriten' ? '' : 'Aktueller Favorit: ';
-  return `${progress} · ${openPrefix}${favourite}`;
+  const [leading] = highlights;
+  const covers = `${leading.slot.count} von ${respondedCount} können`;
+  if (favourite === 'Mehrere Favoriten') return `${favourite} · je ${covers}`;
+  return `Favorit: ${favourite} · ${covers}`;
 }
 
 /** Only a running round shows the row. Locked means the activity itself now

@@ -2,6 +2,17 @@ import { Ionicons } from '@expo/vector-icons';
 import type { ReactNode } from 'react';
 import { Pressable, Text, useColorScheme, View } from 'react-native';
 
+import { FONT, TEXT_FLEXIBLE, TYPE } from '@/shared/theme';
+
+/**
+ * The sizes stay where they were (28 / 14) — 28 is off the scale, but a screen
+ * title that grows to `display` wraps "Datenschutzerklärung" onto two lines.
+ * Aligning it is a layout decision that needs a device, not a side effect of
+ * fixing the typeface.
+ */
+const TITLE = { fontSize: 28, lineHeight: 32, letterSpacing: -0.7, fontFamily: FONT.bold };
+const SUBTITLE = { ...TYPE.label, fontFamily: FONT.medium };
+
 export interface ScreenHeaderProps {
   title: string;
   subtitle?: string;
@@ -26,11 +37,13 @@ export function ScreenHeader({ title, subtitle, onBack, action }: ScreenHeaderPr
         </Pressable>
       ) : null}
       <View className="flex-1">
-        <Text className="text-[28px] font-extrabold leading-8 tracking-[-0.7px] text-foreground">
+        <Text {...TEXT_FLEXIBLE} className="text-foreground" style={TITLE}>
           {title}
         </Text>
         {subtitle ? (
-          <Text className="mt-1 text-sm leading-5 text-muted-foreground">{subtitle}</Text>
+          <Text {...TEXT_FLEXIBLE} className="mt-1 text-muted-foreground" style={SUBTITLE}>
+            {subtitle}
+          </Text>
         ) : null}
       </View>
       {action}

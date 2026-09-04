@@ -1,14 +1,46 @@
 import { Ionicons } from '@expo/vector-icons';
+import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, AppState, Pressable, Text, View } from 'react-native';
+import {
+  Alert,
+  AppState,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
+import Animated, { FadeIn, FadeOut, useReducedMotion } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { TogetherLockup } from '@/shared/components';
+import { BrandBackdrop, TogetherFinalWordmark, TogetherLoader } from '@/shared/components';
+import { FONT, shadow, TEXT_CAPPED, TEXT_FLEXIBLE, TYPE } from '@/shared/theme';
 import { haptics } from '@/shared/utils/haptics';
 
 import { useAuth } from './hooks/useAuth';
+import { authErrorMessage } from './services/authErrors';
 
-const ACCENT = '#3B82F6';
+const COLORS = {
+  // Matches AuthScreen's ground, so arriving here reads as the same room and
+  // not as a second, plainer app.
+  ground: '#080B14',
+  paper: '#F4F5F7',
+  ink: '#0E1116',
+  soft: 'rgba(244,245,247,0.78)',
+  muted: 'rgba(244,245,247,0.55)',
+  quiet: 'rgba(244,245,247,0.4)',
+  line: 'rgba(244,245,247,0.12)',
+  panel: 'rgba(20,25,33,0.6)',
+  field: 'rgba(244,245,247,0.06)',
+  // The brand indigo, not the `open` blue this screen used to borrow: #3B82F6 is
+  // an activity-mode colour and must not stand for unrelated state.
+  accent: '#8991FF',
+  success: '#41C08D',
+  danger: '#FCA5A5',
+};
+
+type Notice = { tone: 'success' | 'error'; text: string };
 
 /**
  * Hard gate between sign-up and the app: an account whose address is not
@@ -26,11 +58,14 @@ const ACCENT = '#3B82F6';
  */
 export function EmailVerificationGate() {
   const { user, sendEmailVerification, refreshSession, signOut, deleteAccount } = useAuth();
+  const { height } = useWindowDimensions();
+  const reducedMotion = useReducedMotion();
   const [checking, setChecking] = useState(false);
   const [sending, setSending] = useState(false);
-  const [sentAt, setSentAt] = useState<number | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
   const [deleting, setDeleting] = useState(false);
   const checkingRef = useRef(false);
+  const compact = height < 730;
 
   const check = useCallback(
     async (silent = false) => {
@@ -43,14 +78,14 @@ export function EmailVerificationGate() {
           haptics.success();
         } else if (!silent) {
           haptics.warning();
-          Alert.alert(
-            'Noch nicht bestätigt',
-            'Wir konnten die Bestätigung noch nicht sehen. Öffne den Link in der E-Mail und tippe danach erneut auf „Ich habe bestätigt“.',
-          );
+          setNotice({
+            tone: 'error',
+            text: 'Noch keine Bestätigung zu sehen. Öffne den Link in der E-Mail und tippe danach erneut hier.',
+          });
         }
       } catch {
         if (!silent) {
-          Alert.alert('Prüfung fehlgeschlagen', 'Bitte versuche es in einem Moment erneut.');
+          setNotice({ tone: 'error', text: 'Die Prüfung hat nicht geklappt. Gleich nochmal?' });
         }
       } finally {
         checkingRef.current = false;
@@ -72,22 +107,25 @@ export function EmailVerificationGate() {
   async function resend() {
     if (sending) return;
     setSending(true);
+    setNotice(null);
     try {
       await sendEmailVerification();
-      setSentAt(Date.now());
+      setNotice({
+        tone: 'success',
+        text: 'E-Mail ist unterwegs. Schau auch kurz im Spam-Ordner nach.',
+      });
       haptics.success();
-    } catch {
+    } catch (error) {
       haptics.warning();
-      Alert.alert(
-        'E-Mail konnte nicht gesendet werden',
-        'Bitte prüfe deine Verbindung und versuche es erneut.',
-      );
+      // The callable answers in German already (rate limit, missing address);
+      // a blanket "prüfe deine Verbindung" would name the wrong cause.
+      setNotice({ tone: 'error', text: authErrorMessage(error, 'profile') });
     } finally {
       setSending(false);
     }
   }
 
-  function useDifferentAddress() {
+  function confirmDifferentAddress() {
     Alert.alert(
       'Andere E-Mail-Adresse?',
       'Dieses Konto wird gelöscht, damit du dich mit der richtigen Adresse neu registrieren kannst.',
@@ -101,10 +139,10 @@ export function EmailVerificationGate() {
             setDeleting(true);
             void deleteAccount()
               .catch(() => {
-                Alert.alert(
-                  'Konto konnte nicht gelöscht werden',
-                  'Du bist weiterhin angemeldet. Prüfe deine Verbindung und versuche es erneut.',
-                );
+                setNotice({
+                  tone: 'error',
+                  text: 'Das Konto ließ sich nicht löschen. Du bist weiterhin angemeldet.',
+                });
               })
               .finally(() => setDeleting(false));
           },
@@ -113,83 +151,320 @@ export function EmailVerificationGate() {
     );
   }
 
-  return (
-    <View className="flex-1 bg-[#0E1116]">
-      <SafeAreaView className="flex-1 px-7">
-        <View className="flex-1 items-center justify-center">
-          <TogetherLockup animated={false} width={200} />
+  const busy = checking || sending || deleting;
 
-          <View
-            className="mt-10 h-16 w-16 items-center justify-center rounded-3xl"
-            style={{ backgroundColor: `${ACCENT}22` }}
-          >
-            <Ionicons name="mail-open-outline" size={28} color={ACCENT} />
+  return (
+    <View style={styles.root}>
+      <StatusBar style="light" />
+      <BrandBackdrop quiet />
+
+      <SafeAreaView style={styles.safeArea}>
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.wordmarkWrap}>
+            <TogetherFinalWordmark width={compact ? 132 : 152} />
           </View>
 
-          <Text className="mt-6 text-center text-2xl font-extrabold text-white">
-            Bestätige deine E-Mail
-          </Text>
-          <Text className="mt-3 max-w-[320px] text-center text-sm leading-5 text-white/55">
-            Wir haben dir einen Link geschickt an
-          </Text>
-          <Text className="mt-1 max-w-[320px] text-center text-sm font-bold text-white">
-            {user?.email ?? ''}
-          </Text>
-          <Text className="mt-3 max-w-[320px] text-center text-sm leading-5 text-white/55">
-            Öffne den Link, danach geht es hier automatisch weiter. Das ist nur einmal nötig.
-          </Text>
+          <View style={styles.card}>
+            <View style={styles.iconTile}>
+              <Ionicons name="mail-open-outline" size={24} color={COLORS.accent} />
+            </View>
 
-          {sentAt ? (
-            <Text className="mt-4 text-center text-xs text-[#41C08D]">
-              E-Mail erneut gesendet. Schau auch im Spam-Ordner nach.
+            <Text {...TEXT_FLEXIBLE} style={styles.title}>
+              Fast geschafft.
             </Text>
+
+            <Text {...TEXT_FLEXIBLE} style={styles.body}>
+              Wir haben dir einen Bestätigungslink geschickt an:
+            </Text>
+
+            {/* The address gets its own block on purpose: a mistyped domain is
+                the one failure this screen exists to make visible. */}
+            <View style={styles.addressField}>
+              <Text {...TEXT_FLEXIBLE} selectable style={styles.address}>
+                {user?.email ?? ''}
+              </Text>
+            </View>
+
+            <Text {...TEXT_FLEXIBLE} style={styles.hint}>
+              Tippe den Link in der E-Mail an — danach geht es hier von allein weiter. Das ist nur
+              einmal nötig.
+            </Text>
+          </View>
+
+          {notice ? (
+            <Animated.View
+              entering={reducedMotion ? undefined : FadeIn.duration(180)}
+              exiting={reducedMotion ? undefined : FadeOut.duration(120)}
+              style={[
+                styles.notice,
+                notice.tone === 'success' ? styles.noticeSuccess : styles.noticeError,
+              ]}
+            >
+              <Ionicons
+                name={notice.tone === 'success' ? 'checkmark-circle' : 'alert-circle'}
+                size={15}
+                color={notice.tone === 'success' ? COLORS.success : COLORS.danger}
+              />
+              <Text
+                {...TEXT_FLEXIBLE}
+                accessibilityLiveRegion="polite"
+                style={[
+                  styles.noticeText,
+                  { color: notice.tone === 'success' ? COLORS.success : COLORS.danger },
+                ]}
+              >
+                {notice.text}
+              </Text>
+            </Animated.View>
           ) : null}
 
-          <View className="mt-9 w-full max-w-[300px] gap-2.5">
+          <View style={styles.actions}>
             <Pressable
+              accessibilityLabel="Ich habe bestätigt"
               accessibilityRole="button"
-              disabled={checking}
-              className="min-h-[54px] items-center justify-center rounded-2xl bg-white active:opacity-90"
+              accessibilityState={{ busy: checking, disabled: busy }}
+              disabled={busy}
               onPress={() => void check()}
+              style={({ pressed }) => [
+                styles.primary,
+                busy ? styles.dimmed : null,
+                pressed && !busy ? styles.pressed : null,
+              ]}
             >
+              <View pointerEvents="none" style={styles.primarySheen} />
               {checking ? (
-                <ActivityIndicator color="#0E1116" />
-              ) : (
-                <Text className="text-base font-bold text-[#0E1116]">Ich habe bestätigt</Text>
-              )}
+                <TogetherLoader accessibilityLabel="" color={COLORS.ink} size={24} />
+              ) : null}
+              <Text {...TEXT_CAPPED} style={styles.primaryLabel}>
+                {checking ? 'Wird geprüft …' : 'Ich habe bestätigt'}
+              </Text>
             </Pressable>
 
             <Pressable
+              accessibilityLabel="E-Mail erneut senden"
               accessibilityRole="button"
-              disabled={sending}
-              className="min-h-[48px] items-center justify-center rounded-2xl border border-white/15 active:opacity-80"
+              accessibilityState={{ busy: sending, disabled: busy }}
+              disabled={busy}
               onPress={() => void resend()}
+              style={({ pressed }) => [
+                styles.secondary,
+                busy ? styles.dimmed : null,
+                pressed && !busy ? styles.pressed : null,
+              ]}
             >
-              <Text className="text-sm font-semibold text-white/80">
+              {sending ? (
+                <TogetherLoader accessibilityLabel="" color={COLORS.soft} size={20} />
+              ) : null}
+              <Text {...TEXT_CAPPED} style={styles.secondaryLabel}>
                 {sending ? 'Wird gesendet …' : 'E-Mail erneut senden'}
               </Text>
             </Pressable>
 
-            <Pressable
-              accessibilityRole="button"
-              className="min-h-[44px] items-center justify-center active:opacity-70"
-              onPress={useDifferentAddress}
-            >
-              <Text className="text-sm font-semibold text-white/45">
-                {deleting ? 'Konto wird gelöscht …' : 'Andere E-Mail-Adresse verwenden'}
-              </Text>
-            </Pressable>
+            <View style={styles.quietRow}>
+              <Pressable
+                accessibilityLabel="Andere E-Mail-Adresse verwenden"
+                accessibilityRole="button"
+                disabled={deleting}
+                hitSlop={8}
+                onPress={confirmDifferentAddress}
+                style={({ pressed }) => [styles.quietButton, pressed ? styles.pressedSoft : null]}
+              >
+                <Text {...TEXT_CAPPED} style={styles.quietLabel}>
+                  {deleting ? 'Konto wird gelöscht …' : 'Andere Adresse'}
+                </Text>
+              </Pressable>
 
-            <Pressable
-              accessibilityRole="button"
-              className="min-h-[40px] items-center justify-center active:opacity-70"
-              onPress={() => void signOut()}
-            >
-              <Text className="text-xs text-white/35">Abmelden</Text>
-            </Pressable>
+              <View style={styles.quietDot} />
+
+              <Pressable
+                accessibilityLabel="Abmelden"
+                accessibilityRole="button"
+                disabled={deleting}
+                hitSlop={8}
+                onPress={() => void signOut()}
+                style={({ pressed }) => [styles.quietButton, pressed ? styles.pressedSoft : null]}
+              >
+                <Text {...TEXT_CAPPED} style={styles.quietLabel}>
+                  Abmelden
+                </Text>
+              </Pressable>
+            </View>
           </View>
-        </View>
+        </ScrollView>
       </SafeAreaView>
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  actions: {
+    gap: 10,
+    marginTop: 20,
+  },
+  address: {
+    color: COLORS.paper,
+    fontFamily: FONT.bold,
+    textAlign: 'center',
+    ...TYPE.body,
+  },
+  addressField: {
+    backgroundColor: COLORS.field,
+    borderColor: COLORS.line,
+    borderRadius: 16,
+    borderWidth: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  body: {
+    color: COLORS.muted,
+    fontFamily: FONT.medium,
+    ...TYPE.label,
+  },
+  card: {
+    backgroundColor: COLORS.panel,
+    borderColor: COLORS.line,
+    borderRadius: 24,
+    borderWidth: 1,
+    gap: 12,
+    padding: 24,
+  },
+  dimmed: {
+    opacity: 0.72,
+  },
+  hint: {
+    color: COLORS.muted,
+    fontFamily: FONT.medium,
+    ...TYPE.caption,
+  },
+  iconTile: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(137,145,255,0.15)',
+    borderRadius: 18,
+    height: 52,
+    justifyContent: 'center',
+    marginBottom: 4,
+    width: 52,
+  },
+  notice: {
+    alignItems: 'center',
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  noticeError: {
+    backgroundColor: 'rgba(252,165,165,0.1)',
+    borderColor: 'rgba(252,165,165,0.26)',
+  },
+  noticeSuccess: {
+    backgroundColor: 'rgba(65,192,141,0.1)',
+    borderColor: 'rgba(65,192,141,0.26)',
+  },
+  noticeText: {
+    flex: 1,
+    fontFamily: FONT.medium,
+    ...TYPE.caption,
+  },
+  pressed: {
+    transform: [{ scale: 0.985 }],
+  },
+  pressedSoft: {
+    opacity: 0.7,
+  },
+  primary: {
+    alignItems: 'center',
+    backgroundColor: COLORS.paper,
+    borderRadius: 20,
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'center',
+    minHeight: 56,
+    overflow: 'hidden',
+    paddingHorizontal: 20,
+    ...shadow({ color: '#000000', offsetY: 8, radius: 16, opacity: 0.28, elevation: 6 }),
+  },
+  primaryLabel: {
+    color: COLORS.ink,
+    fontFamily: FONT.bold,
+    ...TYPE.body,
+  },
+  primarySheen: {
+    backgroundColor: 'rgba(255,255,255,0.6)',
+    borderRadius: 1,
+    height: 1.5,
+    left: 18,
+    position: 'absolute',
+    right: 18,
+    top: 1,
+  },
+  quietButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 44,
+    paddingHorizontal: 8,
+  },
+  quietDot: {
+    backgroundColor: COLORS.quiet,
+    borderRadius: 2,
+    height: 3,
+    width: 3,
+  },
+  quietLabel: {
+    color: COLORS.quiet,
+    fontFamily: FONT.semibold,
+    ...TYPE.caption,
+  },
+  quietRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'center',
+    paddingTop: 2,
+  },
+  root: {
+    backgroundColor: COLORS.ground,
+    flex: 1,
+  },
+  safeArea: {
+    flex: 1,
+  },
+  scroll: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingBottom: 28,
+    paddingHorizontal: 24,
+    paddingTop: 20,
+  },
+  secondary: {
+    alignItems: 'center',
+    borderColor: COLORS.line,
+    borderRadius: 20,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'center',
+    minHeight: 52,
+    paddingHorizontal: 20,
+  },
+  secondaryLabel: {
+    color: COLORS.soft,
+    fontFamily: FONT.semibold,
+    ...TYPE.label,
+  },
+  title: {
+    color: COLORS.paper,
+    fontFamily: FONT.bold,
+    ...TYPE.displayCompact,
+  },
+  wordmarkWrap: {
+    alignItems: 'center',
+    marginBottom: 28,
+  },
+});

@@ -2,11 +2,29 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
   type ReactNode,
 } from 'react';
+
+/**
+ * How long the boot curtain keeps waiting for a map that may never arrive.
+ *
+ * The curtain exists to hide a COLD MAP, so waiting for one only means
+ * something while a map is actually being built. Opening the app through a
+ * deep link — an invite `f/<name>` — starts it on a route that never mounts
+ * `MapCanvas`, so neither `reportMapRendererReady` nor `reportLocationBootState`
+ * ever fires and the curtain stayed up forever: the app looked hung on the
+ * Mica mark with no way out. The same net catches a renderer that genuinely
+ * fails to come up, which would otherwise be an unrecoverable white-glove
+ * freeze in production.
+ *
+ * The timer starts only once `baseReady` is true, so a slow cold start still
+ * gets its full data budget (`BOOT_DATA_WAIT_MAX_MS`) before this one begins.
+ */
+const MAP_PHASE_WAIT_MAX_MS = 4_000;
 
 type LocationBootState =
   | 'checking'
@@ -59,11 +77,20 @@ export function MapBootProvider({
 
   const reportMapRendererReady = useCallback(() => setMapRendererReady(true), []);
 
+  const [mapWaitElapsed, setMapWaitElapsed] = useState(false);
+  useEffect(() => {
+    if (!baseReady || mapRendererReady) return;
+    const timer = setTimeout(() => setMapWaitElapsed(true), MAP_PHASE_WAIT_MAX_MS);
+    return () => clearTimeout(timer);
+  }, [baseReady, mapRendererReady]);
+
   const initialLocationAttemptFinished =
     locationState === 'camera-ready' ||
     locationState === 'location-pending' ||
     locationState === 'unavailable';
-  const prewarming = !baseReady || !mapRendererReady || !initialLocationAttemptFinished;
+  const mapPhaseSettled =
+    (mapRendererReady && initialLocationAttemptFinished) || mapWaitElapsed;
+  const prewarming = !baseReady || !mapPhaseSettled;
   const value = useMemo<MapBootContextValue>(
     () => ({
       prewarming,

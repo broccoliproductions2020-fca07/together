@@ -89,6 +89,18 @@ module.exports = ({ config }) => {
     );
   }
 
+  // Staging carries the invite links too, although it has its own bundle id and
+  // therefore needs its own entry in the hosted association files. Reason: a
+  // production build is only installable through TestFlight, so without this the
+  // flow could not be tested on a real phone before it is submitted to Apple —
+  // and an unverifiable feature is one nobody can sign off on. Dev keeps the
+  // custom scheme: it talks to the emulator and its build lives on this machine.
+  //
+  // Consequence to be aware of: with BOTH apps installed, iOS picks one of them
+  // for a tapped link and the choice is not ours to make.
+  const supportsInviteLinks = variantName === 'production' || variantName === 'staging';
+  const inviteLinkHost = 'link.micamap.de';
+
   const suffix = variant.suffix ? `.${variant.suffix}` : '';
   const baseSchemes = Array.isArray(config.scheme) ? config.scheme : [config.scheme];
   const schemes = baseSchemes.map((scheme) =>
@@ -123,6 +135,19 @@ module.exports = ({ config }) => {
           }
         : {}),
       googleServicesFile: androidGoogleServicesFile,
+      ...(supportsInviteLinks
+        ? {
+            intentFilters: [
+              ...(config.android?.intentFilters ?? []),
+              {
+                action: 'VIEW',
+                autoVerify: true,
+                data: [{ scheme: 'https', host: inviteLinkHost, pathPrefix: '/f' }],
+                category: ['BROWSABLE', 'DEFAULT'],
+              },
+            ],
+          }
+        : {}),
     },
     ios: {
       ...config.ios,
@@ -130,6 +155,14 @@ module.exports = ({ config }) => {
       bundleIdentifier: `${config.ios.bundleIdentifier}${suffix}`,
       ...(iosKey ? { config: { ...config.ios?.config, googleMapsApiKey: iosKey } } : {}),
       googleServicesFile: iosGoogleServicesFile,
+      ...(supportsInviteLinks
+        ? {
+            associatedDomains: [
+              ...(config.ios?.associatedDomains ?? []),
+              `applinks:${inviteLinkHost}`,
+            ],
+          }
+        : {}),
     },
   };
 };

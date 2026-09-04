@@ -1,11 +1,13 @@
 import { Ionicons } from '@expo/vector-icons';
 import { memo, useMemo } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import MapView from 'react-native-maps';
 
 import { useMapStyle } from '@/features/map/mapStyle/useMapStyle';
 import { MAP_PROVIDER, SUPPORTS_LITE_MODE } from '@/features/map/utils/mapProvider';
 import { FONT, TEXT_CAPPED, TYPE } from '@/shared/theme';
+
+import { PlacePreviewPin, PLACE_PREVIEW_PIN_HEIGHT } from './PlacePreviewPin';
 
 /**
  * Zoom level, NOT a region delta.
@@ -83,19 +85,15 @@ function PlacePreviewMapComponent({
     <View style={styles.frame}>
       {camera ? (
         <MapView
-          // Remounted per coordinate on purpose: Android's lite mode renders a
-          // static bitmap and ignores camera updates after mount, so a picked
-          // place would otherwise keep showing the previous one. Remounting a
-          // bitmap map is cheap, and a place changes only when someone picks it.
-          key={`${camera.center.latitude},${camera.center.longitude}`}
+          // Android applies both the lite-map camera and its native colour
+          // scheme only at mount time. Recreate the cheap bitmap when either
+          // input changes.
+          key={`${camera.center.latitude},${camera.center.longitude},${
+            Platform.OS === 'android' ? colorScheme : 'map'
+          }`}
           style={StyleSheet.absoluteFill}
           provider={MAP_PROVIDER}
           mapType="standard"
-          // KNOWN ISSUE (August 2026): this is ignored — the preview renders
-          // Google's stock light map even while the main map is in the night
-          // palette. Verified NOT to be lite mode (removing it changed nothing)
-          // and not the style value (the main map gets the identical array).
-          // The remaining suspect is the Android Modal window this sits in.
           customMapStyle={mapStyle}
           userInterfaceStyle={colorScheme}
           liteMode={SUPPORTS_LITE_MODE}
@@ -123,10 +121,7 @@ function PlacePreviewMapComponent({
 
       {camera ? (
         <View pointerEvents="none" style={styles.pinWrap}>
-          <View style={[styles.pin, { backgroundColor: accent }]}>
-            <View style={styles.pinDot} />
-          </View>
-          <View style={[styles.pinStem, { backgroundColor: accent }]} />
+          <PlacePreviewPin color={accent} />
         </View>
       ) : null}
 
@@ -197,21 +192,12 @@ const styles = StyleSheet.create({
     width: 34,
   },
   mapButtonPressed: { opacity: 0.7 },
-  pin: {
-    alignItems: 'center',
-    borderRadius: 13,
-    height: 26,
-    justifyContent: 'center',
-    width: 26,
-  },
-  pinDot: { backgroundColor: '#0E1116', borderRadius: 4, height: 8, width: 8 },
-  pinStem: { borderRadius: 1, height: 7, marginTop: -1, width: 2.5 },
   pinWrap: {
     alignItems: 'center',
     left: 0,
     position: 'absolute',
     right: 0,
-    // Shifts the pin so its TIP sits on the centred coordinate, not its middle.
-    top: HEIGHT / 2 - 30,
+    // The tip, not the SVG's bounding-box centre, marks the map coordinate.
+    top: HEIGHT / 2 - PLACE_PREVIEW_PIN_HEIGHT,
   },
 });

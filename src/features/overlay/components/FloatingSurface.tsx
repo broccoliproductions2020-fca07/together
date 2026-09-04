@@ -2,9 +2,19 @@ import { GlassView, isGlassEffectAPIAvailable } from 'expo-glass-effect';
 import type { ReactNode } from 'react';
 import { Platform, StyleSheet, type StyleProp, type ViewStyle, View } from 'react-native';
 
+import { shadow } from '@/shared/theme';
+
 import { useOverlayColors } from './overlayTheme';
 
 const canUseNativeGlass = Platform.OS === 'ios' && isGlassEffectAPIAvailable();
+
+const SURFACE_SHADOW = shadow({
+  color: '#07100D',
+  offsetY: 8,
+  radius: 18,
+  opacity: 0.16,
+  elevation: 8,
+});
 
 export interface FloatingSurfaceProps {
   children: ReactNode;
@@ -39,18 +49,19 @@ export function FloatingSurface({
 
   return (
     <View
-      className={`overflow-hidden shadow-lg ${className ?? ''}`}
+      className={`overflow-hidden ${className ?? ''}`}
       style={[
         {
           backgroundColor: isPrimary ? colors.primary : useGlass ? 'transparent' : colors.liquidWash,
           borderColor: isPrimary ? colors.primaryBorder : colors.border,
           borderWidth: 1,
-          elevation: 8,
-          shadowColor: '#07100D',
-          shadowOffset: { width: 0, height: 8 },
-          shadowOpacity: 0.16,
-          shadowRadius: 18,
         },
+        // The `shadow-lg` utility class used to sit on this view as well, so the
+        // surface described its shadow twice. One source now, and it survives
+        // the `overflow-hidden` above: RN detects that combination
+        // (`styleWouldClipOverflowInk`) and clips the content separately, which
+        // the old `shadowRadius` path did not.
+        SURFACE_SHADOW,
         radius === undefined ? null : { borderRadius: radius },
         surfaceStyle,
       ]}

@@ -1,0 +1,831 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8"><title>Marker — so wie er ausgeliefert wird</title><style>
+*{box-sizing:border-box}body{margin:0;background:#EDEFF2;font:13px/1.55 ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif;color:#0F1417}
+.wrap{padding:26px 24px 40px}h1{font-size:21px;margin:0 0 4px;letter-spacing:-.02em}
+.lede{color:#5A6570;margin:0 0 8px;max-width:104ch}
+.src{display:inline-block;font-size:11.5px;background:#E4F7EF;color:#177453;border-radius:99px;padding:3px 10px;font-weight:600;margin-bottom:18px}
+h2{font-size:15px;margin:26px 0 10px}
+.card{background:#fff;border:1px solid rgba(15,20,23,.09);border-radius:16px;padding:14px 16px 10px;margin-bottom:14px}
+.row{display:flex;gap:8px;flex-wrap:wrap}.c{text-align:center}
+.bed{background:#F1F1F1;border-radius:11px;display:inline-block;width:320px;height:224px}
+.bed.n{background:#212121}.bed svg{display:block;transform:scale(2);transform-origin:top left}
+.l{font-size:10.5px;color:#8A939B;padding-top:3px;font-variant-numeric:tabular-nums}
+.panels{display:flex;gap:16px}.ph{font-size:13px;font-weight:700;padding:0 4px 7px}
+.panel{position:relative;width:390px;height:600px;border-radius:26px;overflow:hidden;box-shadow:0 1px 2px rgba(15,20,23,.10),0 10px 26px rgba(15,20,23,.13)}
+.mk{position:absolute}.mk svg{display:block}
+table{border-collapse:collapse;font-size:12.5px;margin-top:4px}td{padding:5px 14px 5px 0}td.n{font-variant-numeric:tabular-nums;font-weight:600}
+</style></head><body><div class="wrap">
+<h1>Marker — so wie er ausgeliefert wird</h1>
+<p class="lede">Jeder Pfad, jede Breite und jede Ringlänge hier stammt aus <code>activityMarkerLayout.ts</code>. Diese Seite kann nicht vom Code abweichen — sie führt ihn aus.</p>
+<div class="src">aus dem Quelltext gerendert · <code>node design-prototypes/render-from-source.mjs</code></div>
+
+<h2>Die Uhr läuft leer · 12 Uhr, im Uhrzeigersinn</h2>
+<div class="card"><div class="row"><div class="c"><div class="bed"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m1f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m1s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m1a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="35.96" ry="5.516075275247054" fill="url(#m1s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m1a)"/>
+    <path d="M 77.6 57 L 78.8 70 L 81.2 70 L 82.4 57 Z" fill="rgb(179, 130, 50)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(224,162,62)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 0)">
+      <path d="M 80 6 L 124 6 A 14 14 0 0 1 138 20 L 138 44 L 120 44 L 120 51.5 A 7.5 7.5 0 0 1 112.5 59 L 47.5 59 A 7.5 7.5 0 0 1 40 51.5 L 40 44 L 22 44 L 22 20 A 14 14 0 0 1 36 6 Z" fill="url(#m1f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      <path d="M 36 6 L 124 6 A 14 14 0 0 1 138 20 L 138 30 A 14 14 0 0 1 124 44 L 36 44 A 14 14 0 0 1 22 30 L 22 20 A 14 14 0 0 1 36 6 Z" fill="none" stroke="rgba(255,255,255,.94)" stroke-width="5"/>
+      <path d="M 36 6 L 124 6 A 14 14 0 0 1 138 20 L 138 30 A 14 14 0 0 1 124 44 L 36 44 A 14 14 0 0 1 22 30 L 22 20 A 14 14 0 0 1 36 6 Z" fill="none" stroke="rgba(224,162,62, 0.3)" stroke-width="3"/>
+      <path d="M 36 6 L 124 6 A 14 14 0 0 1 138 20 L 138 30 A 14 14 0 0 1 124 44 L 36 44 A 14 14 0 0 1 22 30 L 22 20 A 14 14 0 0 1 36 6 Z" fill="none" stroke="rgb(224,162,62)" stroke-width="3" stroke-linecap="round"
+            stroke-dasharray="283.9645943005142 283.9645943005142" stroke-dashoffset="523.9291886010284"/>
+      <text opacity="1" x="80" y="51.5" font-size="10.5" font-weight="700" fill="#151B20" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">Feierabendbier</text>
+      <g><rect x="25.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="42.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">JK</text></g><g><rect x="50.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="67.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">AS</text></g><g><rect x="75.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="92.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">MR</text></g><g><rect x="100.5" y="8" width="34" height="34" rx="12.24"
+      fill="#101619" stroke="#fff" stroke-width="1.4"/>
+      <text x="117.5" y="25" font-size="15" font-weight="800"
+        fill="#fff" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">+3</text></g>
+      
+      
+    </g>
+  </svg></div>
+    <div class="l">100 %</div></div><div class="c"><div class="bed"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m2f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m2s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m2a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="35.96" ry="5.516075275247054" fill="url(#m2s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m2a)"/>
+    <path d="M 77.6 57 L 78.8 70 L 81.2 70 L 82.4 57 Z" fill="rgb(179, 130, 50)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(224,162,62)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 0)">
+      <path d="M 80 6 L 124 6 A 14 14 0 0 1 138 20 L 138 44 L 120 44 L 120 51.5 A 7.5 7.5 0 0 1 112.5 59 L 47.5 59 A 7.5 7.5 0 0 1 40 51.5 L 40 44 L 22 44 L 22 20 A 14 14 0 0 1 36 6 Z" fill="url(#m2f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      <path d="M 36 6 L 124 6 A 14 14 0 0 1 138 20 L 138 30 A 14 14 0 0 1 124 44 L 36 44 A 14 14 0 0 1 22 30 L 22 20 A 14 14 0 0 1 36 6 Z" fill="none" stroke="rgba(255,255,255,.94)" stroke-width="5"/>
+      <path d="M 36 6 L 124 6 A 14 14 0 0 1 138 20 L 138 30 A 14 14 0 0 1 124 44 L 36 44 A 14 14 0 0 1 22 30 L 22 20 A 14 14 0 0 1 36 6 Z" fill="none" stroke="rgba(224,162,62, 0.3)" stroke-width="3"/>
+      <path d="M 36 6 L 124 6 A 14 14 0 0 1 138 20 L 138 30 A 14 14 0 0 1 124 44 L 36 44 A 14 14 0 0 1 22 30 L 22 20 A 14 14 0 0 1 36 6 Z" fill="none" stroke="rgb(224,162,62)" stroke-width="3" stroke-linecap="round"
+            stroke-dasharray="212.97344572538566 283.9645943005142" stroke-dashoffset="452.93804002589985"/>
+      <text opacity="1" x="80" y="51.5" font-size="10.5" font-weight="700" fill="#151B20" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">Feierabendbier</text>
+      <g><rect x="25.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="42.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">JK</text></g><g><rect x="50.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="67.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">AS</text></g><g><rect x="75.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="92.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">MR</text></g><g><rect x="100.5" y="8" width="34" height="34" rx="12.24"
+      fill="#101619" stroke="#fff" stroke-width="1.4"/>
+      <text x="117.5" y="25" font-size="15" font-weight="800"
+        fill="#fff" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">+3</text></g>
+      
+      
+    </g>
+  </svg></div>
+    <div class="l">75 %</div></div><div class="c"><div class="bed"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m3f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m3s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m3a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="35.96" ry="5.516075275247054" fill="url(#m3s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m3a)"/>
+    <path d="M 77.6 57 L 78.8 70 L 81.2 70 L 82.4 57 Z" fill="rgb(179, 130, 50)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(224,162,62)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 0)">
+      <path d="M 80 6 L 124 6 A 14 14 0 0 1 138 20 L 138 44 L 120 44 L 120 51.5 A 7.5 7.5 0 0 1 112.5 59 L 47.5 59 A 7.5 7.5 0 0 1 40 51.5 L 40 44 L 22 44 L 22 20 A 14 14 0 0 1 36 6 Z" fill="url(#m3f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      <path d="M 36 6 L 124 6 A 14 14 0 0 1 138 20 L 138 30 A 14 14 0 0 1 124 44 L 36 44 A 14 14 0 0 1 22 30 L 22 20 A 14 14 0 0 1 36 6 Z" fill="none" stroke="rgba(255,255,255,.94)" stroke-width="5"/>
+      <path d="M 36 6 L 124 6 A 14 14 0 0 1 138 20 L 138 30 A 14 14 0 0 1 124 44 L 36 44 A 14 14 0 0 1 22 30 L 22 20 A 14 14 0 0 1 36 6 Z" fill="none" stroke="rgba(224,162,62, 0.3)" stroke-width="3"/>
+      <path d="M 36 6 L 124 6 A 14 14 0 0 1 138 20 L 138 30 A 14 14 0 0 1 124 44 L 36 44 A 14 14 0 0 1 22 30 L 22 20 A 14 14 0 0 1 36 6 Z" fill="none" stroke="rgb(224,162,62)" stroke-width="3" stroke-linecap="round"
+            stroke-dasharray="141.9822971502571 283.9645943005142" stroke-dashoffset="381.9468914507713"/>
+      <text opacity="1" x="80" y="51.5" font-size="10.5" font-weight="700" fill="#151B20" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">Feierabendbier</text>
+      <g><rect x="25.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="42.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">JK</text></g><g><rect x="50.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="67.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">AS</text></g><g><rect x="75.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="92.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">MR</text></g><g><rect x="100.5" y="8" width="34" height="34" rx="12.24"
+      fill="#101619" stroke="#fff" stroke-width="1.4"/>
+      <text x="117.5" y="25" font-size="15" font-weight="800"
+        fill="#fff" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">+3</text></g>
+      
+      
+    </g>
+  </svg></div>
+    <div class="l">50 %</div></div><div class="c"><div class="bed"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m4f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m4s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m4a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="35.96" ry="5.516075275247054" fill="url(#m4s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m4a)"/>
+    <path d="M 77.6 57 L 78.8 70 L 81.2 70 L 82.4 57 Z" fill="rgb(179, 130, 50)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(224,162,62)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 0)">
+      <path d="M 80 6 L 124 6 A 14 14 0 0 1 138 20 L 138 44 L 120 44 L 120 51.5 A 7.5 7.5 0 0 1 112.5 59 L 47.5 59 A 7.5 7.5 0 0 1 40 51.5 L 40 44 L 22 44 L 22 20 A 14 14 0 0 1 36 6 Z" fill="url(#m4f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      <path d="M 36 6 L 124 6 A 14 14 0 0 1 138 20 L 138 30 A 14 14 0 0 1 124 44 L 36 44 A 14 14 0 0 1 22 30 L 22 20 A 14 14 0 0 1 36 6 Z" fill="none" stroke="rgba(255,255,255,.94)" stroke-width="5"/>
+      <path d="M 36 6 L 124 6 A 14 14 0 0 1 138 20 L 138 30 A 14 14 0 0 1 124 44 L 36 44 A 14 14 0 0 1 22 30 L 22 20 A 14 14 0 0 1 36 6 Z" fill="none" stroke="rgba(224,162,62, 0.3)" stroke-width="3"/>
+      <path d="M 36 6 L 124 6 A 14 14 0 0 1 138 20 L 138 30 A 14 14 0 0 1 124 44 L 36 44 A 14 14 0 0 1 22 30 L 22 20 A 14 14 0 0 1 36 6 Z" fill="none" stroke="rgb(224,162,62)" stroke-width="3" stroke-linecap="round"
+            stroke-dasharray="70.99114857512855 283.9645943005142" stroke-dashoffset="310.9557428756427"/>
+      <text opacity="1" x="80" y="51.5" font-size="10.5" font-weight="700" fill="#151B20" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">Feierabendbier</text>
+      <g><rect x="25.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="42.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">JK</text></g><g><rect x="50.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="67.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">AS</text></g><g><rect x="75.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="92.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">MR</text></g><g><rect x="100.5" y="8" width="34" height="34" rx="12.24"
+      fill="#101619" stroke="#fff" stroke-width="1.4"/>
+      <text x="117.5" y="25" font-size="15" font-weight="800"
+        fill="#fff" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">+3</text></g>
+      
+      
+    </g>
+  </svg></div>
+    <div class="l">25 %</div></div><div class="c"><div class="bed"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m5f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m5s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m5a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="35.96" ry="5.516075275247054" fill="url(#m5s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m5a)"/>
+    <path d="M 77.6 57 L 78.8 70 L 81.2 70 L 82.4 57 Z" fill="rgb(179, 130, 50)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(224,162,62)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 0)">
+      <path d="M 80 6 L 124 6 A 14 14 0 0 1 138 20 L 138 44 L 120 44 L 120 51.5 A 7.5 7.5 0 0 1 112.5 59 L 47.5 59 A 7.5 7.5 0 0 1 40 51.5 L 40 44 L 22 44 L 22 20 A 14 14 0 0 1 36 6 Z" fill="url(#m5f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      <path d="M 36 6 L 124 6 A 14 14 0 0 1 138 20 L 138 30 A 14 14 0 0 1 124 44 L 36 44 A 14 14 0 0 1 22 30 L 22 20 A 14 14 0 0 1 36 6 Z" fill="none" stroke="rgba(255,255,255,.94)" stroke-width="5"/>
+      <path d="M 36 6 L 124 6 A 14 14 0 0 1 138 20 L 138 30 A 14 14 0 0 1 124 44 L 36 44 A 14 14 0 0 1 22 30 L 22 20 A 14 14 0 0 1 36 6 Z" fill="none" stroke="rgba(224,162,62, 0.3)" stroke-width="3"/>
+      <path d="M 36 6 L 124 6 A 14 14 0 0 1 138 20 L 138 30 A 14 14 0 0 1 124 44 L 36 44 A 14 14 0 0 1 22 30 L 22 20 A 14 14 0 0 1 36 6 Z" fill="none" stroke="rgb(224,162,62)" stroke-width="3" stroke-linecap="round"
+            stroke-dasharray="14.198229715025711 283.9645943005142" stroke-dashoffset="254.1628240155399"/>
+      <text opacity="1" x="80" y="51.5" font-size="10.5" font-weight="700" fill="#151B20" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">Feierabendbier</text>
+      <g><rect x="25.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="42.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">JK</text></g><g><rect x="50.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="67.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">AS</text></g><g><rect x="75.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="92.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">MR</text></g><g><rect x="100.5" y="8" width="34" height="34" rx="12.24"
+      fill="#101619" stroke="#fff" stroke-width="1.4"/>
+      <text x="117.5" y="25" font-size="15" font-weight="800"
+        fill="#fff" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">+3</text></g>
+      
+      
+    </g>
+  </svg></div>
+    <div class="l">5 %</div></div><div class="c"><div class="bed"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m6f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m6s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m6a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="35.96" ry="5.516075275247054" fill="url(#m6s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m6a)"/>
+    <path d="M 77.6 57 L 78.8 70 L 81.2 70 L 82.4 57 Z" fill="rgb(179, 130, 50)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(224,162,62)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 0)">
+      <path d="M 80 6 L 124 6 A 14 14 0 0 1 138 20 L 138 44 L 120 44 L 120 51.5 A 7.5 7.5 0 0 1 112.5 59 L 47.5 59 A 7.5 7.5 0 0 1 40 51.5 L 40 44 L 22 44 L 22 20 A 14 14 0 0 1 36 6 Z" fill="url(#m6f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      
+      <text opacity="1" x="80" y="51.5" font-size="10.5" font-weight="700" fill="#151B20" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">Feierabendbier</text>
+      <g><rect x="25.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="42.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">JK</text></g><g><rect x="50.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="67.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">AS</text></g><g><rect x="75.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="92.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">MR</text></g><g><rect x="100.5" y="8" width="34" height="34" rx="12.24"
+      fill="#101619" stroke="#fff" stroke-width="1.4"/>
+      <text x="117.5" y="25" font-size="15" font-weight="800"
+        fill="#fff" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">+3</text></g>
+      
+      
+    </g>
+  </svg></div>
+    <div class="l">keine feste Zeit</div></div></div></div>
+
+<h2>Solo bei Nacht</h2>
+<div class="card"><div class="row"><div class="c"><div class="bed n"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m7f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m7s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m7a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="24.8" ry="5.516075275247054" fill="url(#m7s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m7a)"/>
+    <path d="M 77.6 57 L 78.8 70 L 81.2 70 L 82.4 57 Z" fill="rgb(52, 154, 113)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(65,192,141)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 0)">
+      <path d="M 80 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 44 L 120 44 L 120 51.5 A 7.5 7.5 0 0 1 112.5 59 L 47.5 59 A 7.5 7.5 0 0 1 40 51.5 L 40 44 L 59.5 44 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="url(#m7f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgba(255,255,255,.94)" stroke-width="5"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgba(65,192,141, 0.3)" stroke-width="3"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgb(65,192,141)" stroke-width="3" stroke-linecap="round"
+            stroke-dasharray="133.9645943005142 133.9645943005142" stroke-dashoffset="261.4291886010284"/>
+      <text opacity="1" x="80" y="51.5" font-size="10.5" font-weight="700" fill="#151B20" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">Grillen im Park</text>
+      <g><rect x="63" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED"/>
+      <text x="80" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">LM</text></g>
+      
+      
+    </g>
+  </svg></div>
+    <div class="l">100 %</div></div><div class="c"><div class="bed n"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m8f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m8s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m8a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="24.8" ry="5.516075275247054" fill="url(#m8s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m8a)"/>
+    <path d="M 77.6 57 L 78.8 70 L 81.2 70 L 82.4 57 Z" fill="rgb(52, 154, 113)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(65,192,141)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 0)">
+      <path d="M 80 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 44 L 120 44 L 120 51.5 A 7.5 7.5 0 0 1 112.5 59 L 47.5 59 A 7.5 7.5 0 0 1 40 51.5 L 40 44 L 59.5 44 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="url(#m8f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgba(255,255,255,.94)" stroke-width="5"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgba(65,192,141, 0.3)" stroke-width="3"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgb(65,192,141)" stroke-width="3" stroke-linecap="round"
+            stroke-dasharray="80.37875658030852 133.9645943005142" stroke-dashoffset="207.8433508808227"/>
+      <text opacity="1" x="80" y="51.5" font-size="10.5" font-weight="700" fill="#151B20" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">Grillen im Park</text>
+      <g><rect x="63" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED"/>
+      <text x="80" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">LM</text></g>
+      
+      
+    </g>
+  </svg></div>
+    <div class="l">60 %</div></div><div class="c"><div class="bed n"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m9f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m9s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m9a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="24.8" ry="5.516075275247054" fill="url(#m9s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m9a)"/>
+    <path d="M 77.6 57 L 78.8 70 L 81.2 70 L 82.4 57 Z" fill="rgb(52, 154, 113)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(65,192,141)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 0)">
+      <path d="M 80 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 44 L 120 44 L 120 51.5 A 7.5 7.5 0 0 1 112.5 59 L 47.5 59 A 7.5 7.5 0 0 1 40 51.5 L 40 44 L 59.5 44 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="url(#m9f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgba(255,255,255,.94)" stroke-width="5"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgba(65,192,141, 0.3)" stroke-width="3"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgb(65,192,141)" stroke-width="3" stroke-linecap="round"
+            stroke-dasharray="33.49114857512855 133.9645943005142" stroke-dashoffset="160.95574287564273"/>
+      <text opacity="1" x="80" y="51.5" font-size="10.5" font-weight="700" fill="#151B20" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">Grillen im Park</text>
+      <g><rect x="63" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED"/>
+      <text x="80" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">LM</text></g>
+      
+      
+    </g>
+  </svg></div>
+    <div class="l">25 %</div></div><div class="c"><div class="bed n"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m10f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m10s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m10a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="24.8" ry="5.516075275247054" fill="url(#m10s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m10a)"/>
+    <path d="M 77.6 57 L 78.8 70 L 81.2 70 L 82.4 57 Z" fill="rgb(52, 154, 113)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(65,192,141)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 0)">
+      <path d="M 80 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 44 L 120 44 L 120 51.5 A 7.5 7.5 0 0 1 112.5 59 L 47.5 59 A 7.5 7.5 0 0 1 40 51.5 L 40 44 L 59.5 44 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="url(#m10f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      
+      <text opacity="1" x="80" y="51.5" font-size="10.5" font-weight="700" fill="#151B20" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">Grillen im Park</text>
+      <g><rect x="63" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED"/>
+      <text x="80" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">LM</text></g>
+      
+      
+    </g>
+  </svg></div>
+    <div class="l">keine feste Zeit</div></div></div></div>
+
+<h2>Beim Zoomen: Quadrat wird Reihe, Titel klappt auf</h2>
+<div class="card"><div class="row"><div class="c"><div class="bed"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m11f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m11s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m11a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="15" ry="5.516075275247054" fill="url(#m11s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m11a)"/>
+    <path d="M 77.6 42 L 78.8 70 L 81.2 70 L 82.4 42 Z" fill="rgb(179, 130, 50)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(224,162,62)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 15)">
+      <path d="M 74 6 L 86 6 A 14 14 0 0 1 100 20 L 100 30 A 14 14 0 0 1 86 44 L 74 44 A 14 14 0 0 1 60 30 L 60 20 A 14 14 0 0 1 74 6 Z" fill="url(#m11f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      <path d="M 74 6 L 86 6 A 14 14 0 0 1 100 20 L 100 30 A 14 14 0 0 1 86 44 L 74 44 A 14 14 0 0 1 60 30 L 60 20 A 14 14 0 0 1 74 6 Z" fill="none" stroke="rgba(255,255,255,.94)" stroke-width="5"/>
+      <path d="M 74 6 L 86 6 A 14 14 0 0 1 100 20 L 100 30 A 14 14 0 0 1 86 44 L 74 44 A 14 14 0 0 1 60 30 L 60 20 A 14 14 0 0 1 74 6 Z" fill="none" stroke="rgba(224,162,62, 0.3)" stroke-width="3"/>
+      <path d="M 74 6 L 86 6 A 14 14 0 0 1 100 20 L 100 30 A 14 14 0 0 1 86 44 L 74 44 A 14 14 0 0 1 60 30 L 60 20 A 14 14 0 0 1 74 6 Z" fill="none" stroke="rgb(224,162,62)" stroke-width="3" stroke-linecap="round"
+            stroke-dasharray="81.8180484663188 131.9645943005142" stroke-dashoffset="207.782642766833"/>
+      
+      <g><rect x="65.5" y="10.5" width="14" height="14" rx="5.04"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="72.5" y="17.5" font-size="8" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">JK</text></g><g><rect x="80.5" y="10.5" width="14" height="14" rx="5.04"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="87.5" y="17.5" font-size="8" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">AS</text></g><g><rect x="65.5" y="25.5" width="14" height="14" rx="5.04"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="72.5" y="32.5" font-size="8" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">MR</text></g><g><rect x="80.5" y="25.5" width="14" height="14" rx="5.04"
+      fill="#101619" stroke="#fff" stroke-width="1.4"/>
+      <text x="87.5" y="32.5" font-size="8" font-weight="800"
+        fill="#fff" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">+3</text></g>
+      
+      
+    </g>
+  </svg></div>
+    <div class="l">Zoom 0</div></div><div class="c"><div class="bed"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m12f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m12s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m12a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="16.257777777777775" ry="5.516075275247054" fill="url(#m12s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m12a)"/>
+    <path d="M 77.6 45.888888888888886 L 78.8 70 L 81.2 70 L 82.4 45.888888888888886 Z" fill="rgb(179, 130, 50)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(224,162,62)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 11.111111111111114)">
+      <path d="M 80 6 L 87.4 6 A 14 14 0 0 1 101.4 20 L 101.4 44 L 106.22222222222221 44 L 106.22222222222221 45.94444444444444 A 1.9444444444444429 1.9444444444444429 0 0 1 104.27777777777777 47.888888888888886 L 55.72222222222223 47.888888888888886 A 1.9444444444444429 1.9444444444444429 0 0 1 53.777777777777786 45.94444444444444 L 53.777777777777786 44 L 58.6 44 L 58.6 20 A 14 14 0 0 1 72.6 6 Z" fill="url(#m12f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      <path d="M 72.6 6 L 87.4 6 A 14 14 0 0 1 101.4 20 L 101.4 30 A 14 14 0 0 1 87.4 44 L 72.6 44 A 14 14 0 0 1 58.6 30 L 58.6 20 A 14 14 0 0 1 72.6 6 Z" fill="none" stroke="rgba(255,255,255,.94)" stroke-width="5"/>
+      <path d="M 72.6 6 L 87.4 6 A 14 14 0 0 1 101.4 20 L 101.4 30 A 14 14 0 0 1 87.4 44 L 72.6 44 A 14 14 0 0 1 58.6 30 L 58.6 20 A 14 14 0 0 1 72.6 6 Z" fill="none" stroke="rgba(224,162,62, 0.3)" stroke-width="3"/>
+      <path d="M 72.6 6 L 87.4 6 A 14 14 0 0 1 101.4 20 L 101.4 30 A 14 14 0 0 1 87.4 44 L 72.6 44 A 14 14 0 0 1 58.6 30 L 58.6 20 A 14 14 0 0 1 72.6 6 Z" fill="none" stroke="rgb(224,162,62)" stroke-width="3" stroke-linecap="round"
+            stroke-dasharray="85.29004846631881 137.56459430051422" stroke-dashoffset="215.45464276683302"/>
+      <text opacity="0.2592592592592591" x="80" y="51.5" font-size="10.5" font-weight="700" fill="#151B20" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">Feierabendbier</text>
+      <g><rect x="64.1" y="9.1" width="16.8" height="16.8" rx="6.048"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="72.5" y="17.5" font-size="8" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">JK</text></g><g><rect x="79.1" y="9.1" width="16.8" height="16.8" rx="6.048"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="87.5" y="17.5" font-size="8" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">AS</text></g><g><rect x="64.1" y="24.1" width="16.8" height="16.8" rx="6.048"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="72.5" y="32.5" font-size="8" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">MR</text></g><g><rect x="79.1" y="24.1" width="16.8" height="16.8" rx="6.048"
+      fill="#101619" stroke="#fff" stroke-width="1.4"/>
+      <text x="87.5" y="32.5" font-size="8" font-weight="800"
+        fill="#fff" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">+3</text></g>
+      
+      
+    </g>
+  </svg></div>
+    <div class="l">Zoom 0.35</div></div><div class="c"><div class="bed"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m13f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m13s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m13a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="24.8" ry="5.516075275247054" fill="url(#m13s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m13a)"/>
+    <path d="M 77.6 57 L 78.8 70 L 81.2 70 L 82.4 57 Z" fill="rgb(179, 130, 50)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(224,162,62)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 0)">
+      <path d="M 80 6 L 102.4 6 A 14 14 0 0 1 116.4 20 L 116.4 44 L 120 44 L 120 51.5 A 7.5 7.5 0 0 1 112.5 59 L 47.5 59 A 7.5 7.5 0 0 1 40 51.5 L 40 44 L 43.6 44 L 43.6 20 A 14 14 0 0 1 57.6 6 Z" fill="url(#m13f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      <path d="M 57.6 6 L 102.4 6 A 14 14 0 0 1 116.4 20 L 116.4 30 A 14 14 0 0 1 102.4 44 L 57.6 44 A 14 14 0 0 1 43.6 30 L 43.6 20 A 14 14 0 0 1 57.6 6 Z" fill="none" stroke="rgba(255,255,255,.94)" stroke-width="5"/>
+      <path d="M 57.6 6 L 102.4 6 A 14 14 0 0 1 116.4 20 L 116.4 30 A 14 14 0 0 1 102.4 44 L 57.6 44 A 14 14 0 0 1 43.6 30 L 43.6 20 A 14 14 0 0 1 57.6 6 Z" fill="none" stroke="rgba(224,162,62, 0.3)" stroke-width="3"/>
+      <path d="M 57.6 6 L 102.4 6 A 14 14 0 0 1 116.4 20 L 116.4 30 A 14 14 0 0 1 102.4 44 L 57.6 44 A 14 14 0 0 1 43.6 30 L 43.6 20 A 14 14 0 0 1 57.6 6 Z" fill="none" stroke="rgb(224,162,62)" stroke-width="3" stroke-linecap="round"
+            stroke-dasharray="122.49004846631881 197.56459430051422" stroke-dashoffset="297.65464276683304"/>
+      <text opacity="1" x="80" y="51.5" font-size="10.5" font-weight="700" fill="#151B20" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">Feierabendbier</text>
+      <g><rect x="48.3" y="8.3" width="24.4" height="24.4" rx="8.783999999999999"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="60.5" y="20.5" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">JK</text></g><g><rect x="67.3" y="8.3" width="24.4" height="24.4" rx="8.783999999999999"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="79.5" y="20.5" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">AS</text></g><g><rect x="68.3" y="17.3" width="24.4" height="24.4" rx="8.783999999999999"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="80.5" y="29.5" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">MR</text></g><g><rect x="87.3" y="17.3" width="24.4" height="24.4" rx="8.783999999999999"
+      fill="#101619" stroke="#fff" stroke-width="1.4"/>
+      <text x="99.5" y="29.5" font-size="15" font-weight="800"
+        fill="#fff" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">+3</text></g>
+      
+      
+    </g>
+  </svg></div>
+    <div class="l">Zoom 0.7</div></div><div class="c"><div class="bed"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m14f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m14s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m14a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="35.96" ry="5.516075275247054" fill="url(#m14s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m14a)"/>
+    <path d="M 77.6 57 L 78.8 70 L 81.2 70 L 82.4 57 Z" fill="rgb(179, 130, 50)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(224,162,62)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 0)">
+      <path d="M 80 6 L 124 6 A 14 14 0 0 1 138 20 L 138 44 L 120 44 L 120 51.5 A 7.5 7.5 0 0 1 112.5 59 L 47.5 59 A 7.5 7.5 0 0 1 40 51.5 L 40 44 L 22 44 L 22 20 A 14 14 0 0 1 36 6 Z" fill="url(#m14f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      <path d="M 36 6 L 124 6 A 14 14 0 0 1 138 20 L 138 30 A 14 14 0 0 1 124 44 L 36 44 A 14 14 0 0 1 22 30 L 22 20 A 14 14 0 0 1 36 6 Z" fill="none" stroke="rgba(255,255,255,.94)" stroke-width="5"/>
+      <path d="M 36 6 L 124 6 A 14 14 0 0 1 138 20 L 138 30 A 14 14 0 0 1 124 44 L 36 44 A 14 14 0 0 1 22 30 L 22 20 A 14 14 0 0 1 36 6 Z" fill="none" stroke="rgba(224,162,62, 0.3)" stroke-width="3"/>
+      <path d="M 36 6 L 124 6 A 14 14 0 0 1 138 20 L 138 30 A 14 14 0 0 1 124 44 L 36 44 A 14 14 0 0 1 22 30 L 22 20 A 14 14 0 0 1 36 6 Z" fill="none" stroke="rgb(224,162,62)" stroke-width="3" stroke-linecap="round"
+            stroke-dasharray="176.0580484663188 283.9645943005142" stroke-dashoffset="416.022642766833"/>
+      <text opacity="1" x="80" y="51.5" font-size="10.5" font-weight="700" fill="#151B20" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">Feierabendbier</text>
+      <g><rect x="25.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="42.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">JK</text></g><g><rect x="50.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="67.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">AS</text></g><g><rect x="75.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="92.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">MR</text></g><g><rect x="100.5" y="8" width="34" height="34" rx="12.24"
+      fill="#101619" stroke="#fff" stroke-width="1.4"/>
+      <text x="117.5" y="25" font-size="15" font-weight="800"
+        fill="#fff" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">+3</text></g>
+      
+      
+    </g>
+  </svg></div>
+    <div class="l">Zoom 1</div></div></div></div>
+
+<h2>Auf der Karte, echte Größe</h2>
+<div class="panels"><div><div class="ph">Tag</div><div class="panel"><svg width="390" height="600" viewBox="0 0 390 600" style="position:absolute;inset:0">
+    <rect width="390" height="600" fill="#F1F1F1"/><rect x="0" y="330" width="390" height="44" fill="#C9DDE8"/>
+    <rect x="180" y="0" width="26" height="600" fill="#F7F7F7"/><rect x="0" y="238" width="390" height="22" fill="#F7F7F7"/>
+    <rect x="0" y="120" width="390" height="14" fill="#FFFFFF"/><rect x="106" y="0" width="12" height="600" fill="#FFFFFF"/>
+    <rect x="0" y="466" width="390" height="14" fill="#FFFFFF"/><rect x="272" y="0" width="10" height="600" fill="#FFFFFF"/>
+    <rect x="288" y="404" width="94" height="54" rx="6" fill="#DCE8D5"/>
+    <rect x="14" y="40" width="96" height="74" rx="3" fill="#E6E6E6" stroke="#DBDBDB" stroke-width="1"/><rect x="126" y="26" width="104" height="88" rx="3" fill="#E6E6E6" stroke="#DBDBDB" stroke-width="1"/><rect x="246" y="52" width="118" height="62" rx="3" fill="#E6E6E6" stroke="#DBDBDB" stroke-width="1"/><rect x="18" y="140" width="88" height="96" rx="3" fill="#E6E6E6" stroke="#DBDBDB" stroke-width="1"/><rect x="122" y="146" width="58" height="60" rx="3" fill="#E6E6E6" stroke="#DBDBDB" stroke-width="1"/><rect x="196" y="138" width="74" height="84" rx="3" fill="#E6E6E6" stroke="#DBDBDB" stroke-width="1"/><rect x="286" y="150" width="86" height="70" rx="3" fill="#E6E6E6" stroke="#DBDBDB" stroke-width="1"/><rect x="24" y="268" width="110" height="66" rx="3" fill="#E6E6E6" stroke="#DBDBDB" stroke-width="1"/><rect x="150" y="258" width="92" height="88" rx="3" fill="#E6E6E6" stroke="#DBDBDB" stroke-width="1"/><rect x="262" y="272" width="104" height="58" rx="3" fill="#E6E6E6" stroke="#DBDBDB" stroke-width="1"/><rect x="16" y="388" width="80" height="74" rx="3" fill="#E6E6E6" stroke="#DBDBDB" stroke-width="1"/><rect x="112" y="396" width="120" height="52" rx="3" fill="#E6E6E6" stroke="#DBDBDB" stroke-width="1"/><rect x="248" y="378" width="116" height="90" rx="3" fill="#E6E6E6" stroke="#DBDBDB" stroke-width="1"/><rect x="28" y="494" width="104" height="72" rx="3" fill="#E6E6E6" stroke="#DBDBDB" stroke-width="1"/><rect x="152" y="500" width="86" height="64" rx="3" fill="#E6E6E6" stroke="#DBDBDB" stroke-width="1"/><rect x="258" y="486" width="108" height="80" rx="3" fill="#E6E6E6" stroke="#DBDBDB" stroke-width="1"/>
+  </svg>
+  <div class="mk" style="left:-2px;top:26px"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m15f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m15s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m15a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="24.8" ry="5.516075275247054" fill="url(#m15s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m15a)"/>
+    <path d="M 77.6 57 L 78.8 70 L 81.2 70 L 82.4 57 Z" fill="rgb(52, 154, 113)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(65,192,141)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 0)">
+      <path d="M 80 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 44 L 120 44 L 120 51.5 A 7.5 7.5 0 0 1 112.5 59 L 47.5 59 A 7.5 7.5 0 0 1 40 51.5 L 40 44 L 59.5 44 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="url(#m15f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgba(255,255,255,.94)" stroke-width="5"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgba(65,192,141, 0.3)" stroke-width="3"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgb(65,192,141)" stroke-width="3" stroke-linecap="round"
+            stroke-dasharray="50.90654583419539 133.9645943005142" stroke-dashoffset="178.37114013470958"/>
+      <text opacity="1" x="80" y="51.5" font-size="10.5" font-weight="700" fill="#151B20" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">Grillen im Park</text>
+      <g><rect x="63" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED"/>
+      <text x="80" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">LM</text></g>
+      
+      
+    </g>
+  </svg></div><div class="mk" style="left:156px;top:136px"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m16f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m16s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m16a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="35.96" ry="5.516075275247054" fill="url(#m16s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m16a)"/>
+    <path d="M 77.6 57 L 78.8 70 L 81.2 70 L 82.4 57 Z" fill="rgb(179, 130, 50)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(224,162,62)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 0)">
+      <path d="M 80 6 L 124 6 A 14 14 0 0 1 138 20 L 138 44 L 120 44 L 120 51.5 A 7.5 7.5 0 0 1 112.5 59 L 47.5 59 A 7.5 7.5 0 0 1 40 51.5 L 40 44 L 22 44 L 22 20 A 14 14 0 0 1 36 6 Z" fill="url(#m16f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      <path d="M 36 6 L 124 6 A 14 14 0 0 1 138 20 L 138 30 A 14 14 0 0 1 124 44 L 36 44 A 14 14 0 0 1 22 30 L 22 20 A 14 14 0 0 1 36 6 Z" fill="none" stroke="rgba(255,255,255,.94)" stroke-width="5"/>
+      <path d="M 36 6 L 124 6 A 14 14 0 0 1 138 20 L 138 30 A 14 14 0 0 1 124 44 L 36 44 A 14 14 0 0 1 22 30 L 22 20 A 14 14 0 0 1 36 6 Z" fill="none" stroke="rgba(224,162,62, 0.3)" stroke-width="3"/>
+      <path d="M 36 6 L 124 6 A 14 14 0 0 1 138 20 L 138 30 A 14 14 0 0 1 124 44 L 36 44 A 14 14 0 0 1 22 30 L 22 20 A 14 14 0 0 1 36 6 Z" fill="none" stroke="rgb(224,162,62)" stroke-width="3" stroke-linecap="round"
+            stroke-dasharray="204.45450789637022 283.9645943005142" stroke-dashoffset="444.4191021968844"/>
+      <text opacity="1" x="80" y="51.5" font-size="10.5" font-weight="700" fill="#151B20" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">Feierabendbier</text>
+      <g><rect x="25.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="42.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">JK</text></g><g><rect x="50.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="67.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">AS</text></g><g><rect x="75.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="92.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">MR</text></g><g><rect x="100.5" y="8" width="34" height="34" rx="12.24"
+      fill="#101619" stroke="#fff" stroke-width="1.4"/>
+      <text x="117.5" y="25" font-size="15" font-weight="800"
+        fill="#fff" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">+3</text></g>
+      
+      <g><rect x="130" y="1" width="16" height="16" rx="8" fill="#FF3B30" stroke="#fff" stroke-width="1.5"/>
+        <text x="138" y="9" font-size="8.5" font-weight="800" fill="#fff" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">3</text></g>
+    </g>
+  </svg></div><div class="mk" style="left:38px;top:244px"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m17f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m17s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m17a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="20.46" ry="5.516075275247054" fill="url(#m17s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m17a)"/>
+    <path d="M 77.6 57 L 78.8 70 L 81.2 70 L 82.4 57 Z" fill="rgb(47, 104, 197)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(59,130,246)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 0)">
+      <path d="M 80 6 L 99 6 A 14 14 0 0 1 113 20 L 113 44 L 100 44 L 100 51.5 A 7.5 7.5 0 0 1 92.5 59 L 67.5 59 A 7.5 7.5 0 0 1 60 51.5 L 60 44 L 47 44 L 47 20 A 14 14 0 0 1 61 6 Z" fill="url(#m17f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      
+      <text opacity="1" x="80" y="51.5" font-size="10.5" font-weight="700" fill="#151B20" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">Kaffee</text>
+      <g><rect x="50.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="67.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">TN</text></g><g><rect x="75.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="92.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">BW</text></g>
+      
+      
+    </g>
+  </svg></div><div class="mk" style="left:228px;top:222px"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m18f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m18s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m18a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="15.81" ry="5.516075275247054" fill="url(#m18s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m18a)"/>
+    <path d="M 77.6 57 L 78.8 70 L 81.2 70 L 82.4 57 Z" fill="rgb(52, 154, 113)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(65,192,141)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 0)">
+      <path d="M 80 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 44 L 105.5 44 L 105.5 51.5 A 7.5 7.5 0 0 1 98 59 L 62 59 A 7.5 7.5 0 0 1 54.5 51.5 L 54.5 44 L 59.5 44 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="url(#m18f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgba(255,255,255,.94)" stroke-width="5"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgba(65,192,141, 0.3)" stroke-width="3"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgb(65,192,141)" stroke-width="3" stroke-linecap="round"
+            stroke-dasharray="120.56813487046277 133.9645943005142" stroke-dashoffset="248.03272917097695"/>
+      <text opacity="1" x="80" y="51.5" font-size="10.5" font-weight="700" fill="#151B20" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">Bouldern</text>
+      <g><rect x="63" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED"/>
+      <text x="80" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">SD</text></g>
+      <circle cx="59.5" cy="8" r="7" fill="#101619" stroke="#fff" stroke-width="1.5"/>
+      
+    </g>
+  </svg></div><div class="mk" style="left:16px;top:374px"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m19f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m19s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m19a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="28.83" ry="5.516075275247054" fill="url(#m19s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m19a)"/>
+    <path d="M 77.6 57 L 78.8 70 L 81.2 70 L 82.4 57 Z" fill="rgb(179, 130, 50)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(224,162,62)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 0)">
+      <path d="M 80 6 L 111.5 6 A 14 14 0 0 1 125.5 20 L 125.5 44 L 126.5 44 L 126.5 51.5 A 7.5 7.5 0 0 1 119 59 L 41 59 A 7.5 7.5 0 0 1 33.5 51.5 L 33.5 44 L 34.5 44 L 34.5 20 A 14 14 0 0 1 48.5 6 Z" fill="url(#m19f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      <path d="M 48.5 6 L 111.5 6 A 14 14 0 0 1 125.5 20 L 125.5 30 A 14 14 0 0 1 111.5 44 L 48.5 44 A 14 14 0 0 1 34.5 30 L 34.5 20 A 14 14 0 0 1 48.5 6 Z" fill="none" stroke="rgba(255,255,255,.94)" stroke-width="5"/>
+      <path d="M 48.5 6 L 111.5 6 A 14 14 0 0 1 125.5 20 L 125.5 30 A 14 14 0 0 1 111.5 44 L 48.5 44 A 14 14 0 0 1 34.5 30 L 34.5 20 A 14 14 0 0 1 48.5 6 Z" fill="none" stroke="rgba(224,162,62, 0.3)" stroke-width="3"/>
+      <path d="M 48.5 6 L 111.5 6 A 14 14 0 0 1 125.5 20 L 125.5 30 A 14 14 0 0 1 111.5 44 L 48.5 44 A 14 14 0 0 1 34.5 30 L 34.5 20 A 14 14 0 0 1 48.5 6 Z" fill="none" stroke="rgb(224,162,62)" stroke-width="3" stroke-linecap="round"
+            stroke-dasharray="46.792918860102844 233.9645943005142" stroke-dashoffset="249.257513160617"/>
+      <text opacity="1" x="80" y="51.5" font-size="10.5" font-weight="700" fill="#151B20" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">Kino heute Abend</text>
+      <g><rect x="38" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="55" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">PL</text></g><g><rect x="63" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="80" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">KH</text></g><g><rect x="88" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="105" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">RS</text></g>
+      
+      
+    </g>
+  </svg></div><div class="mk" style="left:206px;top:458px"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m20f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m20s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m20a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="17.669999999999998" ry="5.516075275247054" fill="url(#m20s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m20a)"/>
+    <path d="M 77.6 57 L 78.8 70 L 81.2 70 L 82.4 57 Z" fill="rgb(52, 154, 113)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(65,192,141)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 0)">
+      <path d="M 80 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 44 L 108.5 44 L 108.5 51.5 A 7.5 7.5 0 0 1 101 59 L 59 59 A 7.5 7.5 0 0 1 51.5 51.5 L 51.5 44 L 59.5 44 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="url(#m20f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgba(255,255,255,.94)" stroke-width="5"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgba(65,192,141, 0.3)" stroke-width="3"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgb(65,192,141)" stroke-width="3" stroke-linecap="round"
+            stroke-dasharray="73.68052686528281 133.9645943005142" stroke-dashoffset="201.145121165797"/>
+      <text opacity="1" x="80" y="51.5" font-size="10.5" font-weight="700" fill="#151B20" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">Laufrunde</text>
+      <g><rect x="63" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED"/>
+      <text x="80" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">EV</text></g>
+      
+      
+    </g>
+  </svg></div>
+</div></div><div><div class="ph">Nacht</div><div class="panel"><svg width="390" height="600" viewBox="0 0 390 600" style="position:absolute;inset:0">
+    <rect width="390" height="600" fill="#212121"/><rect x="0" y="330" width="390" height="44" fill="#17242E"/>
+    <rect x="180" y="0" width="26" height="600" fill="#6E6353"/><rect x="0" y="238" width="390" height="22" fill="#6E6353"/>
+    <rect x="0" y="120" width="390" height="14" fill="#E8D6AE"/><rect x="106" y="0" width="12" height="600" fill="#E8D6AE"/>
+    <rect x="0" y="466" width="390" height="14" fill="#E8D6AE"/><rect x="272" y="0" width="10" height="600" fill="#E8D6AE"/>
+    <rect x="288" y="404" width="94" height="54" rx="6" fill="#1E2A20"/>
+    <rect x="14" y="40" width="96" height="74" rx="3" fill="#2B2B2B" stroke="#3A3A3A" stroke-width="1"/><rect x="126" y="26" width="104" height="88" rx="3" fill="#2B2B2B" stroke="#3A3A3A" stroke-width="1"/><rect x="246" y="52" width="118" height="62" rx="3" fill="#2B2B2B" stroke="#3A3A3A" stroke-width="1"/><rect x="18" y="140" width="88" height="96" rx="3" fill="#2B2B2B" stroke="#3A3A3A" stroke-width="1"/><rect x="122" y="146" width="58" height="60" rx="3" fill="#2B2B2B" stroke="#3A3A3A" stroke-width="1"/><rect x="196" y="138" width="74" height="84" rx="3" fill="#2B2B2B" stroke="#3A3A3A" stroke-width="1"/><rect x="286" y="150" width="86" height="70" rx="3" fill="#2B2B2B" stroke="#3A3A3A" stroke-width="1"/><rect x="24" y="268" width="110" height="66" rx="3" fill="#2B2B2B" stroke="#3A3A3A" stroke-width="1"/><rect x="150" y="258" width="92" height="88" rx="3" fill="#2B2B2B" stroke="#3A3A3A" stroke-width="1"/><rect x="262" y="272" width="104" height="58" rx="3" fill="#2B2B2B" stroke="#3A3A3A" stroke-width="1"/><rect x="16" y="388" width="80" height="74" rx="3" fill="#2B2B2B" stroke="#3A3A3A" stroke-width="1"/><rect x="112" y="396" width="120" height="52" rx="3" fill="#2B2B2B" stroke="#3A3A3A" stroke-width="1"/><rect x="248" y="378" width="116" height="90" rx="3" fill="#2B2B2B" stroke="#3A3A3A" stroke-width="1"/><rect x="28" y="494" width="104" height="72" rx="3" fill="#2B2B2B" stroke="#3A3A3A" stroke-width="1"/><rect x="152" y="500" width="86" height="64" rx="3" fill="#2B2B2B" stroke="#3A3A3A" stroke-width="1"/><rect x="258" y="486" width="108" height="80" rx="3" fill="#2B2B2B" stroke="#3A3A3A" stroke-width="1"/>
+  </svg>
+  <div class="mk" style="left:-2px;top:26px"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m21f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m21s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m21a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="24.8" ry="5.516075275247054" fill="url(#m21s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m21a)"/>
+    <path d="M 77.6 57 L 78.8 70 L 81.2 70 L 82.4 57 Z" fill="rgb(52, 154, 113)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(65,192,141)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 0)">
+      <path d="M 80 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 44 L 120 44 L 120 51.5 A 7.5 7.5 0 0 1 112.5 59 L 47.5 59 A 7.5 7.5 0 0 1 40 51.5 L 40 44 L 59.5 44 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="url(#m21f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgba(255,255,255,.94)" stroke-width="5"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgba(65,192,141, 0.3)" stroke-width="3"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgb(65,192,141)" stroke-width="3" stroke-linecap="round"
+            stroke-dasharray="50.90654583419539 133.9645943005142" stroke-dashoffset="178.37114013470958"/>
+      <text opacity="1" x="80" y="51.5" font-size="10.5" font-weight="700" fill="#151B20" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">Grillen im Park</text>
+      <g><rect x="63" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED"/>
+      <text x="80" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">LM</text></g>
+      
+      
+    </g>
+  </svg></div><div class="mk" style="left:156px;top:136px"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m22f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m22s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m22a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="35.96" ry="5.516075275247054" fill="url(#m22s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m22a)"/>
+    <path d="M 77.6 57 L 78.8 70 L 81.2 70 L 82.4 57 Z" fill="rgb(179, 130, 50)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(224,162,62)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 0)">
+      <path d="M 80 6 L 124 6 A 14 14 0 0 1 138 20 L 138 44 L 120 44 L 120 51.5 A 7.5 7.5 0 0 1 112.5 59 L 47.5 59 A 7.5 7.5 0 0 1 40 51.5 L 40 44 L 22 44 L 22 20 A 14 14 0 0 1 36 6 Z" fill="url(#m22f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      <path d="M 36 6 L 124 6 A 14 14 0 0 1 138 20 L 138 30 A 14 14 0 0 1 124 44 L 36 44 A 14 14 0 0 1 22 30 L 22 20 A 14 14 0 0 1 36 6 Z" fill="none" stroke="rgba(255,255,255,.94)" stroke-width="5"/>
+      <path d="M 36 6 L 124 6 A 14 14 0 0 1 138 20 L 138 30 A 14 14 0 0 1 124 44 L 36 44 A 14 14 0 0 1 22 30 L 22 20 A 14 14 0 0 1 36 6 Z" fill="none" stroke="rgba(224,162,62, 0.3)" stroke-width="3"/>
+      <path d="M 36 6 L 124 6 A 14 14 0 0 1 138 20 L 138 30 A 14 14 0 0 1 124 44 L 36 44 A 14 14 0 0 1 22 30 L 22 20 A 14 14 0 0 1 36 6 Z" fill="none" stroke="rgb(224,162,62)" stroke-width="3" stroke-linecap="round"
+            stroke-dasharray="204.45450789637022 283.9645943005142" stroke-dashoffset="444.4191021968844"/>
+      <text opacity="1" x="80" y="51.5" font-size="10.5" font-weight="700" fill="#151B20" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">Feierabendbier</text>
+      <g><rect x="25.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="42.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">JK</text></g><g><rect x="50.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="67.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">AS</text></g><g><rect x="75.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="92.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">MR</text></g><g><rect x="100.5" y="8" width="34" height="34" rx="12.24"
+      fill="#101619" stroke="#fff" stroke-width="1.4"/>
+      <text x="117.5" y="25" font-size="15" font-weight="800"
+        fill="#fff" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">+3</text></g>
+      
+      <g><rect x="130" y="1" width="16" height="16" rx="8" fill="#FF3B30" stroke="#fff" stroke-width="1.5"/>
+        <text x="138" y="9" font-size="8.5" font-weight="800" fill="#fff" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">3</text></g>
+    </g>
+  </svg></div><div class="mk" style="left:38px;top:244px"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m23f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m23s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m23a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="20.46" ry="5.516075275247054" fill="url(#m23s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m23a)"/>
+    <path d="M 77.6 57 L 78.8 70 L 81.2 70 L 82.4 57 Z" fill="rgb(47, 104, 197)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(59,130,246)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 0)">
+      <path d="M 80 6 L 99 6 A 14 14 0 0 1 113 20 L 113 44 L 100 44 L 100 51.5 A 7.5 7.5 0 0 1 92.5 59 L 67.5 59 A 7.5 7.5 0 0 1 60 51.5 L 60 44 L 47 44 L 47 20 A 14 14 0 0 1 61 6 Z" fill="url(#m23f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      
+      <text opacity="1" x="80" y="51.5" font-size="10.5" font-weight="700" fill="#151B20" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">Kaffee</text>
+      <g><rect x="50.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="67.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">TN</text></g><g><rect x="75.5" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="92.5" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">BW</text></g>
+      
+      
+    </g>
+  </svg></div><div class="mk" style="left:228px;top:222px"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m24f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m24s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m24a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="15.81" ry="5.516075275247054" fill="url(#m24s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m24a)"/>
+    <path d="M 77.6 57 L 78.8 70 L 81.2 70 L 82.4 57 Z" fill="rgb(52, 154, 113)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(65,192,141)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 0)">
+      <path d="M 80 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 44 L 105.5 44 L 105.5 51.5 A 7.5 7.5 0 0 1 98 59 L 62 59 A 7.5 7.5 0 0 1 54.5 51.5 L 54.5 44 L 59.5 44 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="url(#m24f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgba(255,255,255,.94)" stroke-width="5"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgba(65,192,141, 0.3)" stroke-width="3"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgb(65,192,141)" stroke-width="3" stroke-linecap="round"
+            stroke-dasharray="120.56813487046277 133.9645943005142" stroke-dashoffset="248.03272917097695"/>
+      <text opacity="1" x="80" y="51.5" font-size="10.5" font-weight="700" fill="#151B20" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">Bouldern</text>
+      <g><rect x="63" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED"/>
+      <text x="80" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">SD</text></g>
+      <circle cx="59.5" cy="8" r="7" fill="#101619" stroke="#fff" stroke-width="1.5"/>
+      
+    </g>
+  </svg></div><div class="mk" style="left:16px;top:374px"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m25f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m25s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m25a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="28.83" ry="5.516075275247054" fill="url(#m25s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m25a)"/>
+    <path d="M 77.6 57 L 78.8 70 L 81.2 70 L 82.4 57 Z" fill="rgb(179, 130, 50)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(224,162,62)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 0)">
+      <path d="M 80 6 L 111.5 6 A 14 14 0 0 1 125.5 20 L 125.5 44 L 126.5 44 L 126.5 51.5 A 7.5 7.5 0 0 1 119 59 L 41 59 A 7.5 7.5 0 0 1 33.5 51.5 L 33.5 44 L 34.5 44 L 34.5 20 A 14 14 0 0 1 48.5 6 Z" fill="url(#m25f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      <path d="M 48.5 6 L 111.5 6 A 14 14 0 0 1 125.5 20 L 125.5 30 A 14 14 0 0 1 111.5 44 L 48.5 44 A 14 14 0 0 1 34.5 30 L 34.5 20 A 14 14 0 0 1 48.5 6 Z" fill="none" stroke="rgba(255,255,255,.94)" stroke-width="5"/>
+      <path d="M 48.5 6 L 111.5 6 A 14 14 0 0 1 125.5 20 L 125.5 30 A 14 14 0 0 1 111.5 44 L 48.5 44 A 14 14 0 0 1 34.5 30 L 34.5 20 A 14 14 0 0 1 48.5 6 Z" fill="none" stroke="rgba(224,162,62, 0.3)" stroke-width="3"/>
+      <path d="M 48.5 6 L 111.5 6 A 14 14 0 0 1 125.5 20 L 125.5 30 A 14 14 0 0 1 111.5 44 L 48.5 44 A 14 14 0 0 1 34.5 30 L 34.5 20 A 14 14 0 0 1 48.5 6 Z" fill="none" stroke="rgb(224,162,62)" stroke-width="3" stroke-linecap="round"
+            stroke-dasharray="46.792918860102844 233.9645943005142" stroke-dashoffset="249.257513160617"/>
+      <text opacity="1" x="80" y="51.5" font-size="10.5" font-weight="700" fill="#151B20" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">Kino heute Abend</text>
+      <g><rect x="38" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="55" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">PL</text></g><g><rect x="63" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="80" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">KH</text></g><g><rect x="88" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED" stroke="#fff" stroke-width="1.4"/>
+      <text x="105" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">RS</text></g>
+      
+      
+    </g>
+  </svg></div><div class="mk" style="left:206px;top:458px"><svg width="160" height="112" viewBox="0 0 160 112"><defs>
+    <linearGradient id="m26f" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F1F3F6"/></linearGradient>
+    <radialGradient id="m26s" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset=".55" stop-color="#101619" stop-opacity=".11"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient>
+    <radialGradient id="m26a" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#101619" stop-opacity=".30"/><stop offset="1" stop-color="#101619" stop-opacity="0"/></radialGradient></defs>
+    <ellipse cx="80" cy="78" rx="17.669999999999998" ry="5.516075275247054" fill="url(#m26s)"/>
+    <ellipse cx="80" cy="78" rx="9" ry="2.5" fill="url(#m26a)"/>
+    <path d="M 77.6 57 L 78.8 70 L 81.2 70 L 82.4 57 Z" fill="rgb(52, 154, 113)"/>
+    <circle cx="80" cy="78" r="2.4" fill="rgb(65,192,141)" stroke="#fff" stroke-width="1"/>
+    <g transform="translate(0 0)">
+      <path d="M 80 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 44 L 108.5 44 L 108.5 51.5 A 7.5 7.5 0 0 1 101 59 L 59 59 A 7.5 7.5 0 0 1 51.5 51.5 L 51.5 44 L 59.5 44 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="url(#m26f)" stroke="rgba(15,20,23,.05)" stroke-width="1"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgba(255,255,255,.94)" stroke-width="5"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgba(65,192,141, 0.3)" stroke-width="3"/>
+      <path d="M 73.5 6 L 86.5 6 A 14 14 0 0 1 100.5 20 L 100.5 30 A 14 14 0 0 1 86.5 44 L 73.5 44 A 14 14 0 0 1 59.5 30 L 59.5 20 A 14 14 0 0 1 73.5 6 Z" fill="none" stroke="rgb(65,192,141)" stroke-width="3" stroke-linecap="round"
+            stroke-dasharray="73.68052686528281 133.9645943005142" stroke-dashoffset="201.145121165797"/>
+      <text opacity="1" x="80" y="51.5" font-size="10.5" font-weight="700" fill="#151B20" text-anchor="middle" dominant-baseline="central" font-family="ui-sans-serif,system-ui">Laufrunde</text>
+      <g><rect x="63" y="8" width="34" height="34" rx="12.24"
+      fill="#E3E8ED"/>
+      <text x="80" y="25" font-size="15" font-weight="800"
+        fill="#28323B" text-anchor="middle" dominant-baseline="central"
+        font-family="ui-sans-serif,system-ui">EV</text></g>
+      
+      
+    </g>
+  </svg></div>
+</div></div></div>
+
+<h2>Maße</h2>
+<div class="card"><table>
+<tr><td>Leinwand</td><td class="n">160 × 112</td><td>vorher 160 × 150</td></tr>
+<tr><td>Schale</td><td class="n">38 hoch, Radius 14</td><td>Squircle, keine Pille</td></tr>
+<tr><td>Titelband</td><td class="n">15 / 26</td><td>unten weich gerundet</td></tr>
+<tr><td>Übergang</td><td class="n">horizontal</td><td>keine Schräge zwischen Profilen und Titel</td></tr>
+<tr><td>Sockel</td><td class="n">entfernt</td><td>keine farbige Unterkante</td></tr>
+<tr><td>Oberkante bis Boden</td><td class="n">72 px</td><td>vorher 102</td></tr>
+</table></div>
+</div></body></html>

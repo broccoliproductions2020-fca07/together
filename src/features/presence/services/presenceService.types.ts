@@ -47,6 +47,13 @@ export interface PresenceInput {
   coarseLocation?: CoarseLocation | null;
 }
 
+export interface PresenceWriteResult {
+  /** The server may cap the requested window at a confirmed Activity start. */
+  expiresAt?: number;
+  /** A running Activity makes Open invalid and removes the remote presence. */
+  closed?: boolean;
+}
+
 /**
  * Presence backend seam. ONE always-on listener (friends who are open).
  * setPresence upserts the caller's own doc; clearPresence deletes it (so going
@@ -54,6 +61,6 @@ export interface PresenceInput {
  */
 export interface PresenceService {
   subscribeOpenFriends(actor: PresenceActor, cb: (docs: PresenceDoc[]) => void): Unsubscribe;
-  setPresence(actor: PresenceActor, input: PresenceInput): Promise<void>;
-  clearPresence(actor: PresenceActor): void;
+  setPresence(actor: PresenceActor, input: PresenceInput): Promise<PresenceWriteResult>;
+  clearPresence(actor: PresenceActor): Promise<void>;
 }

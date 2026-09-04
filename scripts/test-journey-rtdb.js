@@ -20,14 +20,15 @@ async function signInAnon() {
   return { uid: json.localId, token: json.idToken };
 }
 
-function dbUrl(path, token) {
+function dbUrl(path, token, query = {}) {
   const params = new URLSearchParams({ ns: DATABASE_NS });
   if (token) params.set('auth', token);
+  Object.entries(query).forEach(([key, value]) => params.set(key, String(value)));
   return `${DB_BASE}${path}.json?${params.toString()}`;
 }
 
-async function dbRequest(method, path, token, body) {
-  const response = await fetch(dbUrl(path, token), {
+async function dbRequest(method, path, token, body, query) {
+  const response = await fetch(dbUrl(path, token, query), {
     method,
     headers: { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -62,7 +63,10 @@ async function main() {
   const bob = await signInAnon();
   const stranger = await signInAnon();
   const activityId = `smoke-${Date.now()}`;
+  const journeySessionId = `session-${Date.now()}`;
   const validLocation = {
+    uid: alice.uid,
+    sessionId: journeySessionId,
     lat: 52.5208,
     lng: 13.4095,
     status: 'onTheWay',
@@ -89,7 +93,12 @@ async function main() {
 
   await expectDenied(
     'client cannot write location before server membership approval',
-    dbRequest('PUT', `/journeys/${activityId}/locations/${alice.uid}`, alice.token, validLocation),
+    dbRequest(
+      'PUT',
+      `/journeys/${activityId}/locations/${journeySessionId}`,
+      alice.token,
+      validLocation,
+    ),
   );
 
   await expectDenied(
@@ -106,7 +115,7 @@ async function main() {
 
   await expectDenied(
     'invalid coordinate payload is rejected without membership',
-    dbRequest('PUT', `/journeys/${activityId}/locations/${alice.uid}`, alice.token, {
+    dbRequest('PUT', `/journeys/${activityId}/locations/${journeySessionId}`, alice.token, {
       ...validLocation,
       lat: 200,
     }),
@@ -141,6 +150,7 @@ async function main() {
       [`journeys/${activityId}`]: {
         expiresAt: now + 60 * 60 * 1000,
         members: { [alice.uid]: true, [bob.uid]: true },
+        sessions: { [alice.uid]: journeySessionId },
       },
     });
 
@@ -186,24 +196,41 @@ async function main() {
     }),
   );
   const approvedJourneyLocation = {
+    uid: alice.uid,
+    sessionId: journeySessionId,
     lat: 52.5208,
     lng: 13.4095,
     status: 'onTheWay',
     updatedAt: Date.now(),
-    expiresAt: now + 30 * 60 * 1000,
+    expiresAt: Date.now() + 2 * 60 * 1000,
   };
   await expectOk(
     'approved member can publish one journey location',
     dbRequest(
       'PUT',
-      `/journeys/${activityId}/locations/${alice.uid}`,
+      `/journeys/${activityId}/locations/${journeySessionId}`,
       alice.token,
       approvedJourneyLocation,
     ),
   );
   await expectDenied(
+    'member cannot read all journey locations at once',
+    dbRequest('GET', `/journeys/${activityId}/locations`, bob.token),
+  );
+  const activeJourneySessions = await expectOk(
+    'member can discover active journey sessions',
+    dbRequest('GET', `/journeys/${activityId}/sessions`, bob.token),
+  );
+  if (activeJourneySessions.json?.[alice.uid] !== journeySessionId) {
+    throw new Error('active journey session was not returned');
+  }
+  await expectOk(
+    'member can read a fresh journey point by its active session',
+    dbRequest('GET', `/journeys/${activityId}/locations/${journeySessionId}`, bob.token),
+  );
+  await expectDenied(
     'approved member cannot flood journey locations',
-    dbRequest('PUT', `/journeys/${activityId}/locations/${alice.uid}`, alice.token, {
+    dbRequest('PUT', `/journeys/${activityId}/locations/${journeySessionId}`, alice.token, {
       ...approvedJourneyLocation,
       lat: 52.521,
       updatedAt: Date.now(),
@@ -211,7 +238,7 @@ async function main() {
   );
   await expectDenied(
     'invalid coordinate payload is rejected after membership approval',
-    dbRequest('PUT', `/journeys/${activityId}/locations/${alice.uid}`, alice.token, {
+    dbRequest('PUT', `/journeys/${activityId}/locations/${journeySessionId}`, alice.token, {
       ...approvedJourneyLocation,
       lat: 200,
       updatedAt: approvedJourneyLocation.updatedAt + 20_000,
@@ -219,7 +246,7 @@ async function main() {
   );
   await expectDenied(
     'approved member cannot add arbitrary Journey location fields',
-    dbRequest('PUT', `/journeys/${activityId}/locations/${alice.uid}`, alice.token, {
+    dbRequest('PUT', `/journeys/${activityId}/locations/${journeySessionId}`, alice.token, {
       ...approvedJourneyLocation,
       updatedAt: approvedJourneyLocation.updatedAt + 20_000,
       payload: 'blocked',
@@ -280,18 +307,38 @@ async function main() {
 
   await adminApp
     .database()
+    .ref(`journeys/${activityId}/locations/${journeySessionId}/expiresAt`)
+    .set(Date.now() - 61_000);
+  await expectDenied(
+    'member cannot reopen an expired journey point',
+    dbRequest('GET', `/journeys/${activityId}/locations/${journeySessionId}`, bob.token),
+  );
+
+  await adminApp
+    .database()
     .ref(`journeys/${activityId}/expiresAt`)
     .set(Date.now() - 1_000);
   await expectDenied(
     'member cannot read an expired journey room',
-    dbRequest('GET', `/journeys/${activityId}/locations`, bob.token),
+    dbRequest('GET', `/journeys/${activityId}/locations`, bob.token, undefined, {
+      orderBy: JSON.stringify('expiresAt'),
+      startAt: Date.now() - 30_000,
+    }),
   );
   await expectDenied(
     'member cannot write to an expired journey room',
-    dbRequest('PUT', `/journeys/${activityId}/locations/${alice.uid}`, alice.token, {
+    dbRequest('PUT', `/journeys/${activityId}/locations/${journeySessionId}`, alice.token, {
       ...approvedJourneyLocation,
       updatedAt: approvedJourneyLocation.updatedAt + 40_000,
     }),
+  );
+  await expectOk(
+    'owner can delete their point after the journey room expired',
+    dbRequest(
+      'DELETE',
+      `/journeys/${activityId}/locations/${journeySessionId}`,
+      alice.token,
+    ),
   );
 
   await adminApp

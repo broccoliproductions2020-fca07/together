@@ -1,6 +1,8 @@
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { StyleSheet, View } from 'react-native';
 
+import { AUTH_CONTROL_HEIGHT } from './authInteractionStyles';
+
 type AppleSignInButtonProps = {
   disabled?: boolean;
   onPress: () => void;
@@ -23,7 +25,7 @@ export function AppleSignInButton({ disabled = false, onPress }: AppleSignInButt
 
 const styles = StyleSheet.create({
   button: {
-    height: 56,
+    height: AUTH_CONTROL_HEIGHT,
     width: '100%',
   },
   disabled: {

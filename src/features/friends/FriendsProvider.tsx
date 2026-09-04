@@ -13,6 +13,7 @@ import { useAuth } from '@/features/auth';
 
 import { friendService } from './services/friendService';
 import { loadCachedFriendships, saveCachedFriendships } from './services/friendshipCache';
+import { usePendingInviteRedeem } from './usePendingInviteRedeem';
 import type {
   FriendActor,
   FriendRequestPolicy,
@@ -49,6 +50,8 @@ interface FriendsContextValue {
     activityId: string,
   ) => Promise<SendFriendRequestResult>;
   respondToFriendRequest: (friendshipId: string, accept: boolean) => Promise<void>;
+  /** Takes back a request this user sent. Keyed by the other person's uid. */
+  withdrawFriendRequest: (uid: string) => Promise<void>;
   removeFriend: (uid: string) => Promise<void>;
   toggleCloseFriend: (uid: string) => Promise<void>;
   setHeimwegGroup: (uids: string[]) => Promise<void>;
@@ -224,6 +227,10 @@ export function FriendsProvider({ children }: { children: ReactNode }) {
     },
     [actor, refreshFriendships],
   );
+  // An invite link caught before sign-in becomes a real request here — this is
+  // the first point at which a verified session and the callable both exist.
+  usePendingInviteRedeem(sendFriendRequest, friendshipsHydrated);
+
   const searchPeople = useCallback(
     (query: string) => friendService.searchPeople(actor, query),
     [actor],
@@ -243,6 +250,13 @@ export function FriendsProvider({ children }: { children: ReactNode }) {
   const respondToFriendRequest = useCallback(
     async (friendshipId: string, accept: boolean) => {
       await friendService.respondToFriendRequest(actor, friendshipId, accept);
+      await refreshFriendships();
+    },
+    [actor, refreshFriendships],
+  );
+  const withdrawFriendRequest = useCallback(
+    async (uid: string) => {
+      await friendService.withdrawFriendRequest(actor, uid);
       await refreshFriendships();
     },
     [actor, refreshFriendships],
@@ -322,6 +336,7 @@ export function FriendsProvider({ children }: { children: ReactNode }) {
       searchPeople,
       sendActivityFriendRequest,
       respondToFriendRequest,
+      withdrawFriendRequest,
       removeFriend,
       toggleCloseFriend,
       setHeimwegGroup,
@@ -345,6 +360,7 @@ export function FriendsProvider({ children }: { children: ReactNode }) {
       searchPeople,
       sendActivityFriendRequest,
       respondToFriendRequest,
+      withdrawFriendRequest,
       removeFriend,
       toggleCloseFriend,
       setHeimwegGroup,

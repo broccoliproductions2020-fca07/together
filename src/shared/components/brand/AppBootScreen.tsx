@@ -1,12 +1,12 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import Animated, { FadeOut } from 'react-native-reanimated';
+import Animated, { FadeIn, FadeOut, useReducedMotion } from 'react-native-reanimated';
 
 import { TEXT_CAPPED, TEXT_FLEXIBLE } from '@/shared/theme';
 
 import { BrandBackdrop } from './BrandBackdrop';
 import { TOGETHER_BRAND } from './brandTokens';
-import { TogetherLoader } from './TogetherLoader';
+import { LOADER_MARK_SHARE, TogetherLoader } from './TogetherLoader';
 
 /**
  * Sized to match the figure the NATIVE splash draws, so the hand-over from the
@@ -14,14 +14,14 @@ import { TogetherLoader } from './TogetherLoader';
  *
  * `app.json` renders the 1024² splash asset at `imageWidth: 144`, and the
  * figure occupies 738 of those 1024 pixels vertically — 103.8 dp on screen.
- * `TogetherLoader` lays its mark out at 86 % of `size`, so 121 lands on the
- * same height. (Both widths follow from that: the asset's figure and
+ * `TogetherLoader` lays its mark out at `LOADER_MARK_SHARE` of `size`, so 121
+ * lands on the same height. (Both widths follow from that: the asset's figure and
  * `MICA_FIGURE_ASPECT_RATIO` agree to within 0.2 %.)
  *
- * If either number moves — the plugin's `imageWidth` or the loader's 0.86 —
- * recompute this one, or the mark will visibly jump at the hand-over.
+ * If the plugin's `imageWidth` moves, recompute this one, or the mark will
+ * visibly jump at the hand-over. The loader's share is imported, not copied.
  */
-const SPLASH_MATCHED_LOADER_SIZE = Math.round((144 * (738 / 1024)) / 0.86);
+const SPLASH_MATCHED_LOADER_SIZE = Math.round((144 * (738 / 1024)) / LOADER_MARK_SHARE);
 
 /** Branded boot curtain and the contextual first-use location choice. */
 export function AppBootScreen({
@@ -33,6 +33,8 @@ export function AppBootScreen({
   onRequestLocationPermission?: () => void;
   onSkipLocationPermission?: () => void;
 }) {
+  const reducedMotion = useReducedMotion();
+
   return (
     <Animated.View
       accessibilityLabel={
@@ -43,7 +45,13 @@ export function AppBootScreen({
       exiting={FadeOut.duration(240)}
       style={styles.root}
     >
-      <BrandBackdrop quiet />
+      <Animated.View
+        entering={reducedMotion ? undefined : FadeIn.duration(360)}
+        pointerEvents="none"
+        style={StyleSheet.absoluteFill}
+      >
+        <BrandBackdrop quiet />
+      </Animated.View>
       <SafeAreaView style={styles.safeArea}>
         <View style={[styles.center, locationPermissionIntro && styles.centerWithPermission]}>
           {/* The SAME loader the submit buttons use — the figure's three parts
@@ -54,7 +62,12 @@ export function AppBootScreen({
               `TogetherLoader` sits still under reduced motion on its own. */}
           {/* Unlabelled on purpose: the curtain itself already announces "Mica
               wird geladen", and a second label would read it twice. */}
-          <TogetherLoader size={SPLASH_MATCHED_LOADER_SIZE} accessibilityLabel="" />
+          <TogetherLoader
+            size={SPLASH_MATCHED_LOADER_SIZE}
+            tone="brand"
+            loop={false}
+            accessibilityLabel=""
+          />
           {locationPermissionIntro ? (
             <View style={styles.permissionCard}>
               <Text style={styles.title} {...TEXT_FLEXIBLE}>
@@ -133,7 +146,7 @@ const styles = StyleSheet.create({
   },
   root: {
     backgroundColor: TOGETHER_BRAND.ink,
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     elevation: 100,
     zIndex: 100,
   },

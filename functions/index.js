@@ -18,6 +18,7 @@ const { onTaskDispatched } = require('firebase-functions/v2/tasks');
 const { defineSecret } = require('firebase-functions/params');
 const { cleanupExpiredSurfaces } = require('./cleanup-expired-surfaces');
 const { buildFriendSearchFields, parseFriendSearchQuery, resultScore } = require('./friend-search');
+const { renderVerificationEmail } = require('./email/verificationTemplate');
 
 // Every function runs next to its data. Firestore and Storage live in
 // europe-west3, so leaving the default (us-central1) would send each callable
@@ -144,6 +145,16 @@ const PUSH_OUTBOX_TRIGGER_OPTS = {
   maxInstances: 5,
   timeoutSeconds: 30,
 };
+// Transactional mail provider. Bound ONLY to the delivery trigger below, never
+// to the callable that queues the job: the callable never speaks to Resend, so
+// giving it the secret would widen the blast radius for nothing.
+const RESEND_API_KEY = defineSecret('RESEND_API_KEY');
+const EMAIL_OUTBOX_TRIGGER_OPTS = {
+  ...EVENT_TRIGGER_OPTS,
+  maxInstances: 5,
+  timeoutSeconds: 30,
+  secrets: [RESEND_API_KEY],
+};
 const SERIAL_SCHEDULE_OPTS = { maxInstances: 1, concurrency: 1 };
 const CHAT_RATE_WINDOW_MS = 60 * 1000;
 const CHAT_MESSAGES_PER_WINDOW = 30;
@@ -208,6 +219,11 @@ const SAFETY_AUTO_EXTEND_TASK_OPTS = {
 // device while retaining a prompt first notification.
 const CHAT_PUSH_COOLDOWN_MS = 60 * 1000;
 const PUSH_OUTBOX_MAX_ATTEMPTS = 5;
+const EMAIL_OUTBOX_MAX_ATTEMPTS = 5;
+// Mirrors the SDK throttling we give up by sending verification mail ourselves.
+const EMAIL_VERIFICATION_WINDOW_MS = 10 * 60 * 1000;
+const EMAIL_VERIFICATION_PER_WINDOW = 3;
+const EMAIL_SENDER = 'Mica <hallo@micamap.de>';
 const EXPO_PUSH_TOKEN_RE = /^(?:Expo|Exponent)PushToken\[[A-Za-z0-9_-]{10,512}\]$/;
 const MAX_PRIVATE_CIRCLES = 30;
 const MAX_ACTIVE_ACTIVITIES_PER_HOST = 20;
@@ -222,14 +238,23 @@ const TIME_PLAN_MAX_WINDOWS = 50;
 const TIME_PLAN_MAX_MEMBERS = 50;
 const TIME_PLAN_CREATIONS_PER_HOUR = 8;
 const TIME_PLAN_MAX_AHEAD_MS = 180 * DAY_MS;
-const TIME_PLAN_RETENTION_MS = 14 * DAY_MS;
 const HOUR_MS = 60 * 60 * 1000;
+const ACTIVITY_MIN_DURATION_MS = 15 * 60 * 1000;
+const ACTIVITY_MAX_DURATION_MS = 12 * HOUR_MS;
 const OPEN_MAX_DURATION_MS = 12 * HOUR_MS;
+const OPEN_MIN_DURATION_MS = 15 * 60 * 1000;
 // Kept in the backend for a later launch, but deliberately unavailable now.
 const SOCIALIZE_ENABLED = false;
 // Activity chats intentionally remain available only briefly after an event.
 // Groups are different: their expiry is refreshed after every message.
 const ACTIVITY_CHAT_RETENTION_MS = 12 * HOUR_MS;
+// A round dies with the thing it was arranging, on the SAME clock as that
+// thing's chat. It used to linger 14 days past the last proposed window, which
+// kept "who could make Saturday" readable long after Saturday — an aggregate
+// answered for one decision, outliving the decision. Once a slot is locked the
+// stamp is re-cut from the locked END (see `lockTimePlan`): proposing Fri/Sat/Sun
+// and locking Friday must not keep everyone's availability alive until Sunday.
+const TIME_PLAN_RETENTION_MS = ACTIVITY_CHAT_RETENTION_MS;
 const ACTIVITY_CATEGORIES = new Set([
   'essen',
   'drinks',
@@ -287,6 +312,7 @@ function pushOutboxItem(item) {
     ...(Number.isSafeInteger(item.messageCount) ? { messageCount: item.messageCount } : {}),
     ...(item.safetyOwnerUid ? { safetyOwnerUid: item.safetyOwnerUid } : {}),
     ...(Number.isFinite(item.safetyAlertAt) ? { safetyAlertAt: item.safetyAlertAt } : {}),
+    ...(item.notificationId ? { notificationId: item.notificationId } : {}),
     ...(item.journey ? { journey: item.journey } : {}),
   };
 }
@@ -372,12 +398,7 @@ async function queuePushOnly(items) {
   }
 }
 
-/**
- * The notification action is processed without opening the activity screen on
- * Android. It therefore carries only the already-authorized Activity context
- * required to arm local movement detection; no participant/profile data is
- * included and no position is sent back at this point.
- */
+/** Push carries identity only; arming re-reads current time and destination. */
 function journeyNotificationPayload(activityId, activity) {
   const target = activity?.place;
   if (
@@ -391,9 +412,6 @@ function journeyNotificationPayload(activityId, activity) {
   return {
     activityId,
     title: activity.title.slice(0, 100),
-    ...(typeof activity.startsAt === 'string' ? { startsAt: activity.startsAt } : {}),
-    ...(typeof activity.endsAt === 'string' ? { endsAt: activity.endsAt } : {}),
-    target: { latitude: target.latitude, longitude: target.longitude },
   };
 }
 
@@ -685,6 +703,7 @@ async function deliverPush(items) {
               kind: item.kind,
               safetyOwnerUid: item.safetyOwnerUid,
               safetyAlertAt: item.safetyAlertAt,
+              notificationId: item.notificationId,
               ...(item.journey ? { journey: item.journey } : {}),
             },
             ...(item.kind === 'journey_reminder'
@@ -708,7 +727,16 @@ async function deliverPush(items) {
       }
     });
   });
-  if (!messages.length) return;
+  if (!messages.length) {
+    // Not an error — plenty of accounts never turn notifications on. Logged
+    // because it is otherwise indistinguishable from a delivered push: the job
+    // is deleted either way, and "nothing arrived on the phone" then has no
+    // trace anywhere to tell the two apart.
+    console.log(
+      `[push] no registered device for any of ${recipients.length} recipient(s); nothing sent`,
+    );
+    return;
+  }
   const staleTokensByUid = new Map();
   for (let index = 0; index < messages.length; index += 100) {
     const chunk = messages.slice(index, index + 100);
@@ -722,12 +750,23 @@ async function deliverPush(items) {
     const result = await response.json().catch(() => null);
     const tickets = Array.isArray(result?.data) ? result.data : [];
     tickets.forEach((ticket, ticketIndex) => {
-      if (ticket?.status !== 'error' || ticket?.details?.error !== 'DeviceNotRegistered') return;
+      if (ticket?.status !== 'error') return;
       const entry = chunk[ticketIndex];
-      if (!entry) return;
-      const tokens = staleTokensByUid.get(entry.recipientUid) ?? new Set();
-      tokens.add(entry.token);
-      staleTokensByUid.set(entry.recipientUid, tokens);
+      if (ticket?.details?.error === 'DeviceNotRegistered') {
+        if (!entry) return;
+        const tokens = staleTokensByUid.get(entry.recipientUid) ?? new Set();
+        tokens.add(entry.token);
+        staleTokensByUid.set(entry.recipientUid, tokens);
+        return;
+      }
+      // Every other rejection used to vanish here. Expo answers per message
+      // inside an HTTP 200, so a setup that cannot deliver at all — a missing
+      // APNs key reads as `InvalidCredentials` — looked exactly like success.
+      console.error(
+        `[push] rejected for ${entry?.recipientUid ?? 'unknown'}: ${
+          ticket?.details?.error ?? 'unknown'
+        } — ${String(ticket?.message ?? '').slice(0, 200)}`,
+      );
     });
   }
   await Promise.all(
@@ -773,6 +812,82 @@ exports.deliverPushOutbox = onDocumentCreated(
     }
     try {
       await deliverPush(items);
+      await current.ref.delete();
+    } catch (error) {
+      await current.ref.set(
+        {
+          attempts: attempts + 1,
+          lastError: pushOutboxErrorMessage(error),
+        },
+        { merge: true },
+      );
+      throw error;
+    }
+  },
+);
+
+/**
+ * Sends one queued mail through Resend.
+ *
+ * Kept as a plain fetch rather than the SDK: this is a single POST with a
+ * bearer token, and the dependency would only wrap it. A non-2xx answer throws
+ * so the caller's retry bookkeeping sees it.
+ */
+async function deliverEmail(job) {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) throw new Error('RESEND_API_KEY fehlt');
+  const { subject, html, text } = renderVerificationEmail({
+    displayName: job.displayName,
+    actionLink: job.actionLink,
+  });
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: EMAIL_SENDER,
+      to: [job.recipientEmail],
+      subject,
+      html,
+      text,
+    }),
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(`Resend ${response.status}: ${detail.slice(0, 200)}`);
+  }
+}
+
+/**
+ * Delivers queued mail, mirroring deliverPushOutbox exactly: the callable that
+ * queued the job never waited for the external API, so everything that can fail
+ * slowly fails here, where the platform retries it.
+ */
+exports.deliverEmailOutbox = onDocumentCreated(
+  { document: 'emailOutbox/{outboxId}', retry: true, ...EMAIL_OUTBOX_TRIGGER_OPTS },
+  async (event) => {
+    const snapshot = event.data;
+    if (!snapshot) return;
+    const current = await snapshot.ref.get();
+    if (!current.exists) return;
+    const data = current.data() ?? {};
+    if (!data.recipientEmail || !data.actionLink) {
+      console.error('[email] discarding malformed outbox job', current.id);
+      await current.ref.delete();
+      return;
+    }
+    // An action link is short-lived; retrying a stale one only mails a dead
+    // button. Better to drop it and let the person press "erneut senden".
+    const attempts = Number.isSafeInteger(data.attempts) ? data.attempts : 0;
+    if (attempts >= EMAIL_OUTBOX_MAX_ATTEMPTS) {
+      console.error('[email] discarding permanently failed outbox job', current.id);
+      await current.ref.delete();
+      return;
+    }
+    try {
+      await deliverEmail(data);
       await current.ref.delete();
     } catch (error) {
       await current.ref.set(
@@ -971,7 +1086,7 @@ function bumpFriendshipsVersion(transaction, entries) {
 }
 
 function profileSnapshot(uid, profile) {
-  const displayName = cleanString(profile?.displayName ?? 'Como-Freund', 50, 'Name', true);
+  const displayName = cleanString(profile?.displayName ?? 'Mica-Freund', 50, 'Name', true);
   const initials = cleanString(
     profile?.initials ?? displayName.slice(0, 2).toUpperCase(),
     8,
@@ -997,19 +1112,28 @@ function contactSnapshot(uid, profile) {
   };
 }
 
-/** One bounded query. Pending requests are intentionally read too, so there is
- * no second listener/query just for invitations. */
+/**
+ * The caller's confirmed friends, as one bounded query.
+ *
+ * `status` is filtered SERVER-side (index: participantUids CONTAINS + status
+ * ASC, already deployed for `directPresenceAudienceUids`). Fetching the whole
+ * relationship page and discarding the pending ones in JS billed a read for
+ * every open request as well — and worse, those requests occupied slots inside
+ * the `limit`, so an account with many of them silently resolved a SHORT friend
+ * list. Only `all_friends` needs this full set; every other audience context
+ * goes through `resolveAudienceUids`, which reads just the relationships it
+ * actually names.
+ */
 async function directFriendUids(db, uid) {
   const snapshot = await db
     .collection('friendships')
     .where('participantUids', 'array-contains', uid)
+    .where('status', '==', 'accepted')
     .limit(200)
     .get();
   const friends = new Set();
   snapshot.forEach((relationship) => {
-    const data = relationship.data();
-    if (data.status !== 'accepted') return;
-    (data.participantUids ?? []).forEach((participantUid) => {
+    (relationship.data().participantUids ?? []).forEach((participantUid) => {
       if (participantUid !== uid && typeof participantUid === 'string') friends.add(participantUid);
     });
   });
@@ -1043,10 +1167,10 @@ const MAX_SELECTED_AUDIENCE = 200;
  * recipient list the client is simply trusted on.
  *
  * `selection` widens what a context may be — an explicit set of people — without
- * widening what it may REACH: `audienceForContext` intersects it with the
- * caller's confirmed friendships, so the strongest thing a tampered client can
- * do is address a subset of the friends it could already have reached with
- * `all_friends`. Never resolve a selection without that intersection.
+ * widening what it may REACH: `resolveAudienceUids` confirms every named uid
+ * against the caller's own accepted friendships, so the strongest thing a
+ * tampered client can do is address a subset of the friends it could already
+ * have reached with `all_friends`. Never resolve a selection without that check.
  */
 function parseAudienceContext(input) {
   if (!input || typeof input !== 'object') {
@@ -1084,27 +1208,71 @@ function parseAudienceContext(input) {
   throw new HttpsError('invalid-argument', 'Ungültiger Sichtbarkeitsraum.');
 }
 
-async function audienceForContext(db, uid, context, friends) {
-  if (context.kind === 'all_friends') return [...friends];
+/** `getAll` batch size. Comfortably inside the BatchGetDocuments request limit,
+ * and every named audience is capped at 200 candidates anyway. */
+const FRIENDSHIP_LOOKUP_CHUNK = 50;
 
-  if (context.kind === 'selection') {
-    return context.uids.filter((friendUid) => friends.has(friendUid));
-  }
+/** The people a context NAMES, before any trust check. Never an audience on its
+ * own — the caller still has to confirm every candidate. */
+async function audienceCandidates(db, uid, context) {
+  if (context.kind === 'selection') return context.uids;
 
   if (context.kind === 'close_friends') {
-    const userSnapshot = await db.doc(`users/${uid}`).get();
-    const closeFriendUids = Array.isArray(userSnapshot.data()?.closeFriendUids)
-      ? userSnapshot.data().closeFriendUids
-      : [];
-    return closeFriendUids.filter((friendUid) => friends.has(friendUid));
+    const closeFriendUids = (await db.doc(`users/${uid}`).get()).data()?.closeFriendUids;
+    return Array.isArray(closeFriendUids) ? closeFriendUids : [];
   }
 
   const groupSnapshot = await db.doc(`users/${uid}/privateCircles/${context.groupId}`).get();
   if (!groupSnapshot.exists) throw new HttpsError('not-found', 'Gruppe nicht gefunden.');
-  const memberUids = Array.isArray(groupSnapshot.data()?.friendUids)
-    ? groupSnapshot.data().friendUids
-    : [];
-  return memberUids.filter((friendUid) => friends.has(friendUid));
+  const memberUids = groupSnapshot.data()?.friendUids;
+  return Array.isArray(memberUids) ? memberUids : [];
+}
+
+/**
+ * Confirm a NAMED set of candidates by addressing their relationship documents
+ * directly.
+ *
+ * `friendships/{friendshipId}` is addressable, so a context that already names
+ * its people never has to page the whole friend list just to intersect against
+ * it: a five-person selection costs five reads instead of two hundred. Same
+ * trust boundary as that intersection — a candidate counts only when the
+ * relationship document exists and is `accepted` — so a tampered client still
+ * cannot address anyone it is not confirmed friends with.
+ */
+async function confirmedFriendsAmong(db, uid, candidates) {
+  const targets = [...new Set(candidates)].filter(
+    (candidate) => validUid(candidate) && candidate !== uid,
+  );
+  const confirmed = [];
+  for (let offset = 0; offset < targets.length; offset += FRIENDSHIP_LOOKUP_CHUNK) {
+    const chunk = targets.slice(offset, offset + FRIENDSHIP_LOOKUP_CHUNK);
+    const snapshots = await db.getAll(
+      ...chunk.map((target) => db.doc(`friendships/${friendshipId(uid, target)}`)),
+    );
+    snapshots.forEach((snapshot, index) => {
+      if (snapshot.data()?.status === 'accepted') confirmed.push(chunk[index]);
+    });
+  }
+  return confirmed;
+}
+
+/**
+ * THE authority on which uids an audience context resolves to. One function on
+ * purpose: a second resolver is how a cheap path and a trusted path drift apart.
+ *
+ * Pass `friends` only when the caller needs that full set for a SECOND purpose
+ * anyway (`updateActivity` tells guests from friends by it) — then the
+ * intersection is free and re-reading would be waste. Without it, only the
+ * relationships the context actually names are read.
+ */
+async function resolveAudienceUids(db, uid, context, friends = null) {
+  if (context.kind === 'all_friends') {
+    return [...(friends ?? (await directFriendUids(db, uid)))];
+  }
+  const candidates = await audienceCandidates(db, uid, context);
+  return friends
+    ? [...new Set(candidates)].filter((candidate) => friends.has(candidate))
+    : confirmedFriendsAmong(db, uid, candidates);
 }
 
 function parseActivityPlace(input, { nullable = false } = {}) {
@@ -1211,10 +1379,10 @@ function parseTimePlanWindows(input) {
           'Ein Zeitfenster liegt zu weit in der Vergangenheit oder Zukunft.',
         );
       }
-      if (endMs - startMs < 5 * 60 * 1000 || endMs - startMs > 12 * HOUR_MS) {
+      if (endMs - startMs < 15 * 60 * 1000 || endMs - startMs > 12 * HOUR_MS) {
         throw new HttpsError(
           'invalid-argument',
-          'Ein Zeitfenster muss zwischen 5 Minuten und 12 Stunden lang sein.',
+          'Ein Zeitfenster muss zwischen 15 Minuten und 12 Stunden lang sein.',
         );
       }
       if (startMs % (5 * 60 * 1000) !== 0 || endMs % (5 * 60 * 1000) !== 0) {
@@ -1244,7 +1412,7 @@ function parseTimePlanResponses(input, sourceWindows) {
   const result = {};
   sourceWindows.forEach((window) => {
     const intervals = input[window.id];
-    if (!Array.isArray(intervals) || intervals.length > 10) {
+    if (!Array.isArray(intervals) || intervals.length > 1) {
       throw new HttpsError('invalid-argument', 'Ungültige Verfügbarkeit.');
     }
     const windowStart = Date.parse(window.startsAt);
@@ -1300,6 +1468,19 @@ function sameTimePlanResponses(left, right, sourceWindows) {
       )
     );
   });
+}
+
+function timePlanAudienceProjection(planId, audienceUid, plan, joined, memberCount) {
+  const safePlan = { ...plan };
+  delete safePlan.memberUids;
+  delete safePlan.audienceUids;
+  return {
+    ...safePlan,
+    planId,
+    audienceUid,
+    joined,
+    memberCount,
+  };
 }
 
 /**
@@ -1376,9 +1557,9 @@ exports.createTimePlan = onCall(CALLABLE_OPTS, async (request) => {
     }
   }
   await enforceRateLimit(uid, 'timePlans', TIME_PLAN_CREATIONS_PER_HOUR, HOUR_MS);
-  const [profileSnapshot, friends] = await Promise.all([
+  const [profileSnapshot, audience] = await Promise.all([
     db.doc(`publicProfiles/${uid}`).get(),
-    directFriendUids(db, uid),
+    resolveAudienceUids(db, uid, visibility),
   ]);
   const profile = profileSnapshot.data() ?? {};
   const displayName = cleanString(profile.displayName ?? request.auth.token.name, 50, 'Name', true);
@@ -1389,7 +1570,7 @@ exports.createTimePlan = onCall(CALLABLE_OPTS, async (request) => {
     true,
   );
   const capacity = maxParticipants ?? TIME_PLAN_MAX_MEMBERS;
-  const inviteeUids = [...new Set(await audienceForContext(db, uid, visibility, friends))]
+  const inviteeUids = [...new Set(audience)]
     .filter((inviteeUid) => inviteeUid !== uid)
     .slice(0, capacity - 1);
   const latestWindowEnd = Math.max(...sourceWindows.map((window) => Date.parse(window.endsAt)));
@@ -1408,34 +1589,36 @@ exports.createTimePlan = onCall(CALLABLE_OPTS, async (request) => {
     body: title,
     timePlanId: planRef.id,
   }));
+  const createdAt = Timestamp.now();
+  const planData = {
+    hostId: uid,
+    hostName: displayName,
+    hostInitials: initials,
+    audienceCount: inviteeUids.length + 1,
+    title,
+    ...(place ? { place } : {}),
+    ...(category ? { category } : {}),
+    ...(maxParticipants ? { maxParticipants } : {}),
+    ...(input.guestInvitesEnabled === true ? { guestInvitesEnabled: true } : {}),
+    sourceWindows,
+    revision: 1,
+    status: 'collecting',
+    memberUids: [uid],
+    createdAt,
+    updatedAt: createdAt,
+    expireAt,
+  };
   await db.runTransaction(async (transaction) => {
     const existingPlan = await transaction.get(planRef);
     if (existingPlan.exists) {
       if (existingPlan.data()?.hostId === uid) return;
       throw new HttpsError('already-exists', 'Diese Terminfindung existiert bereits.');
     }
-    transaction.create(planRef, {
-      hostId: uid,
-      hostName: displayName,
-      hostInitials: initials,
-      // Denormalised exactly like an Activity's audience, and for the same
-      // reason: without it a client cannot ask "which rounds am I in?" at all.
-      // The invitations themselves stay server-private, so this is the only
-      // thing that makes an invited round visible to the person invited.
-      audienceUids: [uid, ...inviteeUids],
-      title,
-      ...(place ? { place } : {}),
-      ...(category ? { category } : {}),
-      ...(maxParticipants ? { maxParticipants } : {}),
-      ...(input.guestInvitesEnabled === true ? { guestInvitesEnabled: true } : {}),
-      sourceWindows,
-      revision: 1,
-      status: 'collecting',
-      memberUids: [uid],
-      createdAt: Timestamp.now(),
-      updatedAt: Timestamp.now(),
-      expireAt,
-    });
+    transaction.create(planRef, planData);
+    transaction.create(
+      db.doc(`timePlanAudience/${planRef.id}_${uid}`),
+      timePlanAudienceProjection(planRef.id, uid, planData, true, 1),
+    );
     transaction.create(planRef.collection('timePlanMembers').doc(uid), {
       uid,
       displayName,
@@ -1447,6 +1630,10 @@ exports.createTimePlan = onCall(CALLABLE_OPTS, async (request) => {
       expireAt,
     });
     inviteeUids.forEach((inviteeUid, index) => {
+      transaction.create(
+        db.doc(`timePlanAudience/${planRef.id}_${inviteeUid}`),
+        timePlanAudienceProjection(planRef.id, inviteeUid, planData, false, 1),
+      );
       transaction.create(db.doc(`timePlanInvites/${planRef.id}_${inviteeUid}`), {
         planId: planRef.id,
         inviteeUid,
@@ -1485,6 +1672,7 @@ exports.joinTimePlan = onCall(CALLABLE_OPTS, async (request) => {
   const db = getFirestore();
   const planRef = db.doc(`timePlans/${planId}`);
   const inviteRef = db.doc(`timePlanInvites/${planId}_${uid}`);
+  const audienceRef = db.doc(`timePlanAudience/${planId}_${uid}`);
   const memberRef = planRef.collection('timePlanMembers').doc(uid);
   const profileRef = db.doc(`publicProfiles/${uid}`);
   await db.runTransaction(async (transaction) => {
@@ -1519,6 +1707,20 @@ exports.joinTimePlan = onCall(CALLABLE_OPTS, async (request) => {
           updatedAt: Timestamp.now(),
         });
       }
+      const currentMemberUids = Array.isArray(plan.memberUids)
+        ? plan.memberUids.filter(validUid)
+        : [];
+      transaction.set(
+        audienceRef,
+        timePlanAudienceProjection(
+          planId,
+          uid,
+          plan,
+          true,
+          Math.max(1, currentMemberUids.length),
+        ),
+        { merge: true },
+      );
       return;
     }
     if (!inviteSnapshot.exists || inviteSnapshot.data()?.status !== 'pending') {
@@ -1553,6 +1755,11 @@ exports.joinTimePlan = onCall(CALLABLE_OPTS, async (request) => {
     });
     transaction.update(planRef, { memberUids: [...memberUids, uid], updatedAt: Timestamp.now() });
     transaction.update(inviteRef, { status: 'joined', joinedAt: Timestamp.now() });
+    transaction.set(
+      audienceRef,
+      timePlanAudienceProjection(planId, uid, plan, true, memberUids.length + 1),
+      { merge: true },
+    );
   });
   return { ok: true };
 });
@@ -1634,6 +1841,17 @@ exports.lockTimePlan = onCall(CALLABLE_OPTS, async (request) => {
   if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
     throw new HttpsError('invalid-argument', 'Ungültiger Zeitraum.');
   }
+  if (
+    startMs % (5 * 60 * 1000) !== 0 ||
+    endMs % (5 * 60 * 1000) !== 0 ||
+    endMs - startMs < 15 * 60 * 1000 ||
+    endMs - startMs > 12 * HOUR_MS
+  ) {
+    throw new HttpsError(
+      'invalid-argument',
+      'Der Termin muss im 5-Minuten-Raster liegen und 15 Minuten bis 12 Stunden dauern.',
+    );
+  }
 
   const db = getFirestore();
   const planRef = db.doc(`timePlans/${planId}`);
@@ -1645,17 +1863,29 @@ exports.lockTimePlan = onCall(CALLABLE_OPTS, async (request) => {
     .where('hostId', '==', uid)
     .where('status', '==', 'active')
     .limit(MAX_ACTIVE_ACTIVITIES_PER_HOST);
+  const audienceProjectionQuery = db
+    .collection('timePlanAudience')
+    .where('planId', '==', planId)
+    .limit(TIME_PLAN_MAX_MEMBERS);
 
   const notified = [];
   let lockedTitle = '';
   await db.runTransaction(async (transaction) => {
-    const [planSnapshot, activitySnapshot, roomSnapshot, membersSnapshot, activeSnapshot] =
+    const [
+      planSnapshot,
+      activitySnapshot,
+      roomSnapshot,
+      membersSnapshot,
+      activeSnapshot,
+      audienceProjectionSnapshot,
+    ] =
       await Promise.all([
         transaction.get(planRef),
         transaction.get(activityRef),
         transaction.get(roomRef),
         transaction.get(planRef.collection('timePlanMembers').limit(TIME_PLAN_MAX_MEMBERS)),
         transaction.get(activeActivitiesByHost),
+        transaction.get(audienceProjectionQuery),
       ]);
     if (!planSnapshot.exists) throw new HttpsError('not-found', 'Terminfindung nicht gefunden.');
     const plan = planSnapshot.data();
@@ -1767,13 +1997,41 @@ exports.lockTimePlan = onCall(CALLABLE_OPTS, async (request) => {
       createdAt: Timestamp.now(),
       expireAt: Timestamp.fromMillis(chatExpireAt),
     });
+    /**
+     * Re-cut every expiry from the LOCKED end, on the same clock as the
+     * activity's own chat. Created, the stamp was measured from the last
+     * proposed window; a round offering Fri/Sat/Sun and locked on Friday would
+     * otherwise keep everyone's availability readable until Sunday plus the
+     * tail — long after the thing it was arranging happened.
+     *
+     * The member docs must be re-stamped too, and that is not tidiness: a TTL
+     * deletes the plan DOCUMENT, never its subcollection, so members carrying
+     * the old, later stamp would outlive the plan they belong to. They are the
+     * half that holds who could make which hours.
+     */
+    const planExpireAt = Timestamp.fromMillis(chatExpireAt);
     transaction.update(planRef, {
       status: 'locked',
       activityId,
       lockedWindowId: windowId,
       lockedStartsAt: startsAt,
       lockedEndsAt: endsAt,
+      expireAt: planExpireAt,
       updatedAt: Timestamp.now(),
+    });
+    audienceProjectionSnapshot.docs.forEach((snapshot) => {
+      transaction.update(snapshot.ref, {
+        status: 'locked',
+        activityId,
+        lockedWindowId: windowId,
+        lockedStartsAt: startsAt,
+        lockedEndsAt: endsAt,
+        expireAt: planExpireAt,
+        updatedAt: Timestamp.now(),
+      });
+    });
+    membersSnapshot.docs.forEach((snapshot) => {
+      transaction.update(snapshot.ref, { expireAt: planExpireAt });
     });
 
     members.forEach((member) => {
@@ -1830,6 +2088,7 @@ exports.createActivity = onCall(CALLABLE_OPTS, async (request) => {
     throw new HttpsError('invalid-argument', 'Aktivitätsdaten fehlen.');
   }
   const audienceContext = parseAudienceContext(input.audienceContext);
+  const now = Date.now();
 
   const mode = input.mode === 'open' ? 'soon' : input.mode;
   if (mode !== 'soon' && mode !== 'now') {
@@ -1837,16 +2096,34 @@ exports.createActivity = onCall(CALLABLE_OPTS, async (request) => {
   }
   const title = cleanString(input.title, 60, 'Titel', true);
   const note = cleanString(input.note, 500, 'Beschreibung');
-  const startsAt = cleanString(input.startsAt, 80, 'Startzeit');
+  let startsAt = cleanString(input.startsAt, 80, 'Startzeit');
   const endsAt = cleanString(input.endsAt, 80, 'Endzeit');
-  if (startsAt && Number.isNaN(Date.parse(startsAt))) {
+  if (!startsAt || !endsAt) {
+    throw new HttpsError('invalid-argument', 'Start und Ende müssen festgelegt sein.');
+  }
+  const requestedStartMs = Date.parse(startsAt);
+  const endMs = Date.parse(endsAt);
+  if (!Number.isFinite(requestedStartMs)) {
     throw new HttpsError('invalid-argument', 'Ungültige Startzeit.');
   }
-  if (endsAt && Number.isNaN(Date.parse(endsAt))) {
+  if (!Number.isFinite(endMs)) {
     throw new HttpsError('invalid-argument', 'Ungültige Endzeit.');
   }
-  if (startsAt && endsAt && Date.parse(endsAt) <= Date.parse(startsAt)) {
+  const durationMs = endMs - requestedStartMs;
+  if (durationMs <= 0) {
     throw new HttpsError('invalid-argument', 'Die Endzeit muss nach der Startzeit liegen.');
+  }
+  if (durationMs < ACTIVITY_MIN_DURATION_MS || durationMs > ACTIVITY_MAX_DURATION_MS) {
+    throw new HttpsError(
+      'invalid-argument',
+      'Eine Activity muss zwischen 15 Minuten und 12 Stunden dauern.',
+    );
+  }
+  if (mode === 'now' && requestedStartMs > now + 5 * 60 * 1000) {
+    throw new HttpsError('invalid-argument', 'Eine Jetzt-Activity kann nicht später beginnen.');
+  }
+  if (mode === 'now' && requestedStartMs > now) {
+    startsAt = new Date(now).toISOString();
   }
 
   let maxParticipants;
@@ -1878,11 +2155,26 @@ exports.createActivity = onCall(CALLABLE_OPTS, async (request) => {
   if (input.place != null) {
     place = parseActivityPlace(input.place);
   }
+  /**
+   * A `soon` or `now` activity without a pin does not exist.
+   *
+   * Without a coordinate the document gets no marker, no distance and no place
+   * row: it is created successfully and then reaches nobody, which is a silent
+   * failure the client cannot see and the host cannot debug. The client checks
+   * this too, but only the server checks it for EVERY client version — an old
+   * build in the field must not be able to write one.
+   */
+  if (!place || place.visibility !== 'pin') {
+    throw new HttpsError(
+      'invalid-argument',
+      'Eine Activity braucht einen Ort — ohne Ort wäre sie auf der Karte für niemanden sichtbar.',
+    );
+  }
 
   const db = getFirestore();
-  const [profileSnapshot, friends] = await Promise.all([
+  const [profileSnapshot, audience] = await Promise.all([
     db.doc(`publicProfiles/${uid}`).get(),
-    directFriendUids(db, uid),
+    resolveAudienceUids(db, uid, audienceContext),
   ]);
   const profile = profileSnapshot.data() ?? {};
   const displayName = cleanString(profile.displayName ?? request.auth.token.name, 50, 'Name', true);
@@ -1893,13 +2185,8 @@ exports.createActivity = onCall(CALLABLE_OPTS, async (request) => {
     true,
   );
 
-  const audienceUids = [
-    uid,
-    ...new Set(await audienceForContext(db, uid, audienceContext, friends)),
-  ];
-  const now = Date.now();
-  const endMs = endsAt ? Date.parse(endsAt) : NaN;
-  const startMs = startsAt ? Date.parse(startsAt) : NaN;
+  const audienceUids = [uid, ...new Set(audience)];
+  const startMs = Date.parse(startsAt);
   // Map/calendar visibility stops exactly at the scheduled end. The Activity
   // document and its chat are intentionally retained for twelve more hours.
   const visibleUntil = Number.isFinite(endMs)
@@ -1996,6 +2283,15 @@ exports.createActivity = onCall(CALLABLE_OPTS, async (request) => {
       resolvedAudienceUids = [...new Set([...audienceUids, ...participantUids])];
     }
 
+    const presenceBoundaryAt = activityOpenBoundaryMs({ mode, startsAt, endsAt }, now);
+    const participantPresenceSnapshots = Number.isFinite(presenceBoundaryAt)
+      ? await Promise.all(
+          participantUids
+            .slice(0, 50)
+            .map((participantUid) => transaction.get(db.doc(`presence/${participantUid}`))),
+        )
+      : [];
+
     transaction.create(activityRef, {
       hostId: uid,
       mode,
@@ -2016,6 +2312,9 @@ exports.createActivity = onCall(CALLABLE_OPTS, async (request) => {
       visibleUntil: Timestamp.fromMillis(visibleUntil),
       expireAt: Timestamp.fromMillis(expireAt),
     });
+    participantPresenceSnapshots.forEach((snapshot) =>
+      constrainPresenceSnapshot(transaction, snapshot, presenceBoundaryAt, now),
+    );
 
     if (!roomSnapshot.exists) {
       transaction.create(roomRef, {
@@ -2056,6 +2355,38 @@ exports.createActivity = onCall(CALLABLE_OPTS, async (request) => {
     }
   });
 
+  /**
+   * Tell the audience, and tell them with a PUSH ONLY.
+   *
+   * `queuePushOnly` rather than `createNotifications`: the latter writes one
+   * durable notification document per recipient, so a 150-person audience would
+   * cost 150 writes — the most expensive Firestore operation — for an event
+   * that needs no Postfach entry at all. The activity is already on the map and
+   * in the calendar, and that is the durable record; this push is only the
+   * nudge that gets it there before the evening is over. One outbox document
+   * per 100 recipients instead of one write per person.
+   *
+   * Deliberately NOT awaited. The activity exists once the transaction has
+   * committed, so a failing push must never turn a successful creation into an
+   * error on the host's screen.
+   *
+   * It reaches the whole audience, not just close friends: the host already
+   * chose who may see this, and that choice is the consent the nudge rides on.
+   */
+  const nudged = audienceUids.filter((recipientUid) => recipientUid !== uid);
+  if (nudged.length) {
+    queuePushOnly(
+      nudged.map((recipientUid) => ({
+        recipientUid,
+        actorUid: uid,
+        kind: 'activity_created',
+        title: `${displayName} plant etwas`,
+        body: title.slice(0, 120),
+        activityId,
+      })),
+    ).catch((error) => console.error('[push] activity creation nudge failed', error));
+  }
+
   return { ok: true, id: activityId };
 });
 
@@ -2086,6 +2417,7 @@ exports.updateActivity = onCall(CALLABLE_OPTS, async (request) => {
     'maxParticipants',
     'category',
     'guestInvitesEnabled',
+    'audienceContext',
   ]);
   const inputKeys = Object.keys(input);
   if (!inputKeys.length || inputKeys.some((key) => !allowedKeys.has(key))) {
@@ -2097,6 +2429,27 @@ exports.updateActivity = onCall(CALLABLE_OPTS, async (request) => {
   const activityRef = db.doc(`activities/${activityId}`);
   const roomRef = db.doc(`chats/${activityId}`);
   const journeyReminderGeneration = randomUUID();
+
+  /**
+   * Who may see it is editable AFTER creation, and it is resolved exactly the
+   * way creation resolves it: the client sends a CONTEXT, never a uid list, and
+   * the server intersects it with the caller's own confirmed friendships. A
+   * tampered client can therefore still only ever address a subset of the
+   * people `all_friends` would already have reached.
+   *
+   * Resolved before the transaction because both reads are queries, which a
+   * transaction cannot run — `createActivity` resolves its audience in the same
+   * place for the same reason.
+   */
+  let resolvedFriendAudience = null;
+  let hostFriends = null;
+  if (has('audienceContext')) {
+    const audienceContext = parseAudienceContext(input.audienceContext);
+    // The full set is needed for a second purpose below (telling guests from
+    // friends), so it is read once and handed to the resolver.
+    hostFriends = await directFriendUids(db, uid);
+    resolvedFriendAudience = await resolveAudienceUids(db, uid, audienceContext, hostFriends);
+  }
 
   await db.runTransaction(async (transaction) => {
     const activitySnapshot = await transaction.get(activityRef);
@@ -2147,6 +2500,8 @@ exports.updateActivity = onCall(CALLABLE_OPTS, async (request) => {
     const nextEndsAt = has('endsAt')
       ? cleanString(input.endsAt, 80, 'Endzeit', true)
       : activity.endsAt;
+    const startsAtChanged = has('startsAt') && nextStartsAt !== activity.startsAt;
+    const endsAtChanged = has('endsAt') && nextEndsAt !== activity.endsAt;
     const startsAtMs = typeof nextStartsAt === 'string' ? Date.parse(nextStartsAt) : NaN;
     const endsAtMs = typeof nextEndsAt === 'string' ? Date.parse(nextEndsAt) : NaN;
     if (!Number.isFinite(startsAtMs) || !Number.isFinite(endsAtMs)) {
@@ -2155,19 +2510,30 @@ exports.updateActivity = onCall(CALLABLE_OPTS, async (request) => {
     if (endsAtMs <= startsAtMs) {
       throw new HttpsError('invalid-argument', 'Die Endzeit muss nach der Startzeit liegen.');
     }
+    if (
+      (startsAtChanged || endsAtChanged) &&
+      (endsAtMs - startsAtMs < ACTIVITY_MIN_DURATION_MS ||
+        endsAtMs - startsAtMs > ACTIVITY_MAX_DURATION_MS)
+    ) {
+      throw new HttpsError(
+        'invalid-argument',
+        'Eine Activity muss zwischen 15 Minuten und 12 Stunden dauern.',
+      );
+    }
     if (endsAtMs <= now) {
       throw new HttpsError('failed-precondition', 'Diese Aktivität ist bereits beendet.');
     }
-    const startsAtChanged = has('startsAt') && nextStartsAt !== activity.startsAt;
-    const endsAtChanged = has('endsAt') && nextEndsAt !== activity.endsAt;
+    if (nextMode === 'now' && startsAtMs > now + 5 * 60 * 1000) {
+      throw new HttpsError('invalid-argument', 'Eine Jetzt-Activity kann nicht später beginnen.');
+    }
     if (
       Number.isInteger(activity.journeyUnderwayCount) &&
       activity.journeyUnderwayCount > 0 &&
-      startsAtChanged
+      (startsAtChanged || endsAtChanged)
     ) {
       throw new HttpsError(
         'failed-precondition',
-        'Die Startzeit kann während einer laufenden Anreise nicht geändert werden.',
+        'Start und Ende können während einer laufenden Anreise nicht geändert werden.',
       );
     }
     if (startsAtChanged) patch.startsAt = nextStartsAt;
@@ -2229,6 +2595,15 @@ exports.updateActivity = onCall(CALLABLE_OPTS, async (request) => {
 
     if (has('place')) {
       const nextPlace = parseActivityPlace(input.place, { nullable: true });
+      // Same rule as creation: an edit may MOVE an activity, never make it
+      // place-less. Losing the pin is not something a title fix should be able
+      // to do, and it would take the activity off the map for everyone.
+      if (!nextPlace || nextPlace.visibility !== 'pin') {
+        throw new HttpsError(
+          'invalid-argument',
+          'Eine Activity braucht einen Ort — ohne Ort wäre sie auf der Karte für niemanden sichtbar.',
+        );
+      }
       if (
         Number.isInteger(activity.journeyUnderwayCount) &&
         activity.journeyUnderwayCount > 0 &&
@@ -2245,6 +2620,38 @@ exports.updateActivity = onCall(CALLABLE_OPTS, async (request) => {
       }
     }
 
+    /**
+     * Two groups survive any audience edit, and both for the same reason: the
+     * host's friend selection is not able to express them, so leaving them out
+     * would be a silent removal rather than a decision.
+     *
+     * PARTICIPANTS are in — someone who already joined would otherwise lose the
+     * activity and its chat out from under them. GUESTS are in as well: a guest
+     * was vouched for by a participant (`inviteFriendToActivity`) and is not
+     * necessarily a friend of the host at all, so `resolveAudienceUids` can
+     * never produce them. What the host edits is precisely what the host can
+     * address — their own friends.
+     */
+    if (resolvedFriendAudience) {
+      const currentAudience = Array.isArray(activity.audienceUids) ? activity.audienceUids : [];
+      const currentParticipants = Array.isArray(activity.participantUids)
+        ? activity.participantUids
+        : [];
+      const guests = currentAudience.filter(
+        (memberUid) => memberUid !== uid && !hostFriends.has(memberUid),
+      );
+      const nextAudience = [
+        ...new Set([uid, ...resolvedFriendAudience, ...currentParticipants, ...guests]),
+      ];
+      if (nextAudience.length > MAX_SELECTED_AUDIENCE + 1) {
+        throw new HttpsError('failed-precondition', 'Die Sichtbarkeit umfasst zu viele Personen.');
+      }
+      const changed =
+        nextAudience.length !== currentAudience.length ||
+        nextAudience.some((memberUid) => !currentAudience.includes(memberUid));
+      if (changed) patch.audienceUids = nextAudience;
+    }
+
     if (journeyReminderScheduleChanged) {
       patch.journeyReminderGeneration = journeyReminderGeneration;
     }
@@ -2255,7 +2662,20 @@ exports.updateActivity = onCall(CALLABLE_OPTS, async (request) => {
     if (titleChanged || endsAtChanged) {
       roomSnapshot = await transaction.get(roomRef);
     }
+    const presenceScheduleChanged =
+      startsAtChanged || (has('mode') && nextMode !== activity.mode);
+    const participantPresenceSnapshots = presenceScheduleChanged
+      ? await Promise.all(
+          (Array.isArray(activity.participantUids) ? activity.participantUids : [])
+            .slice(0, 50)
+            .map((participantUid) => transaction.get(db.doc(`presence/${participantUid}`))),
+        )
+      : [];
     transaction.update(activityRef, patch);
+    const presenceBoundaryAt = nextMode === 'now' ? now : startsAtMs;
+    participantPresenceSnapshots.forEach((snapshot) =>
+      constrainPresenceSnapshot(transaction, snapshot, presenceBoundaryAt, now),
+    );
 
     // Only touch the room when its title or its end-based TTL actually moves.
     if (roomSnapshot?.exists) {
@@ -2513,6 +2933,28 @@ exports.places = onCall(PLACES_CALLABLE_OPTS, async (request) => {
   throw new HttpsError('invalid-argument', 'Ungültige Ortssuche.');
 });
 
+function activityOpenBoundaryMs(activity, now) {
+  const endsAt = typeof activity?.endsAt === 'string' ? Date.parse(activity.endsAt) : NaN;
+  if (Number.isFinite(endsAt) && endsAt <= now) return null;
+  const startsAt = typeof activity?.startsAt === 'string' ? Date.parse(activity.startsAt) : NaN;
+  if (activity?.mode === 'now' || (Number.isFinite(startsAt) && startsAt <= now)) return now;
+  return Number.isFinite(startsAt) ? startsAt : null;
+}
+
+function constrainPresenceSnapshot(transaction, snapshot, boundaryAt, now) {
+  if (!snapshot?.exists || !Number.isFinite(boundaryAt)) return false;
+  const currentExpiry = snapshot.data()?.expireAt?.toMillis?.() ?? 0;
+  if (currentExpiry <= now || currentExpiry <= boundaryAt) return false;
+  if (boundaryAt <= now) transaction.delete(snapshot.ref);
+  else {
+    transaction.update(snapshot.ref, {
+      expireAt: Timestamp.fromMillis(boundaryAt),
+      updatedAt: Timestamp.now(),
+    });
+  }
+  return true;
+}
+
 exports.publishPresence = onCall(CALLABLE_OPTS, async (request) => {
   const uid = requireVerifiedAuth(request);
   await enforceRateLimit(uid, 'presence', 12, 5 * 60 * 1000);
@@ -2547,7 +2989,15 @@ exports.publishPresence = onCall(CALLABLE_OPTS, async (request) => {
 
   const db = getFirestore();
   const presenceRef = db.doc(`presence/${uid}`);
-  const existingPresence = await presenceRef.get();
+  const activeActivitiesQuery = db
+    .collection('activities')
+    .where('participantUids', 'array-contains', uid)
+    .where('status', '==', 'active')
+    .limit(MAX_ACTIVE_ACTIVITIES_PER_PARTICIPANT);
+  const [existingPresence, activeActivitiesSnapshot] = await Promise.all([
+    presenceRef.get(),
+    activeActivitiesQuery.get(),
+  ]);
   const existing = existingPresence.data() ?? {};
   const existingExpiresAt = existing.expireAt?.toMillis?.() ?? 0;
   const canRefineExisting =
@@ -2556,6 +3006,32 @@ exports.publishPresence = onCall(CALLABLE_OPTS, async (request) => {
     typeof existing.displayName === 'string' &&
     typeof existing.initials === 'string' &&
     Array.isArray(existing.audienceUids);
+  if (!canRefineExisting && expiresAt - now < OPEN_MIN_DURATION_MS) {
+    throw new HttpsError(
+      'invalid-argument',
+      'Ein neuer Offen-Status muss mindestens 15 Minuten laufen.',
+    );
+  }
+  const activityBoundaryAt = activeActivitiesSnapshot.docs.reduce((earliest, snapshot) => {
+    const boundary = activityOpenBoundaryMs(snapshot.data(), now);
+    return Number.isFinite(boundary) ? Math.min(earliest, boundary) : earliest;
+  }, Number.POSITIVE_INFINITY);
+
+  if (activityBoundaryAt <= now) {
+    if (existingPresence.exists) await presenceRef.delete();
+    return { ok: true, closed: true };
+  }
+  if (
+    !canRefineExisting &&
+    Number.isFinite(activityBoundaryAt) &&
+    activityBoundaryAt - now < OPEN_MIN_DURATION_MS
+  ) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Deine nächste Activity beginnt zu bald für einen Offen-Status.',
+    );
+  }
+  const effectiveExpiresAt = Math.min(expiresAt, activityBoundaryAt);
 
   let profile = existing;
   let audienceUids = new Set(
@@ -2578,7 +3054,7 @@ exports.publishPresence = onCall(CALLABLE_OPTS, async (request) => {
     initials: cleanString(profile.initials, 8, 'Initialen', true),
     ...(profile.avatarUrl ? { avatarUrl: profile.avatarUrl } : {}),
     ...(vibeLabel?.trim() ? { vibe: { label: vibeLabel.trim() } } : {}),
-    expireAt: Timestamp.fromMillis(expiresAt),
+    expireAt: Timestamp.fromMillis(effectiveExpiresAt),
     shareLocation: input.shareLocation,
     ...(input.shareLocation && location
       ? { coarseLocation: { lat: location.lat, lng: location.lng } }
@@ -2586,7 +3062,7 @@ exports.publishPresence = onCall(CALLABLE_OPTS, async (request) => {
     audienceUids: [...audienceUids].slice(0, 50),
     updatedAt: Timestamp.now(),
   });
-  return { ok: true };
+  return { ok: true, expiresAt: effectiveExpiresAt };
 });
 
 exports.joinActivity = onCall(CALLABLE_OPTS, async (request) => {
@@ -2600,27 +3076,26 @@ exports.joinActivity = onCall(CALLABLE_OPTS, async (request) => {
   const db = getFirestore();
   const activityRef = db.doc(`activities/${activityId}`);
   const profileRef = db.doc(`publicProfiles/${uid}`);
-  const userRef = db.doc(`users/${uid}`);
   const roomRef = db.doc(`chats/${activityId}`);
+  const presenceRef = db.doc(`presence/${uid}`);
   const activeActivitiesByParticipant = db
     .collection('activities')
     .where('participantUids', 'array-contains', uid)
     .where('status', '==', 'active')
     .limit(MAX_ACTIVE_ACTIVITIES_PER_PARTICIPANT);
-  let journeyReminder;
   await db.runTransaction(async (transaction) => {
     const [
       activitySnapshot,
       profileSnapshot,
-      userSnapshot,
       roomSnapshot,
       activeActivitiesSnapshot,
+      presenceSnapshot,
     ] = await Promise.all([
       transaction.get(activityRef),
       transaction.get(profileRef),
-      transaction.get(userRef),
       transaction.get(roomRef),
       transaction.get(activeActivitiesByParticipant),
+      transaction.get(presenceRef),
     ]);
     if (!activitySnapshot.exists) throw new HttpsError('not-found', 'Activity nicht gefunden.');
     if (!profileSnapshot.exists) throw new HttpsError('failed-precondition', 'Profil fehlt.');
@@ -2641,6 +3116,9 @@ exports.joinActivity = onCall(CALLABLE_OPTS, async (request) => {
     const participants = Array.isArray(activity.participants) ? activity.participants : [];
     const alreadyJoined = participantUids.includes(uid);
     let nextParticipantUids = participantUids;
+    const presenceNow = Date.now();
+    const presenceBoundaryAt = activityOpenBoundaryMs(activity, presenceNow);
+    constrainPresenceSnapshot(transaction, presenceSnapshot, presenceBoundaryAt, presenceNow);
 
     if (!alreadyJoined) {
       if (activeActivitiesSnapshot.size >= MAX_ACTIVE_ACTIVITIES_PER_PARTICIPANT) {
@@ -2666,22 +3144,6 @@ exports.joinActivity = onCall(CALLABLE_OPTS, async (request) => {
         participants: [...participants, participant],
       });
 
-      const startsAtMs = activity.startsAt ? Date.parse(activity.startsAt) : NaN;
-      const isNow =
-        activity.mode === 'now' || (Number.isFinite(startsAtMs) && startsAtMs <= Date.now());
-      if (isNow && userSnapshot.data()?.journeyRemindersEnabled !== false) {
-        const journey = journeyNotificationPayload(activityId, activity);
-        if (journey) {
-          journeyReminder = {
-            recipientUid: uid,
-            kind: 'journey_reminder',
-            title: `${activity.title ?? 'Diese Activity'} ist jetzt`,
-            body: 'Anreise automatisch teilen?',
-            activityId,
-            journey,
-          };
-        }
-      }
     }
 
     const chatExpireAt = Math.max(
@@ -2711,9 +3173,6 @@ exports.joinActivity = onCall(CALLABLE_OPTS, async (request) => {
       }
     }
   });
-  if (journeyReminder) {
-    await createNotifications([journeyReminder]);
-  }
   return { ok: true };
 });
 
@@ -2822,12 +3281,15 @@ exports.leaveActivity = onCall(CALLABLE_OPTS, async (request) => {
     // Firestore membership gates new server actions; remove the RTDB entitlement
     // immediately afterwards so the former participant cannot read or write a
     // last-point location for the remaining Activity window.
-    await getDatabase()
-      .ref()
-      .update({
-        [`journeys/${activityId}/members/${uid}`]: null,
-        [`journeys/${activityId}/locations/${uid}`]: null,
-      });
+    const journeyRef = getDatabase().ref(`journeys/${activityId}`);
+    const sessionId = (await journeyRef.child(`sessions/${uid}`).get()).val();
+    await journeyRef.update({
+      [`members/${uid}`]: null,
+      [`sessions/${uid}`]: null,
+      ...(validActivityId(sessionId) ? { [`locations/${sessionId}`]: null } : {}),
+      // Migration cleanup for pre-session clients.
+      [`locations/${uid}`]: null,
+    });
   }
   return { ok: true };
 });
@@ -2850,7 +3312,7 @@ exports.inviteFriendToActivity = onCall(CALLABLE_OPTS, async (request) => {
 
   const db = getFirestore();
   let activityTitle = 'Aktivität';
-  let inviterName = 'Ein Freund';
+  let inviterName = 'Jemand';
   let alreadyInvited = false;
   await db.runTransaction(async (transaction) => {
     alreadyInvited = false;
@@ -3902,7 +4364,7 @@ exports.inviteToGroupChat = onCall(CALLABLE_OPTS, async (request) => {
   const roomRef = db.doc(`chats/${roomId}`);
   const inviterProfileSnapshot = await db.doc(`users/${uid}`).get();
   const inviterName = cleanString(
-    inviterProfileSnapshot.data()?.displayName ?? 'Ein Freund',
+    inviterProfileSnapshot.data()?.displayName ?? 'Jemand',
     50,
     'Name',
     true,
@@ -4428,7 +4890,7 @@ async function createChatMessage(request, kind, proposal) {
             actorUid: uid,
             kind: 'chat_message',
             title: 'Neue Nachricht',
-            body: 'Öffne Como, um sie zu lesen.',
+            body: 'Öffne Mica, um sie zu lesen.',
             roomId,
             messageCount,
             ...(room.type === 'activity' ? { activityId: roomId } : {}),
@@ -5187,8 +5649,12 @@ exports.ensureJourneyMember = onCall(CALLABLE_OPTS, async (request) => {
   const uid = requireVerifiedAuth(request);
   await enforceRateLimit(uid, 'journeyControl', 12, 5 * 60 * 1000);
   const activityId = request.data?.activityId;
+  const sessionId = request.data?.sessionId;
   if (typeof activityId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(activityId)) {
     throw new HttpsError('invalid-argument', 'Ungültige Aktivitäts-ID.');
+  }
+  if (sessionId !== undefined && !validActivityId(sessionId)) {
+    throw new HttpsError('invalid-argument', 'Ungültige Anreise-Sitzung.');
   }
 
   const db = getFirestore();
@@ -5206,15 +5672,48 @@ exports.ensureJourneyMember = onCall(CALLABLE_OPTS, async (request) => {
   }
 
   const expiresAt = activityExpiry(activity);
-  if (expiresAt <= Date.now()) {
+  const endsAt = typeof activity.endsAt === 'string' ? Date.parse(activity.endsAt) : NaN;
+  if (expiresAt <= Date.now() || (Number.isFinite(endsAt) && endsAt <= Date.now())) {
     throw new HttpsError('failed-precondition', 'Diese Aktivität ist bereits beendet.');
   }
 
-  await getDatabase()
-    .ref(`journeys/${activityId}`)
-    .update({ expiresAt, [`members/${uid}`]: true });
+  const payload = journeyNotificationPayload(activityId, activity);
+  if (!payload) {
+    throw new HttpsError('failed-precondition', 'Diese Activity braucht einen Ort auf der Karte.');
+  }
 
-  return { ok: true };
+  const journeyRef = getDatabase().ref(`journeys/${activityId}`);
+  const previousSessionId = sessionId
+    ? (await journeyRef.child(`sessions/${uid}`).get()).val()
+    : null;
+  await journeyRef.update({
+    expiresAt,
+    [`members/${uid}`]: true,
+    ...(sessionId ? { [`sessions/${uid}`]: sessionId } : {}),
+    ...(sessionId && validActivityId(previousSessionId) && previousSessionId !== sessionId
+      ? { [`locations/${previousSessionId}`]: null }
+      : {}),
+  });
+
+  if (sessionId && validActivityId(previousSessionId) && previousSessionId !== sessionId) {
+    await updateJourneyUnderwayStatus(activityId, uid, false, {
+      sessionId: previousSessionId,
+    }).catch((error) => console.warn('[journey] previous device summary cleanup failed', error));
+  }
+
+  return {
+    ok: true,
+    activity: {
+      id: activityId,
+      title: activity.title,
+      targetCoordinate: {
+        latitude: activity.place.latitude,
+        longitude: activity.place.longitude,
+      },
+      ...(typeof activity.startsAt === 'string' ? { startsAt: activity.startsAt } : {}),
+      ...(typeof activity.endsAt === 'string' ? { endsAt: activity.endsAt } : {}),
+    },
+  };
 });
 
 /**
@@ -5227,18 +5726,27 @@ async function updateJourneyUnderwayStatus(
   activityId,
   uid,
   underway,
-  { removedLocationUpdatedAt } = {},
+  { removedLocationUpdatedAt, sessionId } = {},
 ) {
   const db = getFirestore();
   const activityRef = db.doc(`activities/${activityId}`);
   const stateRef = activityRef.collection('journeyStates').doc(uid);
   let locationUpdatedAt;
   if (underway) {
+    if (!validActivityId(sessionId)) {
+      throw new HttpsError('invalid-argument', 'Ungültige Anreise-Sitzung.');
+    }
     const locationSnapshot = await getDatabase()
-      .ref(`journeys/${activityId}/locations/${uid}`)
+      .ref(`journeys/${activityId}/locations/${sessionId}`)
       .get();
-    locationUpdatedAt = Number(locationSnapshot.val()?.updatedAt);
-    if (!Number.isFinite(locationUpdatedAt)) {
+    const location = locationSnapshot.val();
+    locationUpdatedAt = Number(location?.updatedAt);
+    if (
+      location?.uid !== uid ||
+      location?.sessionId !== sessionId ||
+      Number(location?.expiresAt) <= Date.now() ||
+      !Number.isFinite(locationUpdatedAt)
+    ) {
       throw new HttpsError('failed-precondition', 'Deine Anreise ist nicht mehr aktiv.');
     }
   }
@@ -5261,24 +5769,34 @@ async function updateJourneyUnderwayStatus(
       if (activity.status !== 'active' || !participantUids.includes(uid)) {
         throw new HttpsError('permission-denied', 'Du bist kein Teilnehmer dieser Aktivität.');
       }
-      if (activityExpiry(activity) <= Date.now()) {
+      const endsAt = typeof activity.endsAt === 'string' ? Date.parse(activity.endsAt) : NaN;
+      if (
+        activityExpiry(activity) <= Date.now() ||
+        (Number.isFinite(endsAt) && endsAt <= Date.now())
+      ) {
         throw new HttpsError('failed-precondition', 'Diese Aktivität ist bereits beendet.');
       }
     }
 
     const wasUnderway = stateSnapshot.exists;
+    const previousSessionId = stateSnapshot.data()?.sessionId;
     // A delayed onDisconnect deletion may arrive after the device has already
     // published a newer location for the same activity. Its stale deletion must
     // never clear the newer journey's location-free map summary.
     if (
       !underway &&
       wasUnderway &&
+      (!sessionId || !previousSessionId || previousSessionId === sessionId) &&
       Number.isFinite(removedLocationUpdatedAt) &&
       Number(stateSnapshot.data()?.locationUpdatedAt) > removedLocationUpdatedAt
     ) {
       return false;
     }
-    if (wasUnderway === underway) return false;
+    if (!underway && sessionId && previousSessionId && previousSessionId !== sessionId) {
+      return false;
+    }
+    if (underway && wasUnderway && previousSessionId === sessionId) return false;
+    if (!underway && !wasUnderway) return false;
 
     const currentCount = Number.isInteger(activity.journeyUnderwayCount)
       ? Math.max(0, activity.journeyUnderwayCount)
@@ -5287,6 +5805,8 @@ async function updateJourneyUnderwayStatus(
 
     if (underway) {
       transaction.set(stateRef, {
+        status: 'underway',
+        sessionId,
         startedAt: Timestamp.now(),
         locationUpdatedAt,
         expireAt: Timestamp.fromMillis(activityExpiry(activity)),
@@ -5294,7 +5814,9 @@ async function updateJourneyUnderwayStatus(
     } else {
       transaction.delete(stateRef);
     }
-    transaction.update(activityRef, { journeyUnderwayCount: nextCount });
+    transaction.update(activityRef, {
+      journeyUnderwayCount: wasUnderway && underway ? currentCount : nextCount,
+    });
     return true;
   });
 }
@@ -5303,26 +5825,72 @@ exports.setJourneyLiveStatus = onCall(CALLABLE_OPTS, async (request) => {
   const uid = requireVerifiedAuth(request);
   await enforceRateLimit(uid, 'journeyControl', 12, 5 * 60 * 1000);
   const activityId = request.data?.activityId;
+  const sessionId = request.data?.sessionId;
   const underway = request.data?.underway;
-  if (!validActivityId(activityId) || typeof underway !== 'boolean') {
+  if (!validActivityId(activityId) || !validActivityId(sessionId) || typeof underway !== 'boolean') {
     throw new HttpsError('invalid-argument', 'Ungültiger Anreise-Status.');
   }
-  await updateJourneyUnderwayStatus(activityId, uid, underway);
+  if (!underway) {
+    const journeyRef = getDatabase().ref(`journeys/${activityId}`);
+    const activeSession = (await journeyRef.child(`sessions/${uid}`).get()).val();
+    await journeyRef.update({
+      [`locations/${sessionId}`]: null,
+      ...(activeSession === sessionId ? { [`sessions/${uid}`]: null } : {}),
+    });
+  }
+  await updateJourneyUnderwayStatus(activityId, uid, underway, { sessionId });
+  return { ok: true };
+});
+
+exports.resolveJourneyReminder = onCall(CALLABLE_OPTS, async (request) => {
+  const uid = requireVerifiedAuth(request);
+  await enforceRateLimit(uid, 'journeyControl', 20, 5 * 60 * 1000);
+  const activityId = request.data?.activityId;
+  const notificationId = request.data?.notificationId;
+  if (
+    !validActivityId(activityId) ||
+    typeof notificationId !== 'string' ||
+    !/^[A-Za-z0-9_-]{1,240}$/.test(notificationId)
+  ) {
+    throw new HttpsError('invalid-argument', 'Ungültige Anreise-Erinnerung.');
+  }
+  const notificationRef = getFirestore().doc(`notifications/${notificationId}`);
+  const notification = await notificationRef.get();
+  if (!notification.exists) return { ok: true };
+  const data = notification.data();
+  if (
+    data.recipientUid !== uid ||
+    data.kind !== 'journey_reminder' ||
+    data.activityId !== activityId
+  ) {
+    throw new HttpsError('permission-denied', 'Diese Erinnerung gehört nicht dir.');
+  }
+  await notificationRef.delete();
   return { ok: true };
 });
 
 // Covers disconnects: `onDisconnect().remove()` removes the RTDB location
 // even when the app dies before it can call the callable stop action.
 exports.clearJourneyStatusOnLocationRemoved = onValueDeleted(
-  { ref: 'journeys/{activityId}/locations/{uid}', ...RTDB_TRIGGER_OPTS },
+  { ref: 'journeys/{activityId}/locations/{sessionId}', ...RTDB_TRIGGER_OPTS },
   async (event) => {
-    const removedLocationUpdatedAt = Number(event.data?.val()?.updatedAt);
+    const removed = event.data?.val() ?? {};
+    const uid = removed.uid;
+    const sessionId = event.params.sessionId;
+    if (!validUid(uid) || !validActivityId(sessionId)) return;
+    const journeyRef = getDatabase().ref(`journeys/${event.params.activityId}`);
+    const activeSessionRef = journeyRef.child(`sessions/${uid}`);
+    const activeSession = (await activeSessionRef.get()).val();
+    if (activeSession !== sessionId) return;
+    const removedLocationUpdatedAt = Number(removed.updatedAt);
     const currentLocation = await getDatabase()
-      .ref(`journeys/${event.params.activityId}/locations/${event.params.uid}`)
+      .ref(`journeys/${event.params.activityId}/locations/${sessionId}`)
       .get();
     if (currentLocation.exists()) return;
-    await updateJourneyUnderwayStatus(event.params.activityId, event.params.uid, false, {
+    await activeSessionRef.transaction((current) => (current === sessionId ? null : current));
+    await updateJourneyUnderwayStatus(event.params.activityId, uid, false, {
       removedLocationUpdatedAt,
+      sessionId,
     });
   },
 );
@@ -5595,6 +6163,48 @@ exports.updateOwnProfile = onCall(CALLABLE_OPTS, async (request) => {
   };
 });
 
+/**
+ * Queues the branded verification mail. Replaces the client SDK's
+ * sendEmailVerification, which could only ever send Firebase's own template.
+ *
+ * requireAuth, NOT requireVerifiedAuth: this callable IS the verification step,
+ * so demanding a verified token would lock the door from the inside — the same
+ * reason claimUsername is on the exception list documented above.
+ *
+ * The Firestore write is all this waits for. Resend is spoken to by
+ * deliverEmailOutbox, so a slow provider can never stall a sign-up.
+ */
+exports.sendVerificationEmail = onCall(CALLABLE_OPTS, async (request) => {
+  const uid = requireAuth(request);
+  await enforceRateLimit(
+    uid,
+    'emailVerificationSend',
+    EMAIL_VERIFICATION_PER_WINDOW,
+    EMAIL_VERIFICATION_WINDOW_MS,
+    'Zu viele Anfragen. Warte ein paar Minuten, bevor du die E-Mail erneut anforderst.',
+  );
+  const authUser = await getAdminAuth().getUser(uid);
+  if (!authUser.email) {
+    throw new HttpsError('failed-precondition', 'Für dieses Konto gibt es keine E-Mail-Adresse.');
+  }
+  // Not an error: the gate polls and may still ask while a link from a moment
+  // ago is already used. Sending a second mail for a done job only confuses.
+  if (authUser.emailVerified) return { queued: false, alreadyVerified: true };
+
+  const actionLink = await getAdminAuth().generateEmailVerificationLink(authUser.email);
+  await getFirestore()
+    .collection('emailOutbox')
+    .add({
+      kind: 'verification',
+      recipientEmail: authUser.email,
+      actionLink,
+      displayName: authUser.displayName ?? '',
+      createdAt: Timestamp.now(),
+      expireAt: Timestamp.fromMillis(Date.now() + DAY_MS),
+    });
+  return { queued: true, alreadyVerified: false };
+});
+
 exports.claimUsername = onCall(CALLABLE_OPTS, async (request) => {
   const uid = requireAuth(request);
   await enforceRateLimit(uid, 'claimUsername', 10, HOUR_MS);
@@ -5612,7 +6222,7 @@ exports.claimUsername = onCall(CALLABLE_OPTS, async (request) => {
   const initialDisplayName =
     typeof authRecord.displayName === 'string' && authRecord.displayName.trim()
       ? authRecord.displayName.trim().slice(0, 50)
-      : 'Como-Freund';
+      : 'Mica-Freund';
   const claimedAt = Timestamp.now();
   const initialProfile = {
     displayName: initialDisplayName,
@@ -5778,12 +6388,12 @@ exports.sendFriendRequest = onCall(CALLABLE_OPTS, async (request) => {
   let outcome;
   let recipientUid;
   let requestCreated = false;
-  let requesterDisplayName = 'Ein Freund';
+  let requesterDisplayName = 'Jemand';
   await db.runTransaction(async (transaction) => {
     // Firestore may retry this callback. Reset state observed after commit so
     // an abandoned speculative create can never emit a duplicate push.
     requestCreated = false;
-    requesterDisplayName = 'Ein Freund';
+    requesterDisplayName = 'Jemand';
     if (claimRef) {
       const claimSnapshot = await transaction.get(claimRef);
       if (!claimSnapshot.exists || !validUid(claimSnapshot.data().uid)) {
@@ -5877,7 +6487,7 @@ exports.sendFriendRequest = onCall(CALLABLE_OPTS, async (request) => {
         actorUid: uid,
         kind: 'friend_request',
         title: 'Neue Freundschaftsanfrage',
-        body: `${requesterDisplayName} möchte mit dir bei Como befreundet sein.`,
+        body: `${requesterDisplayName} möchte mit dir bei Mica befreundet sein.`,
       },
     ]);
   }
@@ -5899,7 +6509,7 @@ exports.respondToFriendRequest = onCall(CALLABLE_OPTS, async (request) => {
   const db = getFirestore();
   const relationshipRef = db.doc(`friendships/${friendshipDocId}`);
   let requesterUid;
-  let responderName = 'Ein Freund';
+  let responderName = 'Jemand';
   await db.runTransaction(async (transaction) => {
     const responderUserRef = db.doc(`users/${uid}`);
     const [relationshipSnapshot, responderProfileSnapshot] = await Promise.all([
@@ -5944,11 +6554,89 @@ exports.respondToFriendRequest = onCall(CALLABLE_OPTS, async (request) => {
         recipientUid: requesterUid,
         actorUid: uid,
         kind: 'system',
-        title: 'Freundschaft bestätigt',
-        body: `${responderName} ist jetzt dein Freund bei Como.`,
+        // Title states the outcome, body states who did what — repeating the
+        // sentence in both is what makes a push look machine-written. Also
+        // avoids the gendered singular "Freund" (see AGENTS.md wording rule).
+        title: 'Ihr seid jetzt befreundet',
+        body: `${responderName} hat deine Freundschaftsanfrage angenommen.`,
       },
     ]).catch((error) => console.error('[friends] acceptance notification failed', error));
   }
+  return { ok: true };
+});
+
+/**
+ * The requester's own way back out of a request they have sent.
+ *
+ * Deliberately a SEPARATE callable, not a relaxed `respondToFriendRequest`:
+ * that one takes an `accept` boolean, so letting the requester through its
+ * guard would also let them send `accept: true` and grant themselves a
+ * friendship with anyone they can name. This callable can only ever delete —
+ * the dangerous case is impossible by construction rather than by an `if`.
+ *
+ * The recipient is NOT told. "X hat die Anfrage zurückgezogen" is a small
+ * humiliation carrying no useful information; the request simply stops
+ * existing. Same restraint as `autoExtendSafetySessions`, which stays silent
+ * about an unanswered routine question for the same reason. An already
+ * delivered push cannot be recalled, and nothing here pretends otherwise.
+ */
+exports.withdrawFriendRequest = onCall(CALLABLE_OPTS, async (request) => {
+  const uid = requireVerifiedAuth(request);
+  await enforceRateLimit(uid, 'friendMutations', 30, HOUR_MS);
+  const otherUid = request.data?.uid;
+  if (!validUid(otherUid) || otherUid === uid) {
+    throw new HttpsError('invalid-argument', 'Ungültige Freundschaftsanfrage.');
+  }
+
+  const db = getFirestore();
+  const relationshipRef = db.doc(`friendships/${friendshipId(uid, otherUid)}`);
+  // Read before charging the per-pair budget below, so a double tap on a
+  // request that is already gone costs nothing. The transaction re-reads and
+  // re-checks authoritatively; this is only about what gets billed to whom.
+  const existing = await relationshipRef.get();
+  if (!existing.exists) return { ok: true };
+  if (existing.data().status !== 'pending' || existing.data().requesterUid !== uid) {
+    throw new HttpsError('permission-denied', 'Diese Anfrage ist nicht verfügbar.');
+  }
+
+  /**
+   * Per-PAIR cap, and it is the reason this feature is safe to ship.
+   *
+   * Withdrawing deletes the friendship document, so the next sendFriendRequest
+   * counts as new and pushes again. Without this, withdraw + resend is a loop
+   * that rings one chosen person's phone up to the hourly send limit. Three a
+   * day is far more than an honest change of mind needs and far too few to
+   * harass with.
+   */
+  await enforceRateLimit(
+    uid,
+    `friendWithdraw_${otherUid}`,
+    3,
+    DAY_MS,
+    'Du hast diese Anfrage heute schon mehrmals zurückgezogen. Versuch es morgen wieder.',
+  );
+
+  await db.runTransaction(async (transaction) => {
+    const ownUserRef = db.doc(`users/${uid}`);
+    const otherUserRef = db.doc(`users/${otherUid}`);
+    const [relationshipSnapshot, ownUserSnapshot, otherUserSnapshot] = await Promise.all([
+      transaction.get(relationshipRef),
+      transaction.get(ownUserRef),
+      transaction.get(otherUserRef),
+    ]);
+    // Gone between the read above and here — accepted, declined, or withdrawn
+    // on another device. The caller wanted it absent and it is absent.
+    if (!relationshipSnapshot.exists) return;
+    const relationship = relationshipSnapshot.data();
+    if (relationship.status !== 'pending' || relationship.requesterUid !== uid) {
+      throw new HttpsError('permission-denied', 'Diese Anfrage ist nicht verfügbar.');
+    }
+    transaction.delete(relationshipRef);
+    bumpFriendshipsVersion(transaction, [
+      { ref: ownUserRef, snapshot: ownUserSnapshot },
+      { ref: otherUserRef, snapshot: otherUserSnapshot },
+    ]);
+  });
   return { ok: true };
 });
 
@@ -6267,7 +6955,16 @@ async function severBlockedContactSpaces(firstUid, secondUid) {
     }
     operations.push({ type: 'update', ref: activitySnapshot.ref, data: patch });
     activityRemovals.set(activitySnapshot.id, removeUid);
+    const sessionId = (
+      await getDatabase()
+        .ref(`journeys/${activitySnapshot.id}/sessions/${removeUid}`)
+        .get()
+    ).val();
     rtdbRemovals[`journeys/${activitySnapshot.id}/members/${removeUid}`] = null;
+    rtdbRemovals[`journeys/${activitySnapshot.id}/sessions/${removeUid}`] = null;
+    if (validActivityId(sessionId)) {
+      rtdbRemovals[`journeys/${activitySnapshot.id}/locations/${sessionId}`] = null;
+    }
     rtdbRemovals[`journeys/${activitySnapshot.id}/locations/${removeUid}`] = null;
   }
 
@@ -6360,6 +7057,66 @@ exports.setCloseFriend = onCall(CALLABLE_OPTS, async (request) => {
   await userRef.update({
     closeFriendUids: isClose ? FieldValue.arrayUnion(otherUid) : FieldValue.arrayRemove(otherUid),
   });
+  return { ok: true };
+});
+
+/**
+ * The preselected Heimweg audience.
+ *
+ * Callable rather than a client write, and the reason is the rule it replaces:
+ * `users/{uid}` only accepts a client update to `notificationsSeenAt`, so the
+ * direct `setDoc` this used to go through was rejected every single time. The
+ * provider writes optimistically and rolls back silently, so the selection just
+ * sprang back with no error — a Safety feature that could not be configured at
+ * all.
+ *
+ * Every uid is re-checked against an accepted friendship here, exactly like
+ * `setCloseFriend`: this list is the default recipient set for a live location,
+ * so it may never contain somebody the owner is not confirmed friends with.
+ * `HEIMWEG_GROUP_MAX` mirrors the rules cap, which is deliberately far below
+ * `closeFriendUids` — a live location sent to a crowd helps nobody, because a
+ * request addressed to everyone makes no single person feel responsible.
+ */
+const HEIMWEG_GROUP_MAX = 20;
+
+exports.setHeimwegGroup = onCall(CALLABLE_OPTS, async (request) => {
+  const uid = requireVerifiedAuth(request);
+  await enforceRateLimit(uid, 'friendMutations', 30, HOUR_MS);
+  const input = request.data?.uids;
+  if (!Array.isArray(input)) {
+    throw new HttpsError('invalid-argument', 'Ungültige Auswahl.');
+  }
+  const uids = [...new Set(input)];
+  if (uids.some((candidate) => !validUid(candidate) || candidate === uid)) {
+    throw new HttpsError('invalid-argument', 'Ungültige Auswahl.');
+  }
+  if (uids.length > HEIMWEG_GROUP_MAX) {
+    throw new HttpsError(
+      'invalid-argument',
+      `Die Heimweg-Gruppe fasst höchstens ${HEIMWEG_GROUP_MAX} Personen.`,
+    );
+  }
+
+  const db = getFirestore();
+  const userRef = db.doc(`users/${uid}`);
+  const [userSnapshot, confirmed] = await Promise.all([
+    userRef.get(),
+    confirmedFriendsAmong(db, uid, uids),
+  ]);
+  if (!userSnapshot.exists) {
+    throw new HttpsError('failed-precondition', 'Dein Profil ist noch nicht bereit.');
+  }
+  if (confirmed.length !== uids.length) {
+    throw new HttpsError(
+      'failed-precondition',
+      'Mindestens eine ausgewählte Person ist kein bestätigter Freund.',
+    );
+  }
+
+  // Whole-list write, not arrayUnion/arrayRemove: the caller sends the complete
+  // selection it is showing, so a partial patch would let a stale client leave
+  // somebody in the audience the user just took out.
+  await userRef.update({ heimwegGroupUids: confirmed });
   return { ok: true };
 });
 
@@ -6737,6 +7494,7 @@ exports.deleteMyAccount = onCall(CALLABLE_OPTS, async (request) => {
     hostedTimePlans,
     ownTimePlanMemberships,
     timePlanInvitesReceived,
+    ownTimePlanAudience,
   ] = await Promise.all([
     db.doc(`users/${uid}`).get(),
     getAllDocuments(db.collection('circles').where('memberIds', 'array-contains', uid)),
@@ -6763,16 +7521,18 @@ exports.deleteMyAccount = onCall(CALLABLE_OPTS, async (request) => {
     getAllDocuments(db.collection('timePlans').where('hostId', '==', uid)),
     getAllDocuments(db.collectionGroup('timePlanMembers').where('uid', '==', uid)),
     getAllDocuments(db.collection('timePlanInvites').where('inviteeUid', '==', uid)),
+    getAllDocuments(db.collection('timePlanAudience').where('audienceUid', '==', uid)),
   ]);
   const [hostedTimePlanCleanup, ownTimePlanMembershipsWithPlans] = await Promise.all([
     Promise.all(
       hostedTimePlans.map(async (planSnapshot) => {
-        const [members, invites, outbox] = await Promise.all([
+        const [members, invites, audience, outbox] = await Promise.all([
           getAllDocuments(planSnapshot.ref.collection('timePlanMembers')),
           getAllDocuments(db.collection('timePlanInvites').where('planId', '==', planSnapshot.id)),
+          getAllDocuments(db.collection('timePlanAudience').where('planId', '==', planSnapshot.id)),
           getAllDocuments(db.collection('pushOutbox').where('timePlanId', '==', planSnapshot.id)),
         ]);
-        return { planSnapshot, members, invites, outbox };
+        return { planSnapshot, members, invites, audience, outbox };
       }),
     ),
     Promise.all(
@@ -6883,7 +7643,8 @@ exports.deleteMyAccount = onCall(CALLABLE_OPTS, async (request) => {
 
   const hostedTimePlanIds = new Set(hostedTimePlans.map((snapshot) => snapshot.id));
   const deletedTimePlanMemberPaths = new Set();
-  hostedTimePlanCleanup.forEach(({ planSnapshot, members, invites, outbox }) => {
+  const deletedTimePlanAudiencePaths = new Set();
+  hostedTimePlanCleanup.forEach(({ planSnapshot, members, invites, audience, outbox }) => {
     operations.push({ type: 'delete', ref: planSnapshot.ref });
     members.forEach((memberSnapshot) => {
       deletedTimePlanMemberPaths.add(memberSnapshot.ref.path);
@@ -6898,6 +7659,10 @@ exports.deleteMyAccount = onCall(CALLABLE_OPTS, async (request) => {
           ref: db.doc(`notifications/time_plan_${planSnapshot.id}_${invite.inviteeUid}`),
         });
       }
+    });
+    audience.forEach((audienceSnapshot) => {
+      deletedTimePlanAudiencePaths.add(audienceSnapshot.ref.path);
+      operations.push({ type: 'delete', ref: audienceSnapshot.ref });
     });
     outbox.forEach((outboxSnapshot) =>
       operations.push({ type: 'delete', ref: outboxSnapshot.ref }),
@@ -6919,6 +7684,11 @@ exports.deleteMyAccount = onCall(CALLABLE_OPTS, async (request) => {
   timePlanInvitesReceived.forEach((snapshot) =>
     operations.push({ type: 'delete', ref: snapshot.ref }),
   );
+  ownTimePlanAudience.forEach((snapshot) => {
+    if (!deletedTimePlanAudiencePaths.has(snapshot.ref.path)) {
+      operations.push({ type: 'delete', ref: snapshot.ref });
+    }
+  });
 
   const hostedIds = new Set(hostedActivities.map((snapshot) => snapshot.id));
   hostedActivities.forEach((snapshot) => operations.push({ type: 'delete', ref: snapshot.ref }));
@@ -6986,12 +7756,23 @@ exports.deleteMyAccount = onCall(CALLABLE_OPTS, async (request) => {
   // Live Anreise state already expires on its own short TTL, but an explicit
   // account deletion should not leave the deleted uid's last-known position
   // readable to remaining participants for that window either.
-  new Set([...hostedActivities, ...joinedActivities].map((snapshot) => snapshot.id)).forEach(
-    (activityId) => {
-      rtdbRemovals[`journeys/${activityId}/members/${uid}`] = null;
-      rtdbRemovals[`journeys/${activityId}/locations/${uid}`] = null;
-    },
+  const accountJourneyIds = [
+    ...new Set([...hostedActivities, ...joinedActivities].map((snapshot) => snapshot.id)),
+  ];
+  const accountJourneySessions = await Promise.all(
+    accountJourneyIds.map(async (activityId) => ({
+      activityId,
+      sessionId: (await getDatabase().ref(`journeys/${activityId}/sessions/${uid}`).get()).val(),
+    })),
   );
+  accountJourneySessions.forEach(({ activityId, sessionId }) => {
+      rtdbRemovals[`journeys/${activityId}/members/${uid}`] = null;
+      rtdbRemovals[`journeys/${activityId}/sessions/${uid}`] = null;
+      if (validActivityId(sessionId)) {
+        rtdbRemovals[`journeys/${activityId}/locations/${sessionId}`] = null;
+      }
+      rtdbRemovals[`journeys/${activityId}/locations/${uid}`] = null;
+  });
   await getDatabase().ref().update(rtdbRemovals);
   // The avatar file must not outlive the account: its tokened download URL
   // stays readable without auth. Best-effort — a storage hiccup (or the
@@ -7026,7 +7807,7 @@ exports.onActivityUpdate = onDocumentUpdated(
         actorUid: participantUid,
         kind: 'activity_joined',
         title: 'Jemand ist dabei',
-        body: `${participant?.displayName ?? 'Ein Freund'} ist deiner Activity beigetreten.`,
+        body: `${participant?.displayName ?? 'Jemand'} ist deiner Activity beigetreten.`,
         activityId,
       });
     });
@@ -7213,7 +7994,7 @@ exports.startSocialSession = onCall(CALLABLE_OPTS, async (request) => {
   const db = getFirestore();
   const profile = (await db.doc(`publicProfiles/${uid}`).get()).data() ?? {};
   const displayName = cleanString(
-    profile.displayName ?? request.auth.token.name ?? 'Como-Freund',
+    profile.displayName ?? request.auth.token.name ?? 'Mica-Freund',
     50,
     'Name',
     true,
@@ -7287,7 +8068,7 @@ exports.discoverSocial = onCall(CALLABLE_OPTS, async (request) => {
       return {
         id: snapshot.id,
         kind: 'person',
-        displayName: matched ? (data.displayName ?? 'Como-Freund') : 'Person in deiner Nähe',
+        displayName: matched ? (data.displayName ?? 'Mica-Freund') : 'Person in deiner Nähe',
         initials: matched ? (data.initials ?? 'TN') : 'TN',
         distanceLabel: 'in deiner Nähe',
         note: data.note ?? '',
@@ -7669,8 +8450,12 @@ async function createIdempotentJourneyReminderNotifications(activityId, generati
 
   const expireAt = Timestamp.fromMillis(Date.now() + NOTIFICATION_RETENTION_MS);
   const batch = db.batch();
-  validItems.forEach((item) => {
-    batch.create(db.doc(`notifications/${deterministicTaskId(deliveryId, item.recipientUid)}`), {
+  const deliveryItems = validItems.map((item) => ({
+    ...item,
+    notificationId: deterministicTaskId(deliveryId, item.recipientUid),
+  }));
+  deliveryItems.forEach((item) => {
+    batch.create(db.doc(`notifications/${item.notificationId}`), {
       recipientUid: item.recipientUid,
       kind: item.kind,
       title: item.title.slice(0, 100),
@@ -7681,7 +8466,7 @@ async function createIdempotentJourneyReminderNotifications(activityId, generati
     });
   });
   batch.create(outboxRef, {
-    items: validItems.map(pushOutboxItem),
+    items: deliveryItems.map(pushOutboxItem),
     createdAt: Timestamp.now(),
     expireAt,
   });
@@ -7699,7 +8484,11 @@ async function dispatchJourneyReminder(activityId, generation) {
   if (!activity) return;
   const journey = journeyNotificationPayload(activityId, activity);
   if (!journey) return;
-  const recipients = Array.isArray(activity.participantUids) ? activity.participantUids : [];
+  // The creator chose the place and never gets an automatic Anreise question.
+  // Participants who join a running Activity get the in-app question instead.
+  const recipients = (Array.isArray(activity.participantUids) ? activity.participantUids : []).filter(
+    (recipientUid) => recipientUid !== activity.hostId,
+  );
   const eligible = await filterJourneyReminderRecipients(getFirestore(), recipients);
   const startLabel = formatBerlinClock(activity.startsAt);
   await createIdempotentJourneyReminderNotifications(
@@ -7711,7 +8500,7 @@ async function dispatchJourneyReminder(activityId, generation) {
       title: startLabel
         ? `${activity.title ?? 'Deine Activity'} beginnt um ${startLabel}`
         : `${activity.title ?? 'Deine Activity'} beginnt bald`,
-      body: 'Anreise teilen? Zum Aktivieren tippen.',
+      body: 'Möchtest du deine Anreise teilen? Geteilt wird erst, wenn du losgehst.',
       activityId,
       journey,
     })),

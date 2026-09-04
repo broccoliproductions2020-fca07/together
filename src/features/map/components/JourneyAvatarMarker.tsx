@@ -7,6 +7,7 @@ import { MarkerGroundShadow } from './MarkerGroundShadow';
 import { MarkerImage } from './markerCapture';
 
 import { TEXT_FIXED } from '@/shared/theme';
+import { SEMANTIC_COLOR } from '@/shared/utils/semanticColors';
 
 // Brand ink (global.css light foreground) — see AvatarMarker.
 const INK = '#14211C';
@@ -38,7 +39,7 @@ export function JourneyAvatarMarker({
   onPress,
 }: JourneyAvatarMarkerProps) {
   const arrived = participant.status === 'arrived';
-  const color = colorOverride ?? (arrived ? '#41C08D' : '#3B82F6');
+  const color = colorOverride ?? (arrived ? '#41C08D' : SEMANTIC_COLOR.journey);
 
   return (
     <Pressable

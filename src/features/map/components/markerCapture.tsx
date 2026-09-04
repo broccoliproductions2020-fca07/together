@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 import { Image, StyleSheet, View, type ImageProps } from 'react-native';
-import { captureRef } from 'react-native-view-shot';
+import { captureRef, releaseCapture } from 'react-native-view-shot';
 
 /**
  * Image-based marker workaround for the react-native-maps Android clipping bug.
@@ -60,8 +60,47 @@ interface CacheState {
   order: string[];
 }
 
-export function useMarkerImages(): MarkerImages {
+export function useMarkerImages(activeMarkerIds: readonly string[] = []): MarkerImages {
   const [cache, setCache] = useState<CacheState>({ uris: {}, latest: {}, order: [] });
+  const activeMarkerKey = JSON.stringify([...new Set(activeMarkerIds)].sort());
+  const retainedUrisRef = useRef(new Set<string>());
+
+  useEffect(() => {
+    const currentUris = new Set(Object.values(cache.uris));
+    retainedUrisRef.current.forEach((uri) => {
+      if (!currentUris.has(uri)) releaseCapture(uri);
+    });
+    retainedUrisRef.current = currentUris;
+  }, [cache.uris]);
+
+  useEffect(
+    () => () => {
+      retainedUrisRef.current.forEach(releaseCapture);
+      retainedUrisRef.current.clear();
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const activeIds = new Set(JSON.parse(activeMarkerKey) as string[]);
+    setCache((prev) => {
+      const latest = Object.fromEntries(
+        Object.entries(prev.latest).filter(([markerId]) => activeIds.has(markerId)),
+      );
+      const uris = { ...prev.uris };
+      const order = [...prev.order];
+      const inUse = new Set(Object.values(latest));
+      while (order.length > MAX_CACHED_MARKER_IMAGES) {
+        const evictable = order.findIndex((candidate) => !inUse.has(uris[candidate]));
+        if (evictable === -1) break;
+        const [evicted] = order.splice(evictable, 1);
+        delete uris[evicted];
+      }
+      const latestChanged = Object.keys(latest).length !== Object.keys(prev.latest).length;
+      const cacheChanged = order.length !== prev.order.length;
+      return latestChanged || cacheChanged ? { uris, latest, order } : prev;
+    });
+  }, [activeMarkerKey]);
 
   const handleCaptured = useCallback((markerId: string, key: string, uri: string) => {
     setCache((prev) => {
@@ -84,6 +123,18 @@ export function useMarkerImages(): MarkerImages {
       }
       return { uris, latest, order };
     });
+  }, []);
+
+  /**
+   * Identity-stable, like `handleCaptured` — a changing callback would re-run
+   * the capturer's effect and reset its attempt counter.
+   *
+   * A marker whose PNG never arrives renders as NOTHING (`MapCanvas` draws no
+   * `<Marker>` without a uri), so a capture failure is invisible on the map. The
+   * warning is the only trace it leaves; it must not be swallowed.
+   */
+  const handleFailed = useCallback((markerId: string, message: string) => {
+    console.warn(`[markerCapture] ${markerId}: ${message}`);
   }, []);
 
   const imageUriFor = useCallback(
@@ -111,6 +162,7 @@ export function useMarkerImages(): MarkerImages {
               markerId={request.markerId}
               captureKey={request.captureKey}
               onCaptured={handleCaptured}
+              onFailed={handleFailed}
             >
               {request.node}
             </MarkerCapturer>
@@ -118,7 +170,7 @@ export function useMarkerImages(): MarkerImages {
         </View>
       );
     },
-    [cache.uris, handleCaptured],
+    [cache.uris, handleCaptured, handleFailed],
   );
 
   return { uris: cache.uris, imageUriFor, renderCaptureLayer };
@@ -168,6 +220,7 @@ export function MarkerImage(props: ImageProps) {
 /** Never block a capture forever on an asset that fails to load. */
 const CAPTURE_FALLBACK_MS = 1500;
 const CAPTURE_RETRY_MS = 500;
+const CAPTURE_MAX_ATTEMPTS = 6;
 
 /**
  * Renders one marker off-screen and captures it to a PNG once its layout has
@@ -182,29 +235,38 @@ function MarkerCapturer({
   markerId,
   captureKey,
   onCaptured,
+  onFailed,
 }: {
   children: ReactNode;
   markerId: string;
   captureKey: string;
   onCaptured: (markerId: string, captureKey: string, uri: string) => void;
+  onFailed: (markerId: string, message: string) => void;
 }) {
   const ref = useRef<View>(null);
   const layoutDone = useRef(false);
   const pendingAssets = useRef(0);
+  const assetDeadlinePassed = useRef(false);
   const capturing = useRef(false);
+  const disposed = useRef(false);
+  const attempts = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const capture = useCallback(() => {
-    if (capturing.current) return;
+    if (disposed.current || capturing.current) return;
     capturing.current = true;
     if (timer.current) clearTimeout(timer.current);
     requestAnimationFrame(() =>
       requestAnimationFrame(async () => {
+        if (disposed.current) return;
         // An asset may have registered between scheduling and this frame —
         // back off and let its completion (or the fallback timer) re-trigger.
-        if (pendingAssets.current > 0) {
+        if (pendingAssets.current > 0 && !assetDeadlinePassed.current) {
           capturing.current = false;
-          timer.current = setTimeout(capture, CAPTURE_FALLBACK_MS);
+          timer.current = setTimeout(() => {
+            assetDeadlinePassed.current = true;
+            capture();
+          }, CAPTURE_FALLBACK_MS);
           return;
         }
         try {
@@ -213,16 +275,35 @@ function MarkerCapturer({
             quality: 1,
             result: 'tmpfile',
           });
+          if (disposed.current) {
+            releaseCapture(uri);
+            return;
+          }
+          attempts.current = 0;
           onCaptured(markerId, captureKey, uri);
-        } catch {
-          // A failed capture just means the marker stays hidden this pass —
-          // retry shortly instead of waiting for a state change.
+        } catch (error) {
           capturing.current = false;
-          timer.current = setTimeout(capture, CAPTURE_RETRY_MS);
+          if (disposed.current) return;
+          attempts.current += 1;
+          if (attempts.current >= CAPTURE_MAX_ATTEMPTS) {
+            // Giving up here means this activity simply has no pin — on every
+            // device, with no error anywhere. That is the worst failure this
+            // app has (an activity that looks created and reaches nobody), and
+            // it used to happen in complete silence. It stays non-fatal: one
+            // marker missing must not take the map down. But it says so.
+            console.warn(
+              `[markerCapture] Marker ${markerId} konnte nach ${CAPTURE_MAX_ATTEMPTS} Versuchen nicht gerendert werden — er fehlt auf der Karte.`,
+              error,
+            );
+            onFailed(markerId, error instanceof Error ? error.message : String(error));
+            return;
+          }
+          const delay = Math.min(CAPTURE_RETRY_MS * 2 ** (attempts.current - 1), 8000);
+          timer.current = setTimeout(capture, delay);
         }
       }),
     );
-  }, [onCaptured, markerId, captureKey]);
+  }, [onCaptured, onFailed, markerId, captureKey]);
 
   const maybeCapture = useCallback(() => {
     if (layoutDone.current && pendingAssets.current === 0) capture();
@@ -245,8 +326,12 @@ function MarkerCapturer({
   );
 
   useEffect(() => {
-    timer.current = setTimeout(capture, CAPTURE_FALLBACK_MS);
+    timer.current = setTimeout(() => {
+      assetDeadlinePassed.current = true;
+      capture();
+    }, CAPTURE_FALLBACK_MS);
     return () => {
+      disposed.current = true;
       if (timer.current) clearTimeout(timer.current);
     };
   }, [capture]);

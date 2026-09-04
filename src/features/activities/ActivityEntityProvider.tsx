@@ -24,6 +24,7 @@ import type {
   MapSelection,
   MarkerCluster,
 } from '@/features/map/types/map.types';
+import { OPEN_DURATION_MS } from '@/features/presence/openWindow';
 
 import { activityService } from './services/activityService';
 import type {
@@ -35,8 +36,9 @@ import { resolveActivityMode } from './utils/activityMode';
 import { isActivityLive } from './utils/activityLifecycle';
 import { recordCoParticipants } from './inviteHistory';
 import { durationMinutes } from './utils/datetime';
-import { createDefaultVisibility, resolveDraftForPublish } from './utils/modeDefaults';
-import type { ActivityDraft } from './types';
+import { CURRENT_LOCATION_PLACE } from './utils/currentPlace';
+import { resolveDraftForPublish } from './utils/modeDefaults';
+import type { ActivityDraft, ActivityVisibility } from './types';
 
 // Activities only need minute-level precision: mode transitions, time labels
 // and the coarse countdown ring never benefit from a 30-second UI rebuild.
@@ -46,6 +48,9 @@ const MODE_TICK_MS = 60_000;
 // How long an optimistic activity may live after its write succeeded without the
 // feed listener echoing it back. Generous — the echo is normally sub-second.
 const TWIN_MAX_LIFETIME_MS = 10_000;
+/** How many "new for you" activities the Postfach may ever show at once. A
+ * recovery path for a missed push, never a feed — see `newActivitiesSince`. */
+const NEW_FOR_YOU_LIMIT = 8;
 
 export interface ActivityInfo {
   id: string;
@@ -84,6 +89,13 @@ export interface CoreActivitySummary {
   participantCount: number;
 }
 
+export interface OpenPresenceActivityConstraint {
+  id: string;
+  title: string;
+  startsAt: number;
+  isRunning: boolean;
+}
+
 export interface ActivityUpdate {
   title?: string;
   mode?: ActivityMode;
@@ -97,6 +109,8 @@ export interface ActivityUpdate {
   category?: ActivityCategory | null;
   /** Host toggle for participant guest invites; undefined leaves it unchanged. */
   guestInvitesEnabled?: boolean;
+  /** Who may see it, as a context the server re-resolves; undefined = unchanged. */
+  audienceContext?: ActivityVisibility;
 }
 
 interface ActivityEntityContextValue {
@@ -107,7 +121,23 @@ interface ActivityEntityContextValue {
   plans: Plan[];
   /** Derived from the existing activity feed — never opens another listener. */
   ownCoreActivity: CoreActivitySummary | null;
+  nextOwnActivity: CoreActivitySummary | null;
+  openPresenceConstraint: OpenPresenceActivityConstraint | null;
   findActivityById: (id: string) => ActivityInfo | null;
+  /**
+   * Activities published since `sinceMs` that this person could still join.
+   *
+   * Derived entirely from the feed that is already subscribed — no listener, no
+   * query, no notification document per recipient. That is the whole point: a
+   * durable "you missed this" entry costs one write per recipient if it is
+   * stored, and nothing at all if it is computed from data the device already
+   * holds.
+   *
+   * Deliberately CAPPED. This is a recovery path for a missed push, not a feed
+   * — the app has no feed on purpose, and an uncapped list of everything your
+   * friends planned is exactly what one turns into.
+   */
+  newActivitiesSince: (sinceMs: number, limit?: number) => ActivityInfo[];
   markerToSelection: (marker: MapMarker) => MapSelection;
   clusterToSelection: (cluster: MarkerCluster) => MapSelection;
   planToSelection: (plan: Plan) => MapSelection;
@@ -136,8 +166,9 @@ function validTime(value: string | undefined): number {
 }
 
 /**
- * A person may have several visible activities; the Core names one stable,
- * relevant plan: a running one first, otherwise the earliest upcoming one.
+ * A running Activity always owns the Core. A future one only does inside the
+ * same three-hour horizon as the default Open window; tomorrow's plan is
+ * context, not the user's state right now.
  */
 export function selectCoreActivity(
   docs: ActivityDoc[],
@@ -148,6 +179,8 @@ export function selectCoreActivity(
     if (!doc.participantUids.includes(actorUid)) return [];
     const mode = resolveActivityMode(doc.mode, doc.startsAt, now);
     if (mode !== 'now' && mode !== 'soon') return [];
+    const startsAt = validTime(doc.startsAt);
+    if (mode === 'soon' && startsAt > now + OPEN_DURATION_MS) return [];
     return [
       {
         id: doc.id,
@@ -173,6 +206,68 @@ export function selectCoreActivity(
     return aTime - bTime || a.id.localeCompare(b.id);
   });
   return candidates[0] ?? null;
+}
+
+export function selectNextOwnActivity(
+  docs: ActivityDoc[],
+  actorUid: string,
+  now: number = Date.now(),
+): CoreActivitySummary | null {
+  const upcoming = docs.flatMap((doc) => {
+    if (!doc.participantUids.includes(actorUid)) return [];
+    const startsAt = validTime(doc.startsAt);
+    if (!Number.isFinite(startsAt) || startsAt <= now) return [];
+    return [
+      {
+        id: doc.id,
+        mode: 'soon' as const,
+        title: doc.title,
+        startsAt: doc.startsAt,
+        endsAt: doc.endsAt,
+        participantCount: Math.max(
+          1,
+          new Set([
+            ...doc.participantUids,
+            ...doc.participants.map((participant) => participant.uid),
+          ]).size,
+        ),
+      },
+    ];
+  });
+  upcoming.sort(
+    (left, right) =>
+      validTime(left.startsAt) - validTime(right.startsAt) || left.id.localeCompare(right.id),
+  );
+  return upcoming[0] ?? null;
+}
+
+export function selectOpenPresenceConstraint(
+  docs: ActivityDoc[],
+  actorUid: string,
+  now: number = Date.now(),
+): OpenPresenceActivityConstraint | null {
+  const constraints = docs.flatMap((doc) => {
+    if (!doc.participantUids.includes(actorUid) || !isActivityLive(doc, now)) return [];
+    const startsAt = validTime(doc.startsAt);
+    if (!Number.isFinite(startsAt)) return [];
+    const mode = resolveActivityMode(doc.mode, doc.startsAt, now);
+    const isRunning = mode === 'now' || startsAt <= now;
+    return [
+      {
+        id: doc.id,
+        title: doc.title,
+        startsAt: isRunning ? now : startsAt,
+        isRunning,
+      },
+    ];
+  });
+  constraints.sort(
+    (left, right) =>
+      Number(right.isRunning) - Number(left.isRunning) ||
+      left.startsAt - right.startsAt ||
+      left.id.localeCompare(right.id),
+  );
+  return constraints[0] ?? null;
 }
 
 function planPeopleToAvatars(people: PlanPerson[]): ParticipantPreview[] {
@@ -241,10 +336,20 @@ function mapSelectionFromInfo(
   return { ...base, type: 'Cluster' };
 }
 
+/**
+ * A coordinate must never be lost for want of a name.
+ *
+ * The label decides whether a place is sent at all, so an empty `name` on a
+ * place that HAS a position silently published an activity with no place —
+ * past a validator that only ever looked at the coordinate. The two now agree:
+ * wherever there is a position there is a label.
+ */
 function draftPlaceLabel(draft: ActivityDraft) {
-  return (
-    draft.place?.name ?? (draft.locationChoice === 'current' ? 'Aktueller Standort' : undefined)
-  );
+  const named = draft.place?.name?.trim();
+  if (named) return named;
+  const hasCoordinate = draft.place?.latitude != null && draft.place?.longitude != null;
+  if (hasCoordinate || draft.locationChoice === 'current') return CURRENT_LOCATION_PLACE.name;
+  return undefined;
 }
 
 function samePlace(left: ActivityDoc['place'] | undefined, right: ActivityDoc['place'] | null) {
@@ -298,6 +403,7 @@ function docToPlan(doc: ActivityDoc, now: number): Plan {
       id: p.uid,
       displayName: p.displayName,
       initials: p.initials,
+      avatarUrl: p.avatarUrl,
     })),
   };
 }
@@ -327,6 +433,7 @@ function docToMarker(doc: ActivityDoc, now: number): MapMarker | null {
       userId: participant.uid,
       displayName: participant.displayName,
       initials: participant.initials,
+      avatarUrl: participant.avatarUrl,
     })),
     participantCount: doc.participants.length,
     maxParticipants: doc.maxParticipants,
@@ -344,7 +451,7 @@ function docToMarker(doc: ActivityDoc, now: number): MapMarker | null {
 export function ActivityEntityProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const { circles } = useCircles();
-  const { friendUids, closeFriendUids } = useFriends();
+  const { friendUids, closeFriendUids, friends } = useFriends();
   const { operations: syncOperations } = useSyncOutbox();
   const actor = useMemo<ActivityActor>(
     () => ({
@@ -427,15 +534,33 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
     }
   }, [actor.uid, syncOperations]);
 
+  const friendAvatarsByUid = useMemo(
+    () =>
+      new Map(
+        friends.flatMap((friend) => (friend.avatarUrl ? [[friend.uid, friend.avatarUrl]] : [])),
+      ),
+    [friends],
+  );
+
   const activityDocs = useMemo(() => {
     const known = new Set(docs.map((doc) => doc.id));
     const merged =
       pendingDocs.length === 0
         ? docs
         : [...docs, ...pendingDocs.filter((doc) => !known.has(doc.id))];
-    if (cancellingIds.length === 0) return merged;
-    return merged.filter((doc) => !cancellingIds.includes(doc.id));
-  }, [cancellingIds, docs, pendingDocs]);
+    const activeDocs =
+      cancellingIds.length === 0
+        ? merged
+        : merged.filter((doc) => !cancellingIds.includes(doc.id));
+
+    return activeDocs.map((doc) => ({
+      ...doc,
+      participants: doc.participants.map((participant) => {
+        const avatarUrl = participant.avatarUrl ?? friendAvatarsByUid.get(participant.uid);
+        return avatarUrl ? { ...participant, avatarUrl } : participant;
+      }),
+    }));
+  }, [cancellingIds, docs, friendAvatarsByUid, pendingDocs]);
 
   // Ticks periodically so "soon" activities flip to "now" live, on screen,
   // once their start time passes — without requiring a reload or re-navigation.
@@ -452,9 +577,21 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
     () => activityDocs.filter((doc) => isActivityLive(doc, now)),
     [activityDocs, now],
   );
+  const persistedLiveDocs = useMemo(
+    () => docs.filter((doc) => isActivityLive(doc, now)),
+    [docs, now],
+  );
   const ownCoreActivity = useMemo(
     () => selectCoreActivity(liveDocs, actor.uid, now),
     [liveDocs, actor.uid, now],
+  );
+  const nextOwnActivity = useMemo(
+    () => selectNextOwnActivity(liveDocs, actor.uid, now),
+    [liveDocs, actor.uid, now],
+  );
+  const openPresenceConstraint = useMemo(
+    () => selectOpenPresenceConstraint(persistedLiveDocs, actor.uid, now),
+    [persistedLiveDocs, actor.uid, now],
   );
 
   // Local suggestion data is derived only from actual, still-live
@@ -630,6 +767,32 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
     [findActivityById],
   );
 
+  /**
+   * Deliberately built on `liveDocs`, not on the raw feed: something that has
+   * already ended is not news you can act on, and a "new for you" entry you
+   * cannot join is worse than none. Newest first, because the last thing
+   * planned is the most likely to still be open.
+   */
+  const newActivitiesSince = useCallback(
+    (sinceMs: number, limit = NEW_FOR_YOU_LIMIT): ActivityInfo[] => {
+      if (!Number.isFinite(sinceMs)) return [];
+      return liveDocs
+        .filter(
+          (doc) =>
+            doc.createdAt > sinceMs &&
+            doc.hostId !== actor.uid &&
+            !doc.participantUids.includes(actor.uid),
+        )
+        .sort((left, right) => right.createdAt - left.createdAt)
+        .slice(0, limit)
+        .flatMap((doc) => {
+          const info = findActivityById(doc.id);
+          return info ? [info] : [];
+        });
+    },
+    [actor.uid, findActivityById, liveDocs],
+  );
+
   const planToSelection = useCallback(
     (plan: Plan): MapSelection => {
       const id = planActivityId(plan);
@@ -751,6 +914,7 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
         category: update.category,
         place: update.place,
         guestInvitesEnabled: update.guestInvitesEnabled,
+        audienceContext: update.audienceContext,
       });
     },
     [actor, docs],
@@ -817,17 +981,29 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
         mode,
         title: doc.title,
         description: doc.note,
-        visibility: createDefaultVisibility(),
-        place: doc.place
-          ? {
-              id: `${doc.id}-place`,
-              name: doc.place.label,
-              latitude: doc.place.visibility === 'pin' ? doc.place.latitude : undefined,
-              longitude: doc.place.visibility === 'pin' ? doc.place.longitude : undefined,
-              source: 'map',
-            }
-          : undefined,
-        locationChoice: doc.place ? 'map' : 'open',
+        // The audience the activity ACTUALLY has, never the default. Seeding
+        // `all_friends` here was harmless only while the picker was locked;
+        // now that an edit can change the audience, that default would quietly
+        // widen it to everyone on any save. The host's own uid is dropped —
+        // the picker is about the other people.
+        visibility: { kind: 'selection', uids: doc.audienceUids.filter((id) => id !== doc.hostId) },
+        // A document with no usable pin (legacy, or written before the place
+        // guarantee) is seeded as "Aktueller Standort" rather than as the old
+        // `locationChoice: 'open'`. That value was the only remaining way past
+        // the coordinate check, so editing such an activity could save it place-
+        // less all over again. Handing it to the same resolver every fresh
+        // activity uses means an edit always ends with a real position.
+        place:
+          doc.place?.visibility === 'pin'
+            ? {
+                id: `${doc.id}-place`,
+                name: doc.place.label,
+                latitude: doc.place.latitude,
+                longitude: doc.place.longitude,
+                source: 'map',
+              }
+            : undefined,
+        locationChoice: doc.place?.visibility === 'pin' ? 'map' : 'current',
         locationPrecision: doc.place?.visibility === 'pin' ? 'exact' : 'none',
         startsAt: doc.startsAt,
         endsAt: doc.endsAt,
@@ -842,9 +1018,17 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
     [actor.uid, docs],
   );
 
-  // Audience/visibility is intentionally NOT re-resolved here (ActivityDocUpdate
-  // has no audienceUids field) — editing a typo must never silently change who
-  // can see the activity. The composer hides the visibility picker in edit mode.
+  /**
+   * The audience is editable, and it is sent only when it actually changed.
+   *
+   * The comparison deliberately looks at the FRIEND half alone: the stored
+   * audience can also hold guests a participant vouched for, whom the host's
+   * own picker cannot express. Comparing the whole list would report a change
+   * on every save, and re-resolving on an unrelated title fix would quietly
+   * pull in friends added since — which is the silent widening the picker used
+   * to be locked to prevent. Narrowing it to what the picker controls keeps the
+   * old protection while making the control real.
+   */
   const updateActivityFromDraft = useCallback(
     async (id: string, draft: ActivityDraft) => {
       const doc = docs.find((item) => item.id === id);
@@ -879,10 +1063,20 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
       }
       if (!samePlace(doc.place, place)) update.place = place;
 
+      const addressable = new Set([actor.uid, ...friendUids]);
+      const storedFriendAudience = new Set(
+        doc.audienceUids.filter((memberUid) => addressable.has(memberUid)),
+      );
+      const nextFriendAudience = new Set(resolveAudience(draft.visibility));
+      const audienceChanged =
+        storedFriendAudience.size !== nextFriendAudience.size ||
+        [...nextFriendAudience].some((memberUid) => !storedFriendAudience.has(memberUid));
+      if (audienceChanged) update.audienceContext = draft.visibility;
+
       if (!Object.keys(update).length) return;
       await updateActivity(id, update);
     },
-    [actor.uid, docs, updateActivity],
+    [actor.uid, docs, friendUids, resolveAudience, updateActivity],
   );
 
   const value = useMemo<ActivityEntityContextValue>(
@@ -892,7 +1086,10 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
       markerClusters,
       plans,
       ownCoreActivity,
+      nextOwnActivity,
+      openPresenceConstraint,
       findActivityById,
+      newActivitiesSince,
       markerToSelection,
       clusterToSelection,
       planToSelection,
@@ -911,7 +1108,10 @@ export function ActivityEntityProvider({ children }: { children: ReactNode }) {
       markerClusters,
       plans,
       ownCoreActivity,
+      nextOwnActivity,
+      openPresenceConstraint,
       findActivityById,
+      newActivitiesSince,
       markerToSelection,
       clusterToSelection,
       planToSelection,

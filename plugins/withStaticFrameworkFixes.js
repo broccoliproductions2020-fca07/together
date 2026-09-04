@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const SETTING = 'CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES';
+const RNFIREBASE_DISABLE_SPM = '$RNFirebaseDisableSPM = true';
 const IMPORT_LINE = /^\s*#(import|include)\b/;
 const REACT_IMPORT = /^\s*#import <React\//;
 
@@ -44,19 +45,35 @@ function patchPodfile(platformProjectRoot) {
   const podfile = path.join(platformProjectRoot, 'Podfile');
   if (!fs.existsSync(podfile)) return;
   let contents = fs.readFileSync(podfile, 'utf8');
-  if (contents.includes(SETTING)) return;
-  contents = contents.replace(
-    /post_install do \|installer\|/,
-    [
-      'post_install do |installer|',
-      '    installer.pods_project.targets.each do |target|',
-      '      target.build_configurations.each do |config|',
-      `        config.build_settings['${SETTING}'] = 'YES'`,
-      '      end',
-      '    end',
-    ].join('\n'),
-  );
-  fs.writeFileSync(podfile, contents);
+  let changed = false;
+
+  if (!contents.includes(RNFIREBASE_DISABLE_SPM)) {
+    const firstTarget = contents.search(/^target\s/m);
+    if (firstTarget !== -1) {
+      contents =
+        contents.slice(0, firstTarget) +
+        `${RNFIREBASE_DISABLE_SPM}\n\n` +
+        contents.slice(firstTarget);
+      changed = true;
+    }
+  }
+
+  if (!contents.includes(SETTING)) {
+    contents = contents.replace(
+      /post_install do \|installer\|/,
+      [
+        'post_install do |installer|',
+        '    installer.pods_project.targets.each do |target|',
+        '      target.build_configurations.each do |config|',
+        `        config.build_settings['${SETTING}'] = 'YES'`,
+        '      end',
+        '    end',
+      ].join('\n'),
+    );
+    changed = true;
+  }
+
+  if (changed) fs.writeFileSync(podfile, contents);
 }
 
 function collectSources(dir, out = []) {

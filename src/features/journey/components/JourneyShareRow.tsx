@@ -1,8 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, Text, View } from 'react-native';
+import { Linking, Pressable, Text, View } from 'react-native';
 
 import { colorWithAlpha } from '@/features/map/utils/markerStyles';
+import { loaderSizeForIcon, TogetherLoader } from '@/shared/components';
+import { SEMANTIC_COLOR } from '@/shared/utils/semanticColors';
 
 import { useJourney } from '../JourneyProvider';
 import type {
@@ -12,17 +14,14 @@ import type {
   UserJourneyRecord,
 } from '../types';
 
-/** Fixed accent — deliberately NOT the activity's mode color (which shifts
- * orange/blue/green per soon/open/now): Anreise is always this green, the
- * same "go" green used for arrival elsewhere, so it reads consistently
- * regardless of which activity it's attached to. rgb(...) (not hex) — required
- * by colorWithAlpha, which only rewrites the "rgb(" prefix. */
-const JOURNEY_COLOR = 'rgb(65,192,141)';
+/** Fixed semantic accent so Anreise stays recognizable across Activity modes. */
+const JOURNEY_COLOR = SEMANTIC_COLOR.journey;
 
 interface JourneyShareRowProps {
   activityId: string;
   context: JourneyActivityContext;
   journeys: JourneyParticipant[];
+  viewerError?: string | null;
   armedJourney?: UserJourneyRecord;
   /** Controls only the inactive entry. Active/arrived journeys always remain visible. */
   idlePresentation: 'hidden' | 'action';
@@ -45,6 +44,7 @@ export function JourneyShareRow({
   activityId,
   context,
   journeys,
+  viewerError,
   armedJourney,
   idlePresentation,
   onFocusParticipant,
@@ -54,6 +54,7 @@ export function JourneyShareRow({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [stopping, setStopping] = useState(false);
+  const [permissionBlocked, setPermissionBlocked] = useState(false);
   const stoppingRef = useRef(false);
 
   const ownJourney = journeys.find((journey) => journey.isCurrentUser);
@@ -77,6 +78,7 @@ export function JourneyShareRow({
     if (busy) return;
     setBusy(true);
     setError(null);
+    setPermissionBlocked(false);
     let result: JourneyStartResult;
     try {
       result = await armJourney(context, { force });
@@ -91,6 +93,7 @@ export function JourneyShareRow({
       return;
     }
     if (!result.ok) {
+      setPermissionBlocked(result.reason === 'location-permission');
       setError(
         result.reason === 'location-permission'
           ? 'Erlaube den Standort, damit die Anreise starten kann.'
@@ -98,7 +101,9 @@ export function JourneyShareRow({
             ? 'Automatische Anreise ist auf diesem Gerät nicht verfügbar.'
             : result.reason === 'destination-required'
               ? 'Diese Activity braucht einen Ort auf der Karte.'
-              : 'Dein Standort ist gerade nicht verfügbar. Gleich nochmal versuchen.',
+              : result.reason === 'activity-unavailable'
+                ? 'Die Activity oder ihre Anreise ist nicht mehr verfügbar.'
+                : 'Dein Standort ist gerade nicht verfügbar. Gleich nochmal versuchen.',
       );
       return;
     }
@@ -113,7 +118,9 @@ export function JourneyShareRow({
     try {
       await stopJourney(activityId);
     } catch {
-      setError('Das Teilen läuft weiter, weil dein Standort noch nicht sicher entfernt werden konnte.');
+      setError(
+        'Das Teilen läuft weiter, weil dein Standort noch nicht sicher entfernt werden konnte.',
+      );
     } finally {
       stoppingRef.current = false;
       setStopping(false);
@@ -125,7 +132,7 @@ export function JourneyShareRow({
     backgroundColor: colorWithAlpha(JOURNEY_COLOR, 0.08),
   };
 
-  // Idle is deliberately contextual: the row appears in the six-hour window
+  // Idle is deliberately contextual: the row appears in the one-hour window
   // before start. The immediate consent prompt after JOINING a near-term
   // activity is owned by the map screen, not by this reusable row — creating
   // one never prompts, because you picked the place yourself.
@@ -155,7 +162,7 @@ export function JourneyShareRow({
             </Text>
           </View>
           {busy ? (
-            <ActivityIndicator size="small" color={JOURNEY_COLOR} />
+            <TogetherLoader color={JOURNEY_COLOR} size={loaderSizeForIcon(17)} />
           ) : (
             <Ionicons name="chevron-forward" size={17} color="rgba(127,127,127,0.6)" />
           )}
@@ -168,6 +175,18 @@ export function JourneyShareRow({
           />
         ) : null}
         {error ? <Text className="mt-2 text-xs text-destructive">{error}</Text> : null}
+        {permissionBlocked ? (
+          <Pressable
+            accessibilityRole="button"
+            className="mt-2 min-h-11 items-center justify-center rounded-2xl bg-secondary px-4"
+            onPress={() => void Linking.openSettings()}
+          >
+            <Text className="text-sm font-bold text-secondary-foreground">
+              Einstellungen öffnen
+            </Text>
+          </Pressable>
+        ) : null}
+        {viewerError ? <Text className="mt-2 text-xs text-destructive">{viewerError}</Text> : null}
       </View>
     );
   }
@@ -212,7 +231,9 @@ export function JourneyShareRow({
           </Text>
           <Text className="mt-0.5 text-xs leading-4 text-muted-foreground">
             {underway && ownJourney
-              ? `${formatDistance(ownJourney.distanceKm)} entfernt · stoppt am Ziel`
+              ? ownJourney.distanceKm <= 0
+                ? 'Am Ziel · wird automatisch beendet'
+                : `${formatDistance(ownJourney.distanceKm)} Luftlinie · stoppt am Ziel`
               : armedSubtitle}
           </Text>
         </View>
@@ -221,37 +242,40 @@ export function JourneyShareRow({
             accessibilityRole="button"
             accessibilityLabel="Anreise auf Karte zeigen"
             onPress={() => onFocusParticipant()}
-            hitSlop={6}
-            className="h-9 w-9 items-center justify-center rounded-full bg-card/80 active:opacity-75"
+            className="h-11 w-11 items-center justify-center rounded-full bg-card/80 active:opacity-75"
           >
             <Ionicons name="map-outline" size={17} color={JOURNEY_COLOR} />
           </Pressable>
         ) : null}
       </View>
+      <Text className="text-xs leading-4 text-muted-foreground">
+        Stoppt automatisch am Ziel, spätestens nach 2 Stunden oder 30 Minuten nach Activity-Ende.
+      </Text>
       <View className="flex-row gap-2">
         {underway ? (
           <Pressable
             accessibilityRole="button"
-            className="flex-1 rounded-xl px-3 py-2"
+            className="min-h-11 flex-1 items-center justify-center rounded-xl px-3"
             style={{ backgroundColor: JOURNEY_COLOR }}
             onPress={() => markArrived(activityId)}
           >
-            <Text className="text-center text-xs font-bold text-white">Angekommen</Text>
+            <Text className="text-center text-sm font-bold text-white">Angekommen</Text>
           </Pressable>
         ) : null}
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={stopping ? 'Teilen wird gestoppt' : 'Anreise teilen stoppen'}
           disabled={stopping}
-          className="flex-1 rounded-xl bg-secondary px-3 py-2"
+          className="min-h-11 flex-1 items-center justify-center rounded-xl bg-secondary px-3"
           onPress={() => void requestStop()}
         >
-          <Text className="text-center text-xs font-bold text-secondary-foreground">
+          <Text className="text-center text-sm font-bold text-secondary-foreground">
             {stopping ? 'Wird gestoppt …' : 'Teilen stoppen'}
           </Text>
         </Pressable>
       </View>
       {error ? <Text className="text-xs text-destructive">{error}</Text> : null}
+      {viewerError ? <Text className="text-xs text-destructive">{viewerError}</Text> : null}
     </View>
   );
 }
@@ -275,18 +299,18 @@ function ConflictPrompt({
       <View className="mt-3 flex-row gap-2">
         <Pressable
           accessibilityRole="button"
-          className="flex-1 rounded-xl px-3 py-2"
+          className="min-h-11 flex-1 items-center justify-center rounded-xl px-3"
           style={{ backgroundColor: JOURNEY_COLOR }}
           onPress={onConfirm}
         >
-          <Text className="text-center text-xs font-bold text-white">Wechseln</Text>
+          <Text className="text-center text-sm font-bold text-white">Wechseln</Text>
         </Pressable>
         <Pressable
           accessibilityRole="button"
-          className="flex-1 rounded-xl bg-secondary px-3 py-2"
+          className="min-h-11 flex-1 items-center justify-center rounded-xl bg-secondary px-3"
           onPress={onCancel}
         >
-          <Text className="text-center text-xs font-bold text-secondary-foreground">Bleiben</Text>
+          <Text className="text-center text-sm font-bold text-secondary-foreground">Bleiben</Text>
         </Pressable>
       </View>
     </View>

@@ -14,7 +14,7 @@ export type { MicaFigureProps, MicaFigureTone, MicaWordmarkProps } from './brand
 export { TogetherLockup, TogetherMark } from './brand/TogetherMark';
 export { TogetherFinalWordmark } from './brand/TogetherFinalWordmark';
 export type { TogetherFinalWordmarkProps } from './brand/TogetherFinalWordmark';
-export { TogetherLoader } from './brand/TogetherLoader';
+export { LOADER_MARK_SHARE, loaderSizeForIcon, TogetherLoader } from './brand/TogetherLoader';
 export { AppBootScreen } from './brand/AppBootScreen';
 export { PressableScale } from './PressableScale';
 export type { PressableScaleProps } from './PressableScale';

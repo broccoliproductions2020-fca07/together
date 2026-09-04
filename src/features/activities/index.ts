@@ -13,7 +13,12 @@ export { writeFailureMessage } from './utils/writeFailure';
 export { activitySupportsJourney } from './utils/activityMode';
 export { useFrequentPeople } from './inviteHistory';
 export { ActivityEntityProvider, useActivityEntities } from './ActivityEntityProvider';
-export type { ActivityInfo, ActivityUpdate, CoreActivitySummary } from './ActivityEntityProvider';
+export type {
+  ActivityInfo,
+  ActivityUpdate,
+  CoreActivitySummary,
+  OpenPresenceActivityConstraint,
+} from './ActivityEntityProvider';
 export type {
   ActivityDraft,
   ActivityLocationChoice,

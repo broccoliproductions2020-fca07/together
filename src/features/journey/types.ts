@@ -3,7 +3,8 @@ import type { ParticipantPreview } from '@/domain/person';
 
 /**
  * `armed` is deliberately private: the user opted in, but no location has
- * left the device yet. Only `underway` and `arrived` are ever written to RTDB.
+ * left the device yet. RTDB contains only a short-lived `underway` point;
+ * arrival is retained locally without a final coordinate.
  */
 export type JourneyStatus = 'armed' | 'underway' | 'arrived' | 'stopped';
 
@@ -51,5 +52,6 @@ export interface JourneyStartResult {
     | 'location-permission'
     | 'location-unavailable'
     | 'background-unavailable'
-    | 'destination-required';
+    | 'destination-required'
+    | 'activity-unavailable';
 }

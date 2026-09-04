@@ -5,7 +5,13 @@
  *
  * Usage:
  *   npm run emulators:seed            (emulators must be running)
- *   node scripts/seed-emulators.mjs [--lat 52.5208] [--lng 13.4095]
+ *   npm run emulators:seed:landing    (the marketing world for screenshots)
+ *   node scripts/seed-emulators.mjs [--scenario dev|landing] [--me open|idle]
+ *                                   [--lat 52.5208] [--lng 13.4095]
+ *                                   [--brunch-in-minutes 40] [--no-purge]
+ *
+ * The content of both worlds lives in scripts/lib/seed-scenarios.mjs; this file
+ * is the only thing that writes them, so a document shape cannot drift.
  *
  * Behaviour:
  *  - Idempotent: fixed `seed-*` ids; re-running refreshes times/expiries.
@@ -16,11 +22,16 @@
  *    chats like `createActivity`, presence like `publishPresence`,
  *    friendships like `respondToFriendRequest`). Update BOTH places when a
  *    shape changes.
- *  - Coordinates default to Berlin Mitte. Pass --lat/--lng to seed around the
+ *  - Coordinates default to Berlin Mitte for `dev` and to Flannigan's Post in
+ *    Augsburg for `landing`. Pass --lat/--lng to seed around the
  *    Android emulator's simulated GPS position.
  */
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
+
+import { applyDemoAvatars, DEMO_BUCKET, withAvatar } from './lib/demo-avatars.mjs';
+import { purgeStaleSeeds, resetWorld } from './lib/seed-purge.mjs';
+import { buildScenario, LANDING_CENTRE } from './lib/seed-scenarios.mjs';
 
 const require = createRequire(import.meta.url);
 const admin = require('./firebase-admin-tools.cjs');
@@ -28,8 +39,19 @@ const { buildFriendSearchFields } = require('../functions/friend-search');
 
 process.env.FIRESTORE_EMULATOR_HOST ??= '127.0.0.1:8080';
 process.env.FIREBASE_AUTH_EMULATOR_HOST ??= '127.0.0.1:9099';
+process.env.FIREBASE_STORAGE_EMULATOR_HOST ??= '127.0.0.1:9198';
+process.env.FIREBASE_DATABASE_EMULATOR_HOST ??= '127.0.0.1:9000';
+
+/**
+ * uid -> local Storage-emulator portrait URL, filled once in `main()`. Empty
+ * when the demo portraits have not been supplied; every identity snapshot then
+ * simply omits `avatarUrl` and the app falls back to its initials circle.
+ */
+let avatarUrls = new Map();
 
 const PROJECT_ID = 'demo-together';
+// Must match the client's databaseURL namespace (src/shared/services/firebase.ts).
+const DATABASE_URL = `http://127.0.0.1:9000?ns=${PROJECT_ID}-default-rtdb`;
 const DEMO_ACCOUNT = { email: 'demo@together.dev', password: 'together123', displayName: 'Demo' };
 
 const args = process.argv.slice(2);
@@ -38,15 +60,60 @@ function argValue(name, fallback) {
   const value = index >= 0 ? Number(args[index + 1]) : NaN;
   return Number.isFinite(value) ? value : fallback;
 }
-const CENTER = { lat: argValue('lat', 52.5208), lng: argValue('lng', 13.4095) };
+function stringArg(name, fallback) {
+  const index = args.indexOf(`--${name}`);
+  const value = index >= 0 ? args[index + 1] : undefined;
+  return typeof value === 'string' && !value.startsWith('--') ? value : fallback;
+}
+const SCENARIO_NAME = stringArg('scenario', 'dev');
+/**
+ * `dev` sits in Berlin Mitte, `landing` on Flannigan's Post in Augsburg — the
+ * pub the whole capture scene is arranged around.
+ */
+const DEFAULT_CENTER =
+  SCENARIO_NAME === 'landing'
+    ? { lat: LANDING_CENTRE.lat, lng: LANDING_CENTRE.lng }
+    : { lat: 52.5208, lng: 13.4095 };
+const CENTER = {
+  lat: argValue('lat', DEFAULT_CENTER.lat),
+  lng: argValue('lng', DEFAULT_CENTER.lng),
+};
 /** Offsets in ~100m steps around CENTER (0.001 lat ≈ 111 m). */
 const at = (dLat, dLng) => ({
   lat: Number((CENTER.lat + dLat).toFixed(3)),
   lng: Number((CENTER.lng + dLng).toFixed(3)),
 });
+/**
+ * The same thing in METRES, north/east positive.
+ *
+ * Degrees are the wrong unit for the only geometric question a seed has to
+ * answer — „do two markers overlap?“ — because a degree of longitude is
+ * two thirds of a degree of latitude here, so equal offsets are unequal
+ * distances. Six decimals keep a 10 cm grid; three would quantize to 111 m
+ * in latitude and 74 m in longitude, which is coarser than the spacing the
+ * markers need.
+ */
+const atMeters = (north, east) => ({
+  lat: Number((CENTER.lat + north / 111_320).toFixed(6)),
+  lng: Number((CENTER.lng + east / (111_320 * Math.cos((CENTER.lat * Math.PI) / 180))).toFixed(6)),
+});
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
+/**
+ * Lokale Mitternacht in `days` Tagen, dann `hour:minute`.
+ *
+ * Absolute Tageszeiten statt `now + X Stunden`: Eine Aufnahme-Welt soll wie ein
+ * echter Kalender aussehen, und „Kino um 20:00" tut das, „Kino in 3 h 20" nicht.
+ * Ueber `setDate` gerechnet, damit Monatswechsel und Sommerzeit stimmen.
+ */
+const dayAt = (days, hour, minute = 0) => {
+  const date = new Date(now);
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() + days);
+  date.setHours(hour, minute, 0, 0);
+  return date.getTime();
+};
 const NOTIFICATION_RETENTION_MS = 30 * DAY;
 const MAILBOX_ACCOUNT_LIMIT = 25;
 const now = Date.now();
@@ -54,138 +121,57 @@ const ts = (ms) => admin.firestore.Timestamp.fromMillis(ms);
 const iso = (ms) => new Date(ms).toISOString();
 const stableSuffix = (value) => createHash('sha256').update(value).digest('hex').slice(0, 16);
 
-/** Stable local roster for repeatable emulator scenarios. */
-const PEOPLE = [
-  {
-    uid: 'seed-max',
-    name: 'Max Krüger',
-    username: 'max',
-    vibe: 'Kaffee',
-    open: true,
-    location: at(0.008, 0.003),
-  },
-  {
-    uid: 'seed-lisa',
-    name: 'Lisa Becker',
-    username: 'lisa',
-    vibe: 'Drink',
-    open: true,
-    location: at(-0.007, -0.011),
-  },
-  {
-    uid: 'seed-jonas',
-    name: 'Jonas Pohl',
-    username: 'jonas',
-    vibe: 'Sport',
-    open: true,
-    location: null,
-  },
-  { uid: 'seed-nora', name: 'Nora Weiß', username: 'nora', vibe: null, open: true, location: null },
-  {
-    uid: 'seed-mia',
-    name: 'Mia Sommer',
-    username: 'mia',
-    vibe: null,
-    open: false,
-    location: at(0.004, -0.006),
-  },
-  {
-    uid: 'seed-ben',
-    name: 'Ben Otto',
-    username: 'ben',
-    vibe: null,
-    open: false,
-    location: at(-0.012, 0.009),
-  },
-  {
-    uid: 'seed-amelie',
-    name: 'Amelie Wagner',
-    username: 'amelie',
-    vibe: 'Spaziergang',
-    open: true,
-    location: at(0.002, 0.007),
-  },
-  {
-    uid: 'seed-david',
-    name: 'David Klein',
-    username: 'david',
-    vibe: 'Kaffee',
-    open: true,
-    location: at(-0.003, 0.006),
-  },
-  {
-    uid: 'seed-sofia',
-    name: 'Sofia Neumann',
-    username: 'sofia',
-    vibe: null,
-    open: true,
-    location: at(0.006, -0.002),
-  },
-  {
-    uid: 'seed-elias',
-    name: 'Elias Becker',
-    username: 'elias',
-    vibe: 'Sport',
-    open: true,
-    location: at(-0.006, 0.003),
-  },
-  {
-    uid: 'seed-hannah',
-    name: 'Hannah Vogel',
-    username: 'hannah',
-    vibe: 'Essen',
-    open: true,
-    location: at(0.004, -0.008),
-  },
-  {
-    uid: 'seed-felix',
-    name: 'Felix Brandt',
-    username: 'felix',
-    vibe: null,
-    open: true,
-    location: at(-0.001, -0.009),
-  },
-  {
-    uid: 'seed-lina',
-    name: 'Lina Roth',
-    username: 'lina',
-    vibe: 'Kino',
-    open: true,
-    location: at(0.009, 0.002),
-  },
-  {
-    uid: 'seed-tom',
-    name: 'Tom Richter',
-    username: 'tom',
-    vibe: 'Drink',
-    open: true,
-    location: at(-0.009, -0.003),
-  },
-  {
-    uid: 'seed-marie',
-    name: 'Marie Schulz',
-    username: 'marie',
-    vibe: 'Spiele',
-    open: true,
-    location: at(0.007, 0.008),
-  },
-  {
-    uid: 'seed-noah',
-    name: 'Noah Fischer',
-    username: 'noah',
-    vibe: null,
-    open: true,
-    location: at(-0.008, 0.008),
-  },
-];
+/**
+ * Upcoming Sunday at `hour` local time — today if it is Sunday and the hour has
+ * not passed. The brunch activity is the marketing centrepiece, so its time has
+ * to agree with its name instead of drifting with the seed run.
+ *
+ * `--brunch-in-minutes N` overrides it for capture sessions that need the
+ * activity inside the Anreise window (T-6h).
+ */
+function nextSundayAt(hour) {
+  const date = new Date(now);
+  date.setHours(hour, 0, 0, 0);
+  const daysAhead = (7 - date.getDay()) % 7;
+  if (daysAhead === 0 && date.getTime() <= now) date.setDate(date.getDate() + 7);
+  else date.setDate(date.getDate() + daysAhead);
+  return date.getTime();
+}
 
-/** Kept outside PEOPLE so this account creates a real incoming request and is
- * never overwritten by the accepted-friendship loop below. */
-const REQUESTER = {
-  uid: 'seed-mailbox-requester',
-  name: 'Leonie Hartmann',
-  username: 'leonie-seed',
-};
+const brunchOverrideMinutes = argValue('brunch-in-minutes', NaN);
+const BRUNCH_START = Number.isFinite(brunchOverrideMinutes)
+  ? now + brunchOverrideMinutes * 60 * 1000
+  : nextSundayAt(11);
+const BRUNCH_END = BRUNCH_START + 2 * HOUR;
+
+/**
+ * The world to write. `dev` is the everyday development seed; `landing` is the
+ * deliberately quiet world the landing-page screenshots are taken from. Both
+ * live in scripts/lib/seed-scenarios.mjs - one writer, two datasets, so a
+ * document shape can never drift between them.
+ *
+ * Activity positions are constrained in BOTH, but for different reasons. On
+ * the first location fix the camera lands on PLACE_FOCUS_LATITUDE_DELTA
+ * (0.006) / _LONGITUDE_DELTA (0.005), which on a 1080x2400 phone shows about
+ * 370 m across and 820 m down. `dev` keeps its coarse +/-0.001 grid; the
+ * capture world places every marker in its own 90 m latitude band via
+ * `atMeters`, because anything closer makes `markerCollision` merge two
+ * markers into one stack pin. The derivation lives next to SCENE in
+ * scripts/lib/seed-scenarios.mjs and is re-measured by `screens:verify`.
+ */
+const scenario = buildScenario(SCENARIO_NAME, {
+  at,
+  atMeters,
+  dayAt,
+  now,
+  HOUR,
+  DAY,
+  brunchStart: BRUNCH_START,
+  brunchEnd: BRUNCH_END,
+});
+const PEOPLE = scenario.people;
+const REQUESTER = scenario.requester;
+const ACTIVITIES = scenario.activities;
 
 const initialsOf = (name) =>
   name
@@ -200,6 +186,7 @@ const profileOf = (person) => ({
   displayName: person.name,
   initials: initialsOf(person.name),
   username: person.username,
+  ...withAvatar(avatarUrls, person.uid),
 });
 
 const friendSearchOf = (profile) => ({
@@ -207,76 +194,70 @@ const friendSearchOf = (profile) => ({
   updatedAt: ts(now),
 });
 
-/** Activities hosted by seed people. Times are relative so re-seeding always
- * produces a "live" world (one running now, two upcoming). */
-const ACTIVITIES = [
-  {
-    id: 'seed-act-kicker',
-    host: 'seed-max',
-    also: ['seed-lisa'],
-    mode: 'now',
-    title: 'Kickern im Süß war gestern',
-    category: 'spiele',
-    startsAt: now - HOUR / 2,
-    endsAt: now + 2 * HOUR,
-    place: { label: 'Süß war gestern', visibility: 'pin', ...at(0.006, 0.012) },
-    messages: [
-      { author: 'seed-max', text: 'Tisch ist reserviert, kommt vorbei!' },
-      { author: 'seed-lisa', text: 'Bin in 10 Minuten da 🏓' },
-    ],
-  },
-  {
-    id: 'seed-act-lauf',
-    host: 'seed-jonas',
-    also: [],
-    mode: 'soon',
-    title: 'Feierabendlauf am Kanal',
-    category: 'sport',
-    startsAt: now + 3 * HOUR,
-    endsAt: now + 4 * HOUR,
-    maxParticipants: 6,
-    place: { label: 'Landwehrkanal', visibility: 'pin', ...at(-0.01, -0.004) },
-    messages: [{ author: 'seed-jonas', text: 'Lockeres Tempo, alle willkommen.' }],
-  },
-  {
-    id: 'seed-act-brunch',
-    host: 'seed-mia',
-    also: ['seed-ben', 'seed-nora'],
-    mode: 'soon',
-    title: 'Brunch am Sonntag',
-    category: 'essen',
-    startsAt: now + 26 * HOUR,
-    endsAt: now + 28 * HOUR,
-    place: { label: 'Café Morgenrot', visibility: 'pin', ...at(0.011, -0.009) },
-    messages: [
-      { author: 'seed-mia', text: 'Ich reserviere für 6 — wer ist dabei?' },
-      { author: 'seed-ben', text: 'Dabei! Bringe Anna mit.' },
-    ],
-  },
-];
-
-async function ensureAuthUser(auth, { uid, email, password, displayName }) {
+async function ensureAuthUser(auth, { uid, email, password, displayName, photoURL }) {
+  const profilePatch = { displayName, ...(photoURL ? { photoURL } : {}) };
   try {
-    await auth.createUser({ uid, email, password, displayName, emailVerified: true });
+    await auth.createUser({ uid, email, password, ...profilePatch, emailVerified: true });
     return 'created';
   } catch (error) {
     if (error?.code !== 'auth/uid-already-exists' && error?.code !== 'auth/email-already-exists') {
       throw error;
     }
-    await auth.updateUser(uid, { displayName }).catch(() => {});
+    await auth.updateUser(uid, profilePatch).catch(() => {});
     return 'exists';
   }
 }
 
 async function main() {
-  const app = admin.initializeApp({ projectId: PROJECT_ID });
+  const app = admin.initializeApp({
+    projectId: PROJECT_ID,
+    storageBucket: DEMO_BUCKET,
+    databaseURL: DATABASE_URL,
+  });
   const auth = app.auth();
   const db = app.firestore();
+
+  // ── 0. Remove what a PREVIOUS run left behind.
+  //      A seed overwrites its own documents but cannot remove one it no
+  //      longer writes, so switching datasets otherwise leaves the other
+  //      scenario's activities, invitations and people standing. Only
+  //      `seed-*` documents are touched — a real dev account and everything
+  //      it owns is out of reach by construction. `--no-purge` skips it.
+  if (scenario.reset && !args.includes('--no-purge')) {
+    // Die Aufnahme-Welt setzt HART zurueck: Firestore leer, RTDB leer, jedes
+    // Auth-Konto ausser dem Roster geloescht. Nur so ergeben zwei Laeufe
+    // denselben Stand - und nur dann sind zwei Renderings vergleichbar.
+    const reset = await resetWorld(app, {
+      keepUids: new Set(PEOPLE.map((person) => person.uid)),
+    });
+    console.log(
+      `Zuruecksetzen: ${reset.documents} Dokumente aus ${reset.collections} Sammlungen, ` +
+        `RTDB geleert, ${reset.accounts} fremde Konten geloescht.`,
+    );
+  } else if (!args.includes('--no-purge')) {
+    const purged = await purgeStaleSeeds(app, {
+      FieldPath: admin.firestore.FieldPath,
+      keepUids: new Set(
+        PEOPLE.map((person) => person.uid).concat(REQUESTER ? [REQUESTER.uid] : []),
+      ),
+      keepActivityIds: new Set(ACTIVITIES.map((activity) => activity.id)),
+      rtdb: app.database(),
+    });
+    if (purged.people + purged.activities + purged.other + purged.live > 0) {
+      console.log(
+        `Aufgeräumt: ${purged.people} Personen, ${purged.activities} Aktivitäten, ` +
+          `${purged.other} weitere Dokumente, ${purged.live} Live-Zustände aus einem früheren Seed.`,
+      );
+    }
+  }
 
   // ── 1. Who is "me"? Every non-seed auth user becomes friends with the roster.
   const { users: allUsers } = await auth.listUsers(1000);
   let devUsers = allUsers.filter((user) => !user.uid.startsWith('seed-'));
-  if (devUsers.length === 0) {
+  // A scenario with its own protagonist (landing) already has an account to
+  // sign in with, so a second empty demo login would only add a face-less
+  // friend to every audience.
+  if (devUsers.length === 0 && !scenario.me) {
     await ensureAuthUser(auth, { uid: 'demo-user', ...DEMO_ACCOUNT });
     devUsers = [await auth.getUser('demo-user')];
     console.log(
@@ -307,15 +288,12 @@ async function main() {
       { displayName: profile.displayName, initials: profile.initials },
       { merge: true },
     );
-    const searchFields = buildFriendSearchFields(
-      profile,
-      settings.friendRequestPolicy ?? 'anyone',
-    );
+    await userRef.set({ displayName: profile.displayName }, { merge: true });
+    const searchFields = buildFriendSearchFields(profile, settings.friendRequestPolicy ?? 'anyone');
     if (searchFields) {
       await db.doc(`friendSearch/${user.uid}`).set({ ...searchFields, updatedAt: ts(now) });
     }
   }
-  const devUids = devProfiles.map((profile) => profile.uid);
   const mailboxProfiles = devProfiles.slice(0, MAILBOX_ACCOUNT_LIMIT);
   if (devProfiles.length > mailboxProfiles.length) {
     console.warn(
@@ -342,56 +320,105 @@ async function main() {
       },
       { merge: true },
     );
-    await db
-      .doc(`publicProfiles/${person.uid}`)
-      .set(
-        { displayName: person.name, initials: profile.initials, username: person.username },
-        { merge: true },
-      );
+    await db.doc(`publicProfiles/${person.uid}`).set(
+      {
+        displayName: person.name,
+        initials: profile.initials,
+        username: person.username,
+      },
+      { merge: true },
+    );
     await db.doc(`friendSearch/${person.uid}`).set(friendSearchOf(profile), { merge: true });
     await db
       .doc(`usernames/${person.username}`)
       .set({ uid: person.uid, createdAt: ts(now) }, { merge: true });
   }
 
-  await ensureAuthUser(auth, {
-    uid: REQUESTER.uid,
-    email: `${REQUESTER.username}@seed.together.dev`,
-    password: 'seed-only',
-    displayName: REQUESTER.name,
+  let requesterProfile = null;
+  if (REQUESTER) {
+    await ensureAuthUser(auth, {
+      uid: REQUESTER.uid,
+      email: `${REQUESTER.username}@seed.together.dev`,
+      password: 'seed-only',
+      displayName: REQUESTER.name,
+    });
+    requesterProfile = profileOf(REQUESTER);
+    await Promise.all([
+      db.doc(`users/${REQUESTER.uid}`).set(
+        {
+          displayName: REQUESTER.name,
+          username: REQUESTER.username,
+          initials: requesterProfile.initials,
+          profileVisibility: 'friends',
+          friendRequestPolicy: 'anyone',
+          friendshipsVersion: mailboxProfiles.length,
+          createdAt: ts(now),
+        },
+        { merge: true },
+      ),
+      db.doc(`publicProfiles/${REQUESTER.uid}`).set(
+        {
+          displayName: REQUESTER.name,
+          initials: requesterProfile.initials,
+          username: REQUESTER.username,
+        },
+        { merge: true },
+      ),
+      db
+        .doc(`friendSearch/${REQUESTER.uid}`)
+        .set(friendSearchOf(requesterProfile), { merge: true }),
+      db
+        .doc(`usernames/${REQUESTER.username}`)
+        .set({ uid: REQUESTER.uid, createdAt: ts(now) }, { merge: true }),
+    ]);
+  }
+
+  // ── 2b. Profile pictures, through the app's own mechanism.
+  //      `updateOwnProfile` needs a finished profile (display name + username),
+  //      so this runs after section 2 and before every snapshot that copies an
+  //      identity (friendships, presence, activity participants, chats).
+  const avatars = await applyDemoAvatars(app, {
+    projectId: PROJECT_ID,
+    displayNames: new Map(PEOPLE.map((person) => [person.uid, person.name])),
+    force: args.includes('--force-avatars'),
   });
-  const requesterProfile = profileOf(REQUESTER);
-  await Promise.all([
-    db.doc(`users/${REQUESTER.uid}`).set(
-      {
-        displayName: REQUESTER.name,
-        username: REQUESTER.username,
-        initials: requesterProfile.initials,
-        profileVisibility: 'friends',
-        friendRequestPolicy: 'anyone',
-        friendshipsVersion: mailboxProfiles.length,
-        createdAt: ts(now),
-      },
-      { merge: true },
-    ),
-    db.doc(`publicProfiles/${REQUESTER.uid}`).set(
-      {
-        displayName: REQUESTER.name,
-        initials: requesterProfile.initials,
-        username: REQUESTER.username,
-      },
-      { merge: true },
-    ),
-    db.doc(`friendSearch/${REQUESTER.uid}`).set(friendSearchOf(requesterProfile), { merge: true }),
-    db
-      .doc(`usernames/${REQUESTER.username}`)
-      .set({ uid: REQUESTER.uid, createdAt: ts(now) }, { merge: true }),
-  ]);
+  avatarUrls = avatars.urls;
+  if (avatarUrls.size > 0) {
+    const fresh = avatarUrls.size - avatars.reused;
+    console.log(
+      `Demo-Portraits über updateOwnProfile gesetzt: ${avatarUrls.size}` +
+        (avatars.reused > 0 ? ` (${fresh} neu, ${avatars.reused} unverändert)` : ''),
+    );
+  }
+
+  // ── 2c. The scenario's protagonist, if it has one.
+  //      The landing world takes its screenshots from one of the six portrait
+  //      people, because there is no seventh portrait: an account without one
+  //      would sit in the top bar, in every participant row and in the Heimweg
+  //      console as an initials circle, next to nothing but real faces.
+  //      From here on it is treated exactly like a real dev account.
+  const mePerson = scenario.me ? PEOPLE.find((person) => person.uid === scenario.me) : null;
+  if (scenario.me && !mePerson) {
+    throw new Error(`Szenario "${scenario.id}": me="${scenario.me}" fehlt im Personen-Roster.`);
+  }
+  if (mePerson) {
+    // The marketing world is exactly the protagonist and their roster. Any
+    // other local account would otherwise be befriended too and show up as a
+    // face-less extra in "Alle Freunde" — different number on every machine.
+    devProfiles.length = 0;
+    // `profileOf` already carries `avatarUrl`; spreading it whole is what
+    // keeps the protagonist's own portrait inside every friendship snapshot.
+    // Copying the fields by hand dropped it, and self-snapshots were the one
+    // place in the whole world still showing an initials circle.
+    devProfiles.push(profileOf(mePerson));
+  }
+  const devUids = devProfiles.map((profile) => profile.uid);
 
   // ── 3. Accepted friendships: every seed person ↔ every dev user.
   //      Doc id + shape mirror functions/index.js (friendshipId → `${a}__${b}` sorted).
   for (const person of PEOPLE) {
     for (const devProfile of devProfiles) {
+      if (person.uid === devProfile.uid) continue;
       const id = [person.uid, devProfile.uid].sort().join('__');
       await db.doc(`friendships/${id}`).set({
         participantUids: [person.uid, devProfile.uid].sort(),
@@ -404,9 +431,52 @@ async function main() {
     }
   }
 
+  // The three supplied portraits used by the Heimweg capture are direct
+  // friends too. This lets the owner see the chosen, confirmed companions via
+  // exactly the same relationship snapshots as the production picker.
+  const safetyCompanionUids = mePerson ? [] : ['seed-mia', 'seed-amelie', 'seed-david'];
+  for (let first = 0; first < safetyCompanionUids.length; first += 1) {
+    for (let second = first + 1; second < safetyCompanionUids.length; second += 1) {
+      const firstPerson = PEOPLE.find((person) => person.uid === safetyCompanionUids[first]);
+      const secondPerson = PEOPLE.find((person) => person.uid === safetyCompanionUids[second]);
+      if (!firstPerson || !secondPerson) continue;
+      const id = [firstPerson.uid, secondPerson.uid].sort().join('__');
+      await db.doc(`friendships/${id}`).set({
+        participantUids: [firstPerson.uid, secondPerson.uid].sort(),
+        requesterUid: firstPerson.uid,
+        status: 'accepted',
+        profiles: [profileOf(firstPerson), profileOf(secondPerson)],
+        createdAt: ts(now - 30 * 24 * HOUR),
+        updatedAt: ts(now),
+      });
+    }
+  }
+  await Promise.all(
+    safetyCompanionUids.map((uid) =>
+      db.doc(`users/${uid}`).set(
+        {
+          friendshipsVersion: safetyCompanionUids.length - 1,
+          ...(uid === 'seed-mia' ? { heimwegGroupUids: ['seed-amelie', 'seed-david'] } : {}),
+        },
+        { merge: true },
+      ),
+    ),
+  );
+  // The protagonist keeps the Heimweg quick-select the marketing capture uses,
+  // and a friendshipsVersion that matches the friendships actually written.
+  if (mePerson) {
+    await db.doc(`users/${mePerson.uid}`).set(
+      {
+        friendshipsVersion: PEOPLE.length - 1,
+        heimwegGroupUids: ['seed-amelie', 'seed-david'],
+      },
+      { merge: true },
+    );
+  }
+
   // A separate requester gives each mailbox demo account a genuinely incoming
   // action without changing any accepted seed relationship.
-  for (const devProfile of mailboxProfiles) {
+  for (const devProfile of REQUESTER ? mailboxProfiles : []) {
     const id = [REQUESTER.uid, devProfile.uid].sort().join('__');
     await Promise.all([
       db.doc(`friendships/${id}`).set({
@@ -445,6 +515,7 @@ async function main() {
       uid: person.uid,
       displayName: person.name,
       initials: initialsOf(person.name),
+      ...withAvatar(avatarUrls, person.uid),
       ...(person.vibe ? { vibe: { label: person.vibe } } : {}),
       expireAt: ts(now + 3 * HOUR),
       shareLocation: Boolean(person.location),
@@ -454,14 +525,65 @@ async function main() {
     });
   }
 
+  // ── 4b. The protagonist's own open status, if the scenario asks for one.
+  //      `--me idle` turns it off, which is what the map hero wants: the pill
+  //      then reads the friend count instead of "Offen bis HH:MM".
+  if (mePerson && scenario.myPresence && stringArg('me', 'open') !== 'idle') {
+    const own = scenario.myPresence;
+    const identity = profileOf(mePerson);
+    await db.doc(`presence/${mePerson.uid}`).set({
+      uid: mePerson.uid,
+      displayName: identity.displayName,
+      initials: identity.initials,
+      ...withAvatar(avatarUrls, mePerson.uid),
+      ...(own.vibe ? { vibe: { label: own.vibe } } : {}),
+      expireAt: ts(own.expiresAt),
+      shareLocation: Boolean(own.shareLocation && own.location),
+      ...(own.shareLocation && own.location ? { coarseLocation: own.location } : {}),
+      audienceUids: PEOPLE.filter((person) => person.uid !== mePerson.uid).map(
+        (person) => person.uid,
+      ),
+      updatedAt: ts(now),
+    });
+  } else if (mePerson) {
+    await db
+      .doc(`presence/${mePerson.uid}`)
+      .delete()
+      .catch(() => {});
+  }
+
+  // A scenario with a protagonist owns the whole open list. Anything else that
+  // is still "open" locally — a leftover fixture, a dev account somebody
+  // published presence from — would appear in it as a face-less extra row.
+  // Presence is ephemeral by design, so clearing it costs nothing.
+  if (mePerson) {
+    const rosterUids = new Set(PEOPLE.map((person) => person.uid));
+    const strayPresence = await db.collection('presence').get();
+    await Promise.all(
+      strayPresence.docs
+        .filter((doc) => !rosterUids.has(doc.id))
+        .map((doc) => doc.ref.delete().catch(() => {})),
+    );
+  }
+
   // ── 5. Activities + their chats (shape = createActivity/joinActivity output).
   for (const activity of ACTIVITIES) {
     const host = PEOPLE.find((person) => person.uid === activity.host);
     const others = activity.also.map((uid) => PEOPLE.find((person) => person.uid === uid));
     const participants = [host, ...others].map((person) => {
-      const { uid, displayName, initials } = profileOf(person);
-      return { uid, displayName, initials };
+      const { uid, displayName, initials, avatarUrl } = profileOf(person);
+      return { uid, displayName, initials, ...(avatarUrl ? { avatarUrl } : {}) };
     });
+    if (activity.includeDevAccount) {
+      for (const devProfile of devProfiles) {
+        if (participants.some((participant) => participant.uid === devProfile.uid)) continue;
+        participants.push({
+          uid: devProfile.uid,
+          displayName: devProfile.displayName,
+          initials: devProfile.initials,
+        });
+      }
+    }
     const participantUids = participants.map((participant) => participant.uid);
     const audienceUids = [...new Set([activity.host, ...devUids, ...PEOPLE.map((p) => p.uid)])];
 
@@ -531,7 +653,7 @@ async function main() {
   // A small private demo activity per dev account keeps every notification
   // target truthful: the recipient hosts it, Max is a real participant, and
   // the journey reminder points to a currently relevant destination.
-  for (const [index, devProfile] of mailboxProfiles.entries()) {
+  for (const [index, devProfile] of scenario.inboxFixtures ? mailboxProfiles.entries() : []) {
     const suffix = stableSuffix(devProfile.uid);
     const activityId = `seed-mailbox-${suffix}`;
     const startsAt = now + 55 * 60 * 1000;
@@ -643,44 +765,216 @@ async function main() {
 
   // ── 6. One planning group that opted into "Offen für Dazustoßer": private
   //      room + public teaser doc, audience = the dev account(s).
-  const openGroup = {
-    id: 'seed-group-abend',
-    title: 'Was geht heute Abend?',
-    vibe: 'Egal',
-    members: ['seed-lisa', 'seed-jonas'],
-  };
-  const groupPeople = openGroup.members.map((uid) => PEOPLE.find((person) => person.uid === uid));
-  await db.doc(`chats/${openGroup.id}`).set({
-    type: 'group',
-    title: openGroup.title,
-    vibe: openGroup.vibe,
-    memberIds: openGroup.members,
-    adminUids: openGroup.members.slice(0, 1),
-    joinable: true,
-    messageCount: 0,
-    readCount: {},
-    createdAt: ts(now),
-    expireAt: ts(now + 30 * 24 * HOUR),
-  });
-  await db.doc(`groupOpenings/${openGroup.id}`).set({
-    roomId: openGroup.id,
-    kind: 'joinable',
-    status: 'active',
-    title: openGroup.title,
-    vibe: openGroup.vibe,
-    memberCount: openGroup.members.length,
-    memberPreview: groupPeople.map((person) => ({
-      displayName: person.name,
-      initials: initialsOf(person.name),
-    })),
-    audienceUids: devUids,
-    expireAt: ts(now + 30 * 24 * HOUR),
-    updatedAt: ts(now),
-  });
+  const openGroup = scenario.openGroup;
+  if (openGroup) {
+    const groupPeople = openGroup.members.map((uid) => PEOPLE.find((person) => person.uid === uid));
+    await db.doc(`chats/${openGroup.id}`).set({
+      type: 'group',
+      title: openGroup.title,
+      vibe: openGroup.vibe,
+      memberIds: openGroup.members,
+      adminUids: openGroup.members.slice(0, 1),
+      joinable: true,
+      messageCount: 1,
+      readCount: {},
+      lastMessage: {
+        text: 'Wer hat heute Abend Lust auf etwas?',
+        authorId: 'seed-lisa',
+        authorName: 'Lisa Becker',
+        at: ts(now - 3 * 60 * 1000),
+      },
+      createdAt: ts(now),
+      expireAt: ts(now + 30 * 24 * HOUR),
+    });
+    await db.doc(`chats/${openGroup.id}/messages/seed-proposal`).set({
+      authorId: 'seed-lisa',
+      authorName: 'Lisa Becker',
+      initials: initialsOf('Lisa Becker'),
+      text: 'Bowling und danach etwas essen',
+      kind: 'proposal',
+      proposal: {
+        what: 'Bowling und danach etwas essen',
+        when: 'Heute 19:30',
+        where: 'Schwarzlicht, Gesundbrunnen',
+        confirmedBy: ['seed-lisa'],
+        planned: false,
+      },
+      createdAt: ts(now - 3 * 60 * 1000),
+      expireAt: ts(now + 30 * 24 * HOUR),
+    });
+    await db.doc(`groupOpenings/${openGroup.id}`).set({
+      roomId: openGroup.id,
+      kind: 'joinable',
+      status: 'active',
+      title: openGroup.title,
+      vibe: openGroup.vibe,
+      memberCount: openGroup.members.length,
+      memberPreview: groupPeople.map((person) => ({
+        displayName: person.name,
+        initials: initialsOf(person.name),
+      })),
+      audienceUids: devUids,
+      expireAt: ts(now + 30 * 24 * HOUR),
+      updatedAt: ts(now),
+    });
+  }
 
+  // ── 7. Actionable inbox scenarios ───────────────────────────────────────
+  // These are server-shaped documents so the app can exercise the real
+  // callable responses (join/decline, accept/decline wink) without a second
+  // device or hand-written client data. A marketing world switches them off:
+  // a screenshot must not open on somebody else's to-do list.
+  for (const [index, devProfile] of scenario.inboxFixtures && openGroup
+    ? mailboxProfiles.entries()
+    : []) {
+    const host = PEOPLE[(index + 1) % PEOPLE.length];
+    const hostIdentity = profileOf(host);
+    const hostProfile = {
+      uid: hostIdentity.uid,
+      displayName: hostIdentity.displayName,
+      initials: hostIdentity.initials,
+    };
+    const roundId = `seed-round-${stableSuffix(devProfile.uid)}`;
+    const roundExpireAt = ts(now + 30 * 60 * 1000);
+
+    // Reset the forming-room artefact from a previous accept before exposing
+    // the invitation again. The real callable creates it on acceptance.
+    await db
+      .doc(`chats/${roundId}`)
+      .delete()
+      .catch(() => {});
+    await db
+      .doc(`spontaneousRoundMemberships/${devProfile.uid}`)
+      .delete()
+      .catch(() => {});
+    await db.doc(`spontaneousRoundMemberships/${host.uid}`).set({
+      roundId,
+      expireAt: roundExpireAt,
+      createdAt: ts(now),
+    });
+    await db.doc(`groupOpenings/${roundId}`).set({
+      roomId: roundId,
+      kind: 'spontaneous',
+      status: 'active',
+      hostUid: host.uid,
+      title: 'Spontane Runde',
+      memberIds: [host.uid],
+      memberCount: 1,
+      memberPreview: [hostProfile],
+      audienceUids: [host.uid],
+      createdAt: ts(now),
+      updatedAt: ts(now),
+      expireAt: roundExpireAt,
+    });
+    await db.doc(`spontaneousRoundInvites/${roundId}_${devProfile.uid}`).set({
+      roundId,
+      hostUid: host.uid,
+      recipientUid: devProfile.uid,
+      createdAt: ts(now),
+      expireAt: roundExpireAt,
+    });
+    await db.doc(`notifications/${roundId}_${devProfile.uid}`).set({
+      recipientUid: devProfile.uid,
+      kind: 'spontaneous_round_invite',
+      title: `${host.name} winkt dir zu`,
+      body: 'Du bist offen. Willst du bei einer spontanen Runde dabei sein?',
+      roomId: roundId,
+      createdAt: ts(now - 2 * 60 * 1000),
+      expireAt: roundExpireAt,
+    });
+    // Accepting a wink checks the recipient's current server presence. This
+    // local-only fixture makes the confirmation sheet immediately testable.
+    await db.doc(`presence/${devProfile.uid}`).set({
+      uid: devProfile.uid,
+      displayName: devProfile.displayName,
+      initials: devProfile.initials,
+      vibe: { label: 'Kaffee' },
+      expireAt: ts(now + 3 * HOUR),
+      shareLocation: false,
+      audienceUids: [host.uid],
+      updatedAt: ts(now),
+    });
+
+    const groupInviteId = `${openGroup.id}_${devProfile.uid}`;
+    await db.doc(`groupChatInvites/${groupInviteId}`).set({
+      roomId: openGroup.id,
+      inviteeUid: devProfile.uid,
+      inviterUid: 'seed-lisa',
+      status: 'pending',
+      createdAt: ts(now - 8 * 60 * 1000),
+      expireAt: ts(now + 7 * DAY),
+    });
+    await db.doc(`notifications/groupinvite_${openGroup.id}_${devProfile.uid}`).set({
+      recipientUid: devProfile.uid,
+      kind: 'group_chat_invite',
+      title: 'Lisa lädt dich ein',
+      body: `Planung „${openGroup.title}“`,
+      roomId: openGroup.id,
+      createdAt: ts(now - 8 * 60 * 1000),
+      expireAt: ts(now + NOTIFICATION_RETENTION_MS),
+    });
+    await db
+      .doc(`chats/${openGroup.id}`)
+      .set({ pendingInviteCount: mailboxProfiles.length }, { merge: true });
+
+    // A normal activity invitation is also present, so the notification card
+    // and the activity deep-link can be checked without creating a second app.
+    await db.doc(`notifications/seed-act-kicker_${devProfile.uid}`).set({
+      recipientUid: devProfile.uid,
+      kind: 'activity_invite',
+      title: 'Einladung zu „Kickerabend“',
+      body: 'Max möchte, dass du dabei bist.',
+      activityId: 'seed-act-kicker',
+      createdAt: ts(now - 12 * 60 * 1000),
+      expireAt: ts(now + NOTIFICATION_RETENTION_MS),
+    });
+  }
+
+  // ── 8. The inbox: exactly what the scenario declares, nothing else.
+  //      Cleared LAST on purpose. Writing an activity as admin still fires the
+  //      real Firestore triggers, so `activity_updated` lands in the inbox from
+  //      the seed's own writes — after section 5, not before it. The pause lets
+  //      those triggers finish; without it the purge races them and the badge
+  //      shows a notice nobody can explain.
+  if (mePerson) {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const stray = await db
+      .collection('notifications')
+      .where('recipientUid', '==', mePerson.uid)
+      .get();
+    await Promise.all(stray.docs.map((doc) => doc.ref.delete().catch(() => {})));
+  }
+
+  for (const notification of scenario.notifications ?? []) {
+    const recipients = notification.forMe && mePerson ? [mePerson.uid] : devUids;
+    await Promise.all(
+      recipients.map((recipientUid) =>
+        db.doc(`notifications/${notification.id}-${stableSuffix(recipientUid)}`).set({
+          recipientUid,
+          kind: notification.kind,
+          title: notification.title,
+          body: notification.body,
+          ...(notification.activityId ? { activityId: notification.activityId } : {}),
+          ...(notification.roomId ? { roomId: notification.roomId } : {}),
+          createdAt: ts(now + (notification.createdAtOffsetMs ?? 0)),
+          expireAt: ts(now + NOTIFICATION_RETENTION_MS),
+        }),
+      ),
+    );
+  }
+
+  const openCount = PEOPLE.filter((person) => person.open).length;
   console.log(
-    `Seed fertig: ${PEOPLE.length + 1} Personen, ${ACTIVITIES.length + mailboxProfiles.length} Activities, 1 offene Gruppe, ${mailboxProfiles.length} Postfach-Sets, Freundschaften für ${devUids.length} Dev-Account(s) [${devUids.join(', ')}].`,
+    `Seed "${scenario.id}" fertig: ${PEOPLE.length + (REQUESTER ? 1 : 0)} Personen (${openCount} offen), ` +
+      `${ACTIVITIES.length + (scenario.inboxFixtures ? mailboxProfiles.length : 0)} Activities, ` +
+      `${openGroup ? 1 : 0} offene Gruppe(n), Konten: ${devUids.join(', ') || '—'}.`,
   );
+  if (mePerson) {
+    console.log(
+      `Aufnahme-Account: ${mePerson.name} — ${mePerson.username}@seed.together.dev / seed-only` +
+        `${scenario.myPresence && stringArg('me', 'open') !== 'idle' ? ' (offen)' : ' (nicht offen)'}.`,
+    );
+  }
   console.log(`Zentrum: ${CENTER.lat}, ${CENTER.lng} (überschreibbar mit --lat/--lng).`);
   await app.delete();
 }

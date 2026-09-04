@@ -52,6 +52,14 @@ const { sharedDayAxis, axisFraction, axisHourMarks, dayStartMs, formatAxisMinute
   load('dayAxis');
 const { staircaseRuns, staircasePoints, roundedPolygonPath, staircasePaths } = load('staircase');
 const { describePlanStatus, planRoundIsOpen } = load('planSummary');
+const {
+  canSeedResponseDraft,
+  anyNarrowedAnswer,
+  coversWholeWindow,
+  responseDraftToResponses,
+  seedResponseDraft,
+  replaceFirstInterval,
+} = load('responseDraft');
 
 let checks = 0;
 function check(name, run) {
@@ -190,6 +198,171 @@ check('a pending member is null, an empty answer is an empty list', () => {
   assert.deepEqual(memberIntervals(member('a', 'member', { w1: [] }), w), []);
 });
 
+console.log('\nresponse drafts');
+
+check('an existing member waits for their response before seeding the draft', () => {
+  assert.equal(
+    canSeedResponseDraft({
+      planId: 'p1',
+      seededPlanId: undefined,
+      isMember: true,
+      membersLoadedPlanId: null,
+    }),
+    false,
+  );
+  assert.equal(
+    canSeedResponseDraft({
+      planId: 'p1',
+      seededPlanId: undefined,
+      isMember: true,
+      membersLoadedPlanId: 'p1',
+    }),
+    true,
+  );
+  assert.equal(
+    canSeedResponseDraft({
+      planId: 'p1',
+      seededPlanId: undefined,
+      isMember: false,
+      membersLoadedPlanId: null,
+    }),
+    true,
+  );
+});
+
+check('legacy split intervals are reduced to one visible availability range', () => {
+  const w = windowAt('w1', 21, 18, 23);
+  const stored = [
+    { startsAt: at(21, 18), endsAt: at(21, 19) },
+    { startsAt: at(21, 21), endsAt: at(21, 22) },
+  ];
+  const draft = seedResponseDraft([w], member('a', 'member', { w1: stored }));
+  const edited = replaceFirstInterval(draft.intervals.w1, {
+    startsAt: at(21, 18, 30),
+    endsAt: at(21, 19, 30),
+  });
+  const responses = responseDraftToResponses([w], { w1: 'partial' }, { w1: edited });
+  assert.deepEqual(responses.w1, [
+    { startsAt: at(21, 18, 30), endsAt: at(21, 19, 30) },
+  ]);
+});
+
+check('a declined row stays empty even when its draft still holds an interval', () => {
+  const w = windowAt('w1', 21, 18, 23);
+  const responses = responseDraftToResponses(
+    [w],
+    { w1: 'none' },
+    { w1: [{ startsAt: at(21, 18), endsAt: at(21, 20) }] },
+  );
+  assert.deepEqual(responses.w1, []);
+});
+
+check('"Passt" sends the host window, not a leftover narrowed range', () => {
+  const w = windowAt('w1', 21, 18, 23);
+  const responses = responseDraftToResponses(
+    [w],
+    { w1: 'full' },
+    { w1: [{ startsAt: at(21, 20), endsAt: at(21, 21) }] },
+  );
+  assert.deepEqual(responses.w1, [{ startsAt: at(21, 18), endsAt: at(21, 23) }]);
+});
+
+check('an unanswered row defaults to the whole window', () => {
+  const w = windowAt('w1', 21, 18, 23);
+  const responses = responseDraftToResponses([w], {}, {});
+  assert.deepEqual(responses.w1, [{ startsAt: at(21, 18), endsAt: at(21, 23) }]);
+});
+
+check('the three answer states are derived from what was stored', () => {
+  const w = windowAt('w1', 21, 18, 23);
+  const whole = seedResponseDraft(
+    [w],
+    member('a', 'member', { w1: [{ startsAt: at(21, 18), endsAt: at(21, 23) }] }),
+  );
+  assert.equal(whole.answers.w1, 'full');
+
+  const narrowed = seedResponseDraft(
+    [w],
+    member('a', 'member', { w1: [{ startsAt: at(21, 20), endsAt: at(21, 23) }] }),
+  );
+  assert.equal(narrowed.answers.w1, 'partial');
+
+  const declined = seedResponseDraft([w], member('a', 'member', { w1: [] }));
+  assert.equal(declined.answers.w1, 'none');
+  // A declined day still keeps a usable range, so switching to "Teilweise"
+  // has something to open on.
+  assert.deepEqual(declined.intervals.w1, [{ startsAt: at(21, 18), endsAt: at(21, 23) }]);
+
+  const fresh = seedResponseDraft([w], undefined);
+  assert.equal(fresh.answers.w1, 'full');
+});
+
+check('coversWholeWindow accepts a clamped or over-reaching interval', () => {
+  const w = windowAt('w1', 21, 18, 23);
+  assert.equal(coversWholeWindow({ startsAt: at(21, 18), endsAt: at(21, 23) }, w), true);
+  assert.equal(coversWholeWindow({ startsAt: at(21, 17), endsAt: at(21, 24) }, w), true);
+  assert.equal(coversWholeWindow({ startsAt: at(21, 19), endsAt: at(21, 23) }, w), false);
+});
+
+console.log('\nanyNarrowedAnswer — which overview a round earns');
+
+check('all-day answers and declines alone never ask for the matrix', () => {
+  const w = windowAt('w1', 21, 18, 23);
+  const v = windowAt('w2', 22, 18, 23);
+  assert.equal(
+    anyNarrowedAnswer(
+      [w, v],
+      [
+        member('a', 'host', {
+          w1: [{ startsAt: at(21, 18), endsAt: at(21, 23) }],
+          w2: [{ startsAt: at(22, 18), endsAt: at(22, 23) }],
+        }),
+        member('b', 'member', { w1: [{ startsAt: at(21, 18), endsAt: at(21, 23) }], w2: [] }),
+      ],
+    ),
+    false,
+  );
+});
+
+check('one narrowed day anywhere brings the matrix back', () => {
+  const w = windowAt('w1', 21, 18, 23);
+  const v = windowAt('w2', 22, 18, 23);
+  assert.equal(
+    anyNarrowedAnswer(
+      [w, v],
+      [
+        member('a', 'host', {
+          w1: [{ startsAt: at(21, 18), endsAt: at(21, 23) }],
+          w2: [{ startsAt: at(22, 18), endsAt: at(22, 23) }],
+        }),
+        member('b', 'member', {
+          w1: [{ startsAt: at(21, 18), endsAt: at(21, 23) }],
+          w2: [{ startsAt: at(22, 20), endsAt: at(22, 23) }],
+        }),
+      ],
+    ),
+    true,
+  );
+});
+
+check('a legacy split answer counts as narrowed', () => {
+  const w = windowAt('w1', 21, 18, 23);
+  assert.equal(
+    anyNarrowedAnswer(
+      [w],
+      [
+        member('a', 'member', {
+          w1: [
+            { startsAt: at(21, 18), endsAt: at(21, 19) },
+            { startsAt: at(21, 21), endsAt: at(21, 23) },
+          ],
+        }),
+      ],
+    ),
+    true,
+  );
+});
+
 console.log('\nbestSlot');
 
 check('picks the highest count', () => {
@@ -234,7 +407,7 @@ check('a tie on count and length goes to the earlier slot', () => {
   assert.equal(result.best.startMs, Date.parse(at(21, 18)));
 });
 
-check('a change in who can splits a lockable candidate', () => {
+check('a lockable candidate may span changing groups using their honest intersection', () => {
   const w = windowAt('w1', 21, 18, 23);
   // b and c together cover 18–23 at count 2 the whole way, but the switch
   // participant set changes, so they are two distinct lockable candidates.
@@ -270,7 +443,7 @@ check('returns every exact tie for the overview summary', () => {
   );
 });
 
-check(`a peak under ${MIN_SLOT_MINUTES} min loses to a longer, lower run`, () => {
+check(`a peak under ${MIN_SLOT_MINUTES} min loses to a valid longer candidate`, () => {
   const w = windowAt('w1', 21, 18, 23);
   const result = aggregateWindow(w, [
     member('a', 'host', { w1: [{ startsAt: at(21, 18), endsAt: at(21, 23) }] }),
@@ -279,13 +452,13 @@ check(`a peak under ${MIN_SLOT_MINUTES} min loses to a longer, lower run`, () =>
   ]);
   assert.equal(result.peakCount, 3, 'the spike is still in the data');
   assert.equal(result.best.count, 2, 'but it is not the answer');
-  assert.equal(minutes(result.best.endMs - result.best.startMs), 230);
+  assert.equal(minutes(result.best.endMs - result.best.startMs), 240);
 });
 
-check('a short peak still wins when nothing longer exists', () => {
+check('a window shorter than the Activity minimum has no lockable slot', () => {
   const w = { id: 'w1', groupId: 'g1', startsAt: at(21, 18), endsAt: at(21, 18, 10) };
   const result = aggregateWindow(w, [member('a', 'host', { w1: [{ startsAt: at(21, 18), endsAt: at(21, 18, 10) }] })]);
-  assert.equal(result.best.count, 1);
+  assert.equal(result.best, null);
 });
 
 check('nobody available yields no slot rather than a zero-count one', () => {
@@ -432,6 +605,11 @@ check('marks stay inside the axis', () => {
   });
 });
 
+check('keeps a readable end label instead of leaving a blank scale tail', () => {
+  const axis = { startMinutes: 12 * 60, endMinutes: 21 * 60, spanMinutes: 9 * 60 };
+  assert.deepEqual(axisHourMarks(axis, 218), [12 * 60, 14 * 60, 16 * 60, 18 * 60, 21 * 60]);
+});
+
 check('a zero-width row asks for no marks', () => {
   assert.deepEqual(axisHourMarks(sharedDayAxis([windowAt('w1', 21, 18, 23)]), 0), []);
 });
@@ -512,79 +690,76 @@ function highlight(day, startHour, endHour) {
 }
 
 check('nobody has answered yet', () => {
-  assert.equal(
-    describePlanStatus({ respondedCount: 0, expectedCount: 5, highlights: [] }),
-    'Noch keine Antworten',
-  );
+  assert.equal(describePlanStatus({ respondedCount: 0, highlights: [] }), 'Noch keine Antworten');
 });
 
-check('answers outstanding name the favourite as provisional', () => {
-  assert.equal(
-    describePlanStatus({
-      respondedCount: 3,
-      expectedCount: 5,
-      highlights: [highlight('Morgen', 19, 21)],
-    }),
-    '3 von 5 Antworten \u00b7 Aktueller Favorit: Morgen, 19:00\u201321:00',
-  );
-});
-
-check('a complete round drops "aktuell" - nothing moves on its own now', () => {
+check('the line leads with the favourite and what it covers', () => {
   assert.equal(
     describePlanStatus({
       respondedCount: 5,
-      expectedCount: 5,
       highlights: [highlight('Morgen', 19, 21)],
     }),
-    'Alle Antworten da \u00b7 Favorit: Morgen, 19:00\u201321:00',
+    'Favorit: Morgen, 19:00–21:00 · 3 von 5 können',
   );
+});
+
+check('the denominator is the answers, never the audience', () => {
+  const line = describePlanStatus({
+    respondedCount: 3,
+    highlights: [highlight('Morgen', 19, 21)],
+  });
+  // 3 answers, 3 of them cover the slot. The old form said "3 von 20
+  // Antworten" against the host's whole friend list, which read as failure
+  // however well the round was going.
+  assert.equal(line, 'Favorit: Morgen, 19:00–21:00 · 3 von 3 können');
 });
 
 check('no overlap at all is stated, never hidden behind a count', () => {
   assert.equal(
-    describePlanStatus({ respondedCount: 3, expectedCount: 5, highlights: [] }),
-    '3 von 5 Antworten \u00b7 Noch kein gemeinsamer Zeitraum',
+    describePlanStatus({ respondedCount: 3, highlights: [] }),
+    '3 Antworten · Noch kein gemeinsamer Zeitraum',
   );
 });
 
 check('a tie is never squeezed into the row as two ranges', () => {
   const line = describePlanStatus({
     respondedCount: 4,
-    expectedCount: 5,
     highlights: [highlight('Morgen', 19, 21), highlight('So 23.8.', 19, 21)],
   });
-  assert.equal(line, '4 von 5 Antworten \u00b7 Mehrere Favoriten');
+  assert.equal(line, 'Mehrere Favoriten · je 3 von 4 können');
   assert.ok(!line.includes('Favorit:'), 'no dangling label without a time');
 });
 
-check('a reader without member access gets the progress and no favourite', () => {
+check('a reader without member access gets no favourite and no aggregate', () => {
   assert.equal(
     describePlanStatus({
       respondedCount: 3,
-      expectedCount: 5,
       highlights: [highlight('Morgen', 19, 21)],
       canSeeFavourite: false,
     }),
-    '3 von 5 Antworten',
+    '3 Antworten',
   );
+  assert.equal(describePlanStatus({ respondedCount: 1, highlights: [], canSeeFavourite: false }), '1 Antwort');
 });
 
 check('the row never states a time as decided', () => {
   [3, 5].forEach((responded) => {
     const line = describePlanStatus({
       respondedCount: responded,
-      expectedCount: 5,
       highlights: [highlight('Morgen', 19, 21)],
     });
     assert.ok(/Favorit/.test(line), line);
   });
 });
 
-check('a stale audience never produces "6 von 5"', () => {
-  assert.equal(
-    describePlanStatus({ respondedCount: 6, expectedCount: 5, highlights: [] }),
-    '6 von 6 Antworten \u00b7 Noch kein gemeinsamer Zeitraum',
-  );
+
+check('the audience size cannot reach the line at all', () => {
+  // Replaces a guard against "6 von 5" — a member count that had outgrown a
+  // stale audience snapshot. There is no audience denominator left to disagree
+  // with, which is the stronger version of that fix.
+  const line = describePlanStatus({ respondedCount: 6, highlights: [] });
+  assert.equal(line, '6 Antworten · Noch kein gemeinsamer Zeitraum');
+  assert.ok(!/ von /.test(line), line);
 });
 
 check('only a collecting round shows the row', () => {

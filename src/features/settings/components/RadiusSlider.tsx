@@ -3,7 +3,17 @@ import { Text, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 
+import { shadow } from '@/shared/theme';
+
 import { useNearbyRadius } from '../useNearbyRadius';
+
+const THUMB_SHADOW = shadow({
+  color: '#000000',
+  offsetY: 2,
+  radius: 4,
+  opacity: 0.2,
+  elevation: 4,
+});
 
 const THUMB = 18;
 const TRACK_H = 3;
@@ -153,11 +163,7 @@ export function RadiusSlider({ compact = false }: RadiusSliderProps) {
                 height: THUMB,
                 borderRadius: THUMB / 2,
                 backgroundColor: '#ffffff',
-                shadowColor: '#000000',
-                shadowOffset: { width: 0, height: 2 },
-                shadowOpacity: 0.2,
-                shadowRadius: 4,
-                elevation: 4,
+                ...THUMB_SHADOW,
               },
               thumbStyle,
             ]}

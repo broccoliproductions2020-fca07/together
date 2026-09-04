@@ -26,21 +26,29 @@ export function validateActivityDraft(draft: ActivityDraft) {
   }
 
   /**
-   * A place is required in BOTH modes, and the test is the COORDINATE.
+   * A COORDINATE is required in both modes. There is no such thing as a `soon`
+   * or `now` activity without a place.
    *
    * Checking only that a place object exists let the composer's default
    * (`CURRENT_LOCATION_PLACE` — a label carrying no position until the map hands
    * one over) through. An activity published in that state gets
    * `visibility: 'none'`: no pin, no distance, invisible on the map. It looked
    * created and reached nobody, which is the worst possible failure for this
-   * app. `locationChoice: 'open'` is the one legitimate no-place answer and is
-   * no longer offered anywhere in the UI.
+   * app.
+   *
+   * `locationChoice: 'current'` is the one case that may still be coordinate-
+   * less HERE, and only because it is answered a step later: `submitComposer`
+   * runs `resolveCurrentLocationDraft`, which asks for the position (prompting
+   * if needed) and throws a readable error when it cannot get one. Blocking it
+   * at this gate instead made that resolver unreachable — someone whose device
+   * had no fix yet was told to "choose a place" while the app was perfectly
+   * able to determine one. `'open'` used to be exempt too; it no longer is,
+   * because a place-less activity is exactly the outcome this rule exists to
+   * prevent, and nothing in the UI offers that choice any more.
    */
-  if (draft.locationChoice !== 'open') {
-    const hasCoordinate = draft.place?.latitude != null && draft.place?.longitude != null;
-    if (!hasCoordinate) {
-      return 'Der Ort steht noch nicht fest — wähle einen Ort oder deinen aktuellen Standort.';
-    }
+  const hasCoordinate = draft.place?.latitude != null && draft.place?.longitude != null;
+  if (!hasCoordinate && draft.locationChoice !== 'current') {
+    return 'Der Ort steht noch nicht fest — wähle einen Ort oder deinen aktuellen Standort.';
   }
 
   // Jetzt is deliberately NOT checked against startsAt/endsAt: its start is

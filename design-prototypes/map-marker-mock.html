@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Karten-Marker — Mock auf der Karte</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;background:#EDEFF2;font:13px/1.5 ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif;color:#0F1417}
+  .wrap{padding:26px 24px 34px}
+  h1{font-size:21px;margin:0 0 4px;letter-spacing:-.02em}
+  .lede{color:#5A6570;margin:0 0 20px;font-size:13.5px;max-width:112ch}
+  .grid{display:flex;gap:16px;align-items:flex-start}
+  .panelbox{flex:0 0 auto}
+  .panel{position:relative;width:390px;height:600px;border-radius:26px;overflow:hidden;
+         box-shadow:0 1px 2px rgba(15,20,23,.10),0 10px 26px rgba(15,20,23,.13)}
+  .phead{display:flex;align-items:baseline;gap:8px;padding:0 4px 8px}
+  .phead b{font-size:14px;letter-spacing:-.01em}
+  .phead span{font-size:11.5px;color:#77818A;font-variant-numeric:tabular-nums}
+  .rec{font-size:10px;font-weight:700;color:#177453;background:#DFF6EC;border-radius:99px;padding:2px 8px}
+  .mk{position:absolute}
+  .mk svg{display:block}
+  .cap{padding:8px 4px 0;font-size:11.5px;color:#77818A;max-width:390px}
+  .cap b{color:#2B343C}
+  h2{font-size:15px;margin:30px 0 10px;letter-spacing:-.01em}
+  .detail{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;margin-bottom:8px}
+  .dcard{background:#fff;border:1px solid rgba(15,20,23,.09);border-radius:16px;padding:12px 14px 10px}
+  .dcard .dh{font-size:12.5px;font-weight:700;margin-bottom:2px}
+  .dcard .dn{font-size:11.5px;color:#77818A;margin-bottom:8px;max-width:46ch;min-height:46px}
+  .dbed{border-radius:11px;padding:4px;display:inline-block}
+  .dbed svg{display:block;transform:scale(2);transform-origin:top left}
+  .tbl{background:#fff;border:1px solid rgba(15,20,23,.09);border-radius:16px;padding:14px 18px 6px;max-width:820px}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid rgba(15,20,23,.08)}
+  th{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:#7A848D;font-weight:600}
+  td.num,th.num{font-variant-numeric:tabular-nums;text-align:right}
+  td em{font-style:normal;color:#177453;font-weight:600;margin-left:6px}
+  tr.total td{border-top:2px solid rgba(15,20,23,.18)}
+  .foot{font-size:12px;color:#5A6570;margin:12px 2px 8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Schlanke Tafel — Rand enger an den Inhalt</h1>
+  <p class="lede">390 × 600 dp — eine Telefonbreite. Die Marker sind 1 : 1 so groß, wie sie auf dem Gerät erscheinen, und sitzen mit ihrem Ankerpunkt exakt auf derselben Kartenkoordinate. Gleiche Szene, gleiche Aktivitäten: heutiger Stand plus drei Enge-Stufen der schlanken Tafel.</p>
+  <h2 style="margin-top:0">Detail · 2× — wie eng der Rand am Inhalt liegt</h2>
+  <div class="detail" id="detail"></div>
+  <h2>Auf der Karte, echte Größe</h2>
+  <div class="grid" id="dayGrid"></div>
+  <h2>Dieselbe Szene bei Nacht</h2>
+  <div class="grid" id="nightGrid"></div>
+
+  <h2>Wie eng schmiegt sich der Rand an?</h2>
+  <div class="tbl">
+    <table>
+      <tr><th>Maß</th><th class="num">Heute</th><th class="num">C Stand 1</th><th class="num">C-eng</th><th class="num">C-sehr-eng</th></tr>
+      <tr><td>Schräge: vertikaler Weg</td><td class="num">13,6</td><td class="num">13,6</td><td class="num">6,0</td><td class="num">4,0</td></tr>
+      <tr><td>… davon Anteil am Titelband</td><td class="num">40 %</td><td class="num">68 %</td><td class="num">35 %</td><td class="num">27 %</td></tr>
+      <tr><td>Luft Avatar → Titeltext</td><td class="num">8,8</td><td class="num">6,8</td><td class="num">5,3</td><td class="num">3,8</td></tr>
+      <tr><td>Rand um die Gesichterreihe</td><td class="num">5,0</td><td class="num">4,0</td><td class="num">3,0</td><td class="num">2,0</td></tr>
+      <tr><td>Rand um den Titel</td><td class="num">9,0</td><td class="num">8,0</td><td class="num">6,0</td><td class="num">5,0</td></tr>
+      <tr><td>Titelband hoch</td><td class="num">26</td><td class="num">20</td><td class="num">17</td><td class="num">15</td></tr>
+      <tr class="total"><td><b>Höhe gesamt</b></td><td class="num"><b>102</b></td><td class="num"><b>78</b></td><td class="num"><b>72</b></td><td class="num"><b>68</b></td></tr>
+    </table>
+    <p class="foot">Der Regler, um den es geht, ist die dritte Zeile von oben: <b>wie viel von der Bandhöhe die Schräge verbraucht</b>. Bei 68 % ist der Übergang fast das ganze Band — die Kante ist dann nirgends parallel zum Inhalt. Unter etwa einem Drittel liegt sie kurz genug, dass Schale und Titelband je eine eigene, gerade Flanke behalten.</p>
+  </div>
+</div>
+
+<script src="marker-shapes.js"></script>
+<script>
+const V = MarkerShapes.variants;
+const MODE = MarkerShapes.MODE;
+
+/* ── Kartenhintergrund: Blöcke, Straßen, Park, Wasser ─────────────── */
+function mapBg(night){
+  const g = night
+    ? {ground:'#212121',block:'#2B2B2B',blockEdge:'#3A3A3A',road:'#E8D6AE',roadMinor:'#6E6353',park:'#1E2A20',water:'#17242E',label:'#8C8C8C'}
+    : {ground:'#F1F1F1',block:'#E6E6E6',blockEdge:'#DBDBDB',road:'#FFFFFF',roadMinor:'#F7F7F7',park:'#DCE8D5',water:'#C9DDE8',label:'#9AA0A6'};
+  const blocks = [
+    [14,40,96,74],[126,26,104,88],[246,52,118,62],[18,140,88,96],[122,146,58,60],
+    [196,138,74,84],[286,150,86,70],[24,268,110,66],[150,258,92,88],[262,272,104,58],
+    [16,388,80,74],[112,396,120,52],[248,378,116,90],[28,494,104,72],[152,500,86,64],[258,486,108,80],
+  ];
+  return `<svg width="390" height="600" viewBox="0 0 390 600" style="position:absolute;inset:0">
+    <rect width="390" height="600" fill="${g.ground}"/>
+    <rect x="0" y="330" width="390" height="44" fill="${g.water}"/>
+    <rect x="180" y="0" width="26" height="600" fill="${g.roadMinor}"/>
+    <rect x="0" y="238" width="390" height="22" fill="${g.roadMinor}"/>
+    <rect x="0" y="120" width="390" height="14" fill="${g.road}" opacity="${night?.85:1}"/>
+    <rect x="106" y="0" width="12" height="600" fill="${g.road}" opacity="${night?.85:1}"/>
+    <rect x="0" y="466" width="390" height="14" fill="${g.road}" opacity="${night?.85:1}"/>
+    <rect x="272" y="0" width="10" height="600" fill="${g.road}" opacity="${night?.8:1}"/>
+    <rect x="288" y="404" width="94" height="54" rx="6" fill="${g.park}"/>
+    <rect x="30" y="150" width="0" height="0"/>
+    ${blocks.map(([x,y,w,h])=>`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="3" fill="${g.block}" stroke="${g.blockEdge}" stroke-width="1"/>`).join('')}
+    <text x="196" y="356" font-size="9" fill="${g.label}" font-family="ui-sans-serif,system-ui" font-style="italic">Spree</text>
+    <text x="316" y="434" font-size="9" fill="${g.label}" font-family="ui-sans-serif,system-ui">Volkspark</text>
+  </svg>`;
+}
+
+/* ── Die Szene: dieselben Aktivitäten in jedem Panel ──────────────── */
+const F=(...a)=>a.map(s=>s==='+3'?{label:'+3',o:true}:{label:s});
+const SCENE = [
+  {x:78,  y:104, faces:F('LM'),                  solo:true,  title:'Grillen im Park',  accent:MODE.now,  progress:1},
+  {x:236, y:214, faces:F('JK','AS','MR','+3'),   solo:false, title:'Feierabendbier',   accent:MODE.soon, progress:1},
+  {x:118, y:322, faces:F('TN','BW'),             solo:false, title:'Kaffee',           accent:MODE.soon, progress:1},
+  {x:308, y:300, faces:F('SD'),                  solo:true,  title:'Bouldern',         accent:MODE.now,  progress:1},
+  {x:96,  y:452, faces:F('PL','KH','RS'),        solo:false, title:'Kino heute Abend', accent:MODE.soon, progress:1},
+  {x:286, y:536, faces:F('EV'),                  solo:true,  title:'Laufrunde',        accent:MODE.now,  progress:1},
+];
+
+function panel(v, night){
+  const marks = SCENE.map(s=>{
+    const left = s.x - v.anchor.x*v.W;
+    const top  = s.y - v.anchor.y*v.H;
+    return `<div class="mk" style="left:${left}px;top:${top}px">${v.render(s)}</div>`;
+  }).join('');
+  return `<div class="panelbox">
+    <div class="phead"><b>${v.name}</b>
+      <span>${v.W}×${v.H} Leinwand</span></div>
+    <div class="panel" style="--hi:${night?'#F2F4F6':'#151B20'};--hb:${night?'#212121':'#F1F1F1'}">
+      ${mapBg(night)}${marks}
+    </div>
+  </div>`;
+}
+
+/* ── Detailstreifen: derselbe Fall, 3× ───────────────────────────── */
+const DCASE = {faces:F('JK','AS','MR','+3'), solo:false, title:'Feierabendbier', accent:MODE.soon, progress:1};
+const DNOTE = {
+  cur:'Warmes Beige, 4&nbsp;px graue Seitenwand, Sockelkeil. Als Bezugspunkt.',
+  slab:'<b>Stand 1.</b> Schr&auml;ge braucht 13,6&nbsp;px Weg &mdash; 68&nbsp;% der Bandh&ouml;he. Deshalb bauscht die Silhouette vom Inhalt weg. Rand 8&nbsp;px, Luft Avatar&rarr;Titel 6,8&nbsp;px.',
+  tight:'<b>Eng.</b> Schr&auml;ge 6&nbsp;px (35&nbsp;%), Rand 6&nbsp;px, Luft 5,3&nbsp;px. Weiche Kurve bleibt, nur kurz.',
+  snug:'<b>Sehr eng.</b> Schr&auml;ge 4&nbsp;px (27&nbsp;%) als Fase statt Kurve, Rand 5&nbsp;px, Luft 3,8&nbsp;px, Band nur 15&nbsp;hoch.',
+};
+document.getElementById('detail').innerHTML = ['cur','slab','tight','snug'].map(k=>{
+  const v=V[k];
+  return `<div class="dcard">
+    <div class="dh">${v.name}</div>
+    <div class="dn">${DNOTE[k]}</div>
+    <div class="dbed" style="background:#F1F1F1;width:${v.W*2}px;height:${v.H*2}px;--hi:#151B20;--hb:#F1F1F1">
+      ${v.render(DCASE)}
+    </div>
+  </div>`;
+}).join('');
+
+const order = ['cur','slab','tight','snug'];
+document.getElementById('dayGrid').innerHTML   = order.map(k=>panel(V[k],false)).join('');
+document.getElementById('nightGrid').innerHTML = order.map(k=>panel(V[k],true)).join('');
+</script>
+</body>
+</html>

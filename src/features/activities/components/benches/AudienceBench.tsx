@@ -5,6 +5,8 @@ import Animated, { FadeIn, useReducedMotion } from 'react-native-reanimated';
 
 import type { FriendProfile } from '@/features/friends';
 import { PersonAvatar, SearchField } from '@/shared/components';
+import { AudienceSummary } from '@/shared/product-ui/AudienceSummary';
+import { NATIVE_FONTS } from '@/shared/product-ui/nativeFonts';
 import { FONT, TEXT_CAPPED, TEXT_FLEXIBLE, TYPE } from '@/shared/theme';
 
 import {
@@ -104,7 +106,6 @@ export function AudienceBench({ index, state, accent, onChange }: AudienceBenchP
    */
   const [expanded, setExpanded] = useState(false);
 
-  const searching = query.trim().length > 0;
   const openGroup = useMemo(
     () => index.groups.find((group) => group.id === openGroupId) ?? null,
     [index.groups, openGroupId],
@@ -352,68 +353,51 @@ export function AudienceBench({ index, state, accent, onChange }: AudienceBenchP
     <View style={styles.root}>
       {/* Summary first in the tree so a screen reader reads the consequence
           before the controls that change it. */}
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`Sichtbar für ${summary.label}${summary.detail ? `, ${summary.detail}` : ''}. ${expanded ? 'Schließen' : 'Ändern'}`}
-        accessibilityState={{ expanded }}
-        onPress={() =>
-          setExpanded((open) => {
-            if (open) {
-              setQuery('');
-              setOpenGroupId(null);
-            }
-            return !open;
-          })
-        }
-        style={styles.summary}
-        accessibilityLiveRegion="polite"
-      >
-        {/* Expanded, the row stops repeating the answer and becomes a heading:
-            "Alle Freunde" would otherwise sit directly above the group row that
-            says the same thing, and the list below states the state precisely. */}
-        {expanded ? (
-          <>
-            <View style={styles.checkboxSpacer} />
-            <Text style={styles.summaryHeading} numberOfLines={1} {...TEXT_FLEXIBLE}>
-              Wer kann es sehen
-            </Text>
-          </>
-        ) : (
-          <>
-            <View
-              style={[
-                styles.summaryIcon,
-                { backgroundColor: summary.empty ? 'rgba(232,117,107,0.16)' : `${accent}22` },
-              ]}
-            >
-              <Ionicons
-                name={summary.empty ? 'eye-off-outline' : 'people'}
-                size={17}
-                color={summary.empty ? '#E8756B' : accent}
-              />
-            </View>
-            <View style={styles.summaryText}>
-              <Text
-                style={[styles.summaryLine, summary.empty && { color: '#E8756B' }]}
-                numberOfLines={1}
-                {...TEXT_FLEXIBLE}
-              >
-                {summary.label}
-              </Text>
-              {summary.detail ? (
-                <Text style={styles.summaryDetail} numberOfLines={1} {...TEXT_CAPPED}>
-                  {summary.detail}
-                </Text>
-              ) : null}
-            </View>
-          </>
-        )}
-        <Ionicons
-          name={expanded ? 'chevron-up' : 'chevron-down'}
-          size={17}
-          color="rgba(244,245,247,0.4)"
+      {expanded ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Wer kann es sehen. Schließen"
+          accessibilityState={{ expanded: true }}
+          onPress={() => {
+            setQuery('');
+            setOpenGroupId(null);
+            setExpanded(false);
+          }}
+          style={styles.summary}
+        >
+          <View style={styles.checkboxSpacer} />
+          <Text style={styles.summaryHeading} numberOfLines={1} {...TEXT_FLEXIBLE}>
+            Wer kann es sehen
+          </Text>
+          <Ionicons name="chevron-up" size={17} color="rgba(244,245,247,0.4)" />
+        </Pressable>
+      ) : (
+        <AudienceSummary
+          label={summary.label}
+          detail={summary.detail ?? undefined}
+          empty={summary.empty}
+          leading={
+            <Ionicons
+              name={summary.empty ? 'eye-off-outline' : 'people'}
+              size={17}
+              color={summary.empty ? '#E8756B' : accent}
+            />
+          }
+          trailing={<Ionicons name="chevron-down" size={17} color="rgba(244,245,247,0.4)" />}
+          accessibilityLabel={`Sichtbar für ${summary.label}${summary.detail ? `, ${summary.detail}` : ''}. Ändern`}
+          accessibilityExpanded={false}
+          onPress={() => setExpanded(true)}
+          theme={{
+            text: '#F4F5F7',
+            muted: 'rgba(244,245,247,0.42)',
+            accent,
+            empty: '#E8756B',
+            emptySoft: 'rgba(232,117,107,0.16)',
+            accentSoft: `${accent}22`,
+            fonts: NATIVE_FONTS,
+          }}
         />
-      </Pressable>
+      )}
 
       {!expanded ? null : openGroup ? (
         <View style={styles.groupHeader}>

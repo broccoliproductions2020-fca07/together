@@ -1,18 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useKeepAwake } from 'expo-keep-awake';
 import { useEffect, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  Linking,
-  Pressable,
-  Text,
-  useWindowDimensions,
-  View,
-} from 'react-native';
+import { Alert, Linking, Pressable, Text, useWindowDimensions, View } from 'react-native';
 import Animated, {
   Easing,
-  FadeIn,
+  FadeInDown,
   FadeOut,
   useAnimatedStyle,
   useReducedMotion,
@@ -22,6 +14,9 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import { loaderSizeForIcon, TogetherLoader } from '@/shared/components';
+import { shadow } from '@/shared/theme';
 
 import { useSafety } from '../SafetyProvider';
 import { getSafetySplitPanelHeight } from '../safetyLayout';
@@ -123,11 +118,11 @@ function PanelContent({ session, activating }: { session: SafetySession; activat
         entering={
           reducedMotion
             ? undefined
-            : FadeIn.duration(190)
+            : FadeInDown.duration(190)
                 .easing(Easing.out(Easing.cubic))
                 .withInitialValues({
                   opacity: 0,
-                  transform: [{ translateY: 8 }, { scale: 0.985 }],
+                  transform: [{ translateY: 8 }],
                 })
         }
         exiting={reducedMotion ? undefined : FadeOut.duration(135)}
@@ -161,11 +156,15 @@ function PanelContent({ session, activating }: { session: SafetySession; activat
           className="flex-1 overflow-hidden rounded-t-[32px] border border-b-0 border-white/10"
           style={{
             backgroundColor: '#0B0E13',
-            shadowColor: color,
-            shadowOffset: { width: 0, height: -8 },
-            shadowOpacity: urgent ? 0.3 : 0.16,
-            shadowRadius: 22,
-            elevation: 18,
+            // Cast UPWARD, in the status colour: the deck sits on the bottom
+            // edge, so its only free side is the one facing the map.
+            ...shadow({
+              color,
+              offsetY: -8,
+              radius: 22,
+              opacity: urgent ? 0.3 : 0.16,
+              elevation: 18,
+            }),
           }}
         >
           {endingHeimweg ? (
@@ -181,7 +180,11 @@ function PanelContent({ session, activating }: { session: SafetySession; activat
                   {activating ? 'Heimweg wird gestartet' : STATUS_WORD[session.status]}
                 </Text>
                 {activating || statusUpdating ? (
-                  <ActivityIndicator size="small" color={STATUS_COLOR.blue} />
+                  <TogetherLoader
+                    accessibilityLabel=""
+                    color={STATUS_COLOR.blue}
+                    size={loaderSizeForIcon(14)}
+                  />
                 ) : (
                   <Text className="text-xs font-semibold text-white/50">
                     {agoLabel(session.updatedAt, now)}

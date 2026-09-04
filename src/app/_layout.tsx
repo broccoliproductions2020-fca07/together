@@ -13,8 +13,8 @@ import {
   useFonts,
 } from '@expo-google-fonts/schibsted-grotesk';
 import { Ionicons } from '@expo/vector-icons';
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { Stack, type ErrorBoundaryProps } from 'expo-router';
+import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router/react-navigation';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
@@ -27,7 +27,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { AuthProvider, EmailVerificationGate, useAuth } from '@/features/auth';
 import { useActivityEntities } from '@/features/activities';
 import { useCircles } from '@/features/circles';
-import { useFriends } from '@/features/friends';
+import { useFriends, usePendingInviteCapture } from '@/features/friends';
 import { MapBootProvider, MapStyleProvider, useMapBoot } from '@/features/map';
 import { NearbyRadiusProvider } from '@/features/settings';
 import { useSyncOutbox } from '@/features/sync';
@@ -258,6 +258,9 @@ function ThemedApp() {
  */
 function RootNavigator() {
   const { status, user } = useAuth();
+  // Above the branching below on purpose: the verification gate replaces the
+  // whole stack, so an invite arriving in that state has no route to land on.
+  usePendingInviteCapture();
   const { ready: themeReady, resolvedScheme } = useThemePreference();
   const reducedMotion = useReducedMotion();
   const bootAnimationDone = useBootAnimationFloor(!reducedMotion);
@@ -283,6 +286,9 @@ function RootNavigator() {
       <Stack.Screen name="datenschutz" />
       <Stack.Screen name="nutzungsbedingungen" />
       <Stack.Screen name="impressum" />
+      {/* Same reason: an invite link is most often opened by someone who does
+          not have an account yet. It remembers the invite and hands over to auth. */}
+      <Stack.Screen name="f/[username]" />
     </Stack>
   );
 
@@ -344,10 +350,7 @@ function RootNavigator() {
           onSkipLocationPermission={mapBoot.onSkipLocationPermission}
         />
       ) : null}
-      <StatusBar
-        backgroundColor={curtainBusy ? '#070910' : undefined}
-        style={darkChrome ? 'light' : 'dark'}
-      />
+      <StatusBar style={darkChrome ? 'light' : 'dark'} />
     </>
   );
 }
@@ -360,7 +363,7 @@ export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
 
   return (
     <View className="flex-1 bg-[#090D12]">
-      <StatusBar style="light" backgroundColor="#090D12" />
+      <StatusBar style="light" />
       <SafeAreaView className="flex-1 px-6">
         <View className="flex-1 items-center justify-center">
           <TogetherLockup animated={false} width={228} />

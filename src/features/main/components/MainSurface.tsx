@@ -1,113 +1,47 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { StyleSheet, View } from 'react-native';
-import Animated, {
-  Easing,
-  useAnimatedStyle,
-  useReducedMotion,
-  useSharedValue,
-  withTiming,
-} from 'react-native-reanimated';
+import { useEffect, useState } from 'react';
+import { View } from 'react-native';
 
-import { CalendarScreen } from '@/features/calendar';
 import { MapScreen, useMapBoot } from '@/features/map';
-import { SafetyConsoleHost, SafetyConsolePanel, useSafety } from '@/features/safety';
+import { usePushNudge } from '@/features/notifications';
+import { SafetyConsoleHost, SafetyConsolePanel } from '@/features/safety';
 
-import { useMainMode } from '../hooks/useMainMode';
-import { FloatingModeSwitch } from './FloatingModeSwitch';
 import { WelcomeIntro } from './WelcomeIntro';
 
 /**
- * One fullscreen mode layer. Modes cross-fade (with a whisper of scale) instead
- * of hard-swapping — the inactive layer stays mounted, just invisible and
- * non-interactive, exactly like the previous opacity 0/1 approach.
- */
-function ModeLayer({ active, children }: { active: boolean; children: ReactNode }) {
-  const reducedMotion = useReducedMotion();
-  const progress = useSharedValue(active ? 1 : 0);
-
-  useEffect(() => {
-    progress.value = withTiming(active ? 1 : 0, {
-      duration: reducedMotion ? 0 : 240,
-      easing: Easing.out(Easing.cubic),
-    });
-  }, [active, progress, reducedMotion]);
-
-  const style = useAnimatedStyle(() => ({
-    opacity: progress.value,
-    transform: [{ scale: 0.985 + progress.value * 0.015 }],
-  }));
-
-  return (
-    <Animated.View
-      accessibilityElementsHidden={!active}
-      importantForAccessibility={active ? 'auto' : 'no-hide-descendants'}
-      pointerEvents={active ? 'auto' : 'none'}
-      style={[StyleSheet.absoluteFill, { zIndex: active ? 1 : 0 }, style]}
-    >
-      {children}
-    </Animated.View>
-  );
-}
-
-/**
- * Hosts the main modes. The current mode fills the screen and the
- * FloatingModeSwitch floats absolutely on top; there is no bottom bar and no
- * layout that shrinks the map or calendar.
+ * Hosts the app's one main surface: the map, filling the screen, with every
+ * other surface floating over it as a card.
+ *
+ * There used to be a second "mode" here — the calendar — which took the whole
+ * display, cross-faded in and needed its own control at the bottom edge to get
+ * back out of. It is a `FloatingSheet` on the map now, opened from the Core and
+ * closed by its own header button, which left this component with a single
+ * layer and no mode to switch. The layer machinery went with it.
  */
 export function MainSurface() {
-  const { mode, setMode } = useMainMode();
   const { prewarming } = useMapBoot();
-  const { heimwegFocusActive } = useSafety();
-  const [mapLocationPickerActive, setMapLocationPickerActive] = useState(false);
-  const [mapDetailSheetVisible, setMapDetailSheetVisible] = useState(false);
-  const editRequestSequence = useRef(0);
-  const [editActivityRequest, setEditActivityRequest] = useState<{
-    requestId: number;
-    activityId: string;
-  }>();
-  const modeSwitchVisible =
-    !(mode === 'map' && (mapLocationPickerActive || mapDetailSheetVisible)) && !heimwegFocusActive;
 
-  // Heimweg-Fokus lives ON the map: entering it from the calendar silently
-  // rotates the map layer to the front first, so the right surface
-  // shows through under the focus view / floating console panel.
+  /**
+   * The notification ask rides along with the start of the app, right behind the
+   * location question — the two permissions are asked in one stretch instead of
+   * one now and one at some unpredictable later moment.
+   *
+   * Two gates, both load-bearing. `prewarming` keeps it from firing behind the
+   * boot curtain, where the dialog would sit invisibly under the Mica mark. And
+   * it waits for the welcome hero to be OUT OF THE WAY — that is a modal, and
+   * an alert stacked on it is the permission gauntlet this ask is designed not
+   * to be. `onResolved` fires for a returning account too, which never sees the
+   * hero at all.
+   */
+  const { maybeAskForPush } = usePushNudge();
+  const [welcomeResolved, setWelcomeResolved] = useState(false);
   useEffect(() => {
-    if (heimwegFocusActive && mode !== 'map') setMode('map');
-  }, [heimwegFocusActive, mode, setMode]);
-
-  function editActivityFromCalendar(activityId: string) {
-    editRequestSequence.current += 1;
-    setEditActivityRequest({ requestId: editRequestSequence.current, activityId });
-    setMode('map');
-  }
+    if (!welcomeResolved || prewarming) return;
+    void maybeAskForPush();
+  }, [welcomeResolved, prewarming, maybeAskForPush]);
 
   return (
     <View style={{ flex: 1 }} className="bg-background">
-      <ModeLayer active={mode === 'map'}>
-        <MapScreen
-          active={mode === 'map' && !prewarming}
-          editActivityRequest={editActivityRequest}
-          onEditActivityRequestHandled={(requestId) =>
-            setEditActivityRequest((current) =>
-              current?.requestId === requestId ? undefined : current,
-            )
-          }
-          onLocationPickerActiveChange={setMapLocationPickerActive}
-          onDetailSheetVisibleChange={setMapDetailSheetVisible}
-          onOpenCalendar={() => setMode('calendar')}
-        />
-      </ModeLayer>
-
-      <ModeLayer active={mode === 'calendar'}>
-        <CalendarScreen
-          onGoToMap={() => setMode('map')}
-          onEditActivity={editActivityFromCalendar}
-        />
-      </ModeLayer>
-
-      {mode === 'calendar' ? (
-        <FloatingModeSwitch mode={mode} onChange={setMode} retracted={!modeSwitchVisible} />
-      ) : null}
+      <MapScreen active={!prewarming} />
 
       {/* Heimweg safety mode (docs/safety-mode.md → Heimweg-Fokus):
           - Fall 1 (own session only): full-screen console modal.
@@ -119,7 +53,7 @@ export function MainSurface() {
       <SafetyConsolePanel />
 
       {/* One-time welcome hero after the first sign-in */}
-      <WelcomeIntro />
+      <WelcomeIntro onResolved={() => setWelcomeResolved(true)} />
     </View>
   );
 }

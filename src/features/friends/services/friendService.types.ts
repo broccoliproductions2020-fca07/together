@@ -49,8 +49,8 @@ export interface FriendSettings {
    * The reminder only ever OFFERS; each activity's sharing is still confirmed
    * individually (docs/safety-mode.md → Anreise). Absent = on. */
   journeyRemindersEnabled: boolean;
-  /** Monotonic inbox cursor. It rides on the existing user-document listener,
-   * so notification badges need no second always-on subscription. */
+  /** Legacy inbox cursor; per-card read state falls back to it so notifications
+   * seen in older app versions do not become unread again. */
   notificationsSeenAt: number;
 }
 
@@ -99,6 +99,12 @@ export interface FriendService {
   /** One-off, server-filtered lookup. The service never exposes a profile directory. */
   searchPeople(actor: FriendActor, query: string): Promise<PeopleSearchProfile[]>;
   respondToFriendRequest(actor: FriendActor, friendshipId: string, accept: boolean): Promise<void>;
+  /**
+   * Takes back a request the current user sent. Separate from
+   * `respondToFriendRequest` because the server keeps the two apart: only the
+   * recipient may answer, only the sender may withdraw.
+   */
+  withdrawFriendRequest(actor: FriendActor, uid: string): Promise<void>;
   removeFriend(actor: FriendActor, uid: string): Promise<void>;
   setCloseFriend(actor: FriendActor, uid: string, isClose: boolean): Promise<void>;
   /**

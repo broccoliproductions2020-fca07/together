@@ -52,6 +52,7 @@ export {
   endGesture,
   isEdgePhase,
   planReZoom,
+  resolveHitTarget,
   snappedRange,
   tickSettle,
 } from './gesture';

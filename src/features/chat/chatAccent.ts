@@ -18,10 +18,13 @@ export const GROUP_CHAT_ACCENT = SEMANTIC_COLOR.action;
  * the literals rather than importing the map's marker table, so the chat
  * feature does not depend on the map feature.
  */
+// Hex, never `rgb(...)`: these accents are widely composed as `${accent}22`,
+// and React Native drops such a suffix silently on an rgb() string — the fill
+// then draws fully opaque instead of translucent.
 const ACTIVITY_MODE_ACCENT = {
-  open: 'rgb(59,130,246)',
-  soon: 'rgb(224,162,62)',
-  now: 'rgb(65,192,141)',
+  open: '#3B82F6',
+  soon: '#E0A23E',
+  now: '#41C08D',
 } as const;
 
 export type ActivityChatMode = keyof typeof ACTIVITY_MODE_ACCENT;

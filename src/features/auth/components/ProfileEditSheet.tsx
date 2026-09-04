@@ -1,7 +1,17 @@
 import { Ionicons } from '@expo/vector-icons';
 import type * as ImagePickerTypes from 'expo-image-picker';
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Image, Modal, Platform, Pressable, Text, TextInput, View } from 'react-native';
+import {
+  Alert,
+  Image,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import Animated, { FadeIn, FadeOut, SlideInDown, SlideOutDown } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -236,7 +246,7 @@ export function ProfileEditSheet({
           onPress={dismiss}
         />
         <View
-          className="rounded-t-[30px] border border-border bg-card px-5 pt-3"
+          className="max-h-[92%] rounded-t-[30px] border border-border bg-card px-5 pt-3"
           style={{ paddingBottom: Math.max(insets.bottom, 18) + 12 }}
         >
           <View className="mb-5 h-1.5 w-12 self-center rounded-full bg-border" />
@@ -257,70 +267,83 @@ export function ProfileEditSheet({
             </Pressable>
           </View>
 
-          <View className="items-center">
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Profilbild ändern"
-              accessibilityHint="Öffnet Kamera und deine Fotos"
-              disabled={interactionLocked}
-              className="h-28 w-28 items-center justify-center overflow-visible rounded-[38px] border-2 border-primary bg-primary/15 active:opacity-80"
-              onPress={() => {
-                haptics.light();
-                setAvatarSourceVisible(true);
-              }}
-            >
-              <View className="h-full w-full overflow-hidden rounded-[35px]">
-                {preview ? (
-                  <Image source={{ uri: preview }} className="h-full w-full" resizeMode="cover" />
-                ) : (
-                  <Text className="text-3xl font-extrabold text-primary">{initials || 'DU'}</Text>
-                )}
-              </View>
-              <View className="absolute -bottom-1 -right-1 h-9 w-9 items-center justify-center rounded-full border-2 border-card bg-primary">
-                <Ionicons name="camera" size={16} color="#FFFFFF" />
-              </View>
-            </Pressable>
-            <Text className="mt-3 text-sm font-bold text-primary">
-              {avatarUri ? 'Anderes Profilbild wählen' : 'Profilbild ändern'}
-            </Text>
-            <Text className="mt-1 text-center text-xs text-muted-foreground">
-              Quadrat wählen, dann Ausschnitt und Drehung anpassen.
-            </Text>
-          </View>
-
-          <View className="mt-7 gap-2">
-            <Text className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
-              Anzeigename
-            </Text>
-            <TextInput
-              autoFocus
-              autoCapitalize="words"
-              maxLength={50}
-              editable={!interactionLocked}
-              value={displayName}
-              onChangeText={setDisplayName}
-              className="min-h-14 rounded-2xl border border-border bg-background px-4 text-base text-foreground"
-              placeholder="Dein Name"
-              placeholderTextColor="rgba(150,150,160,0.7)"
-            />
-            <Text className="mt-1 text-xs leading-4 text-muted-foreground">
-              Anzeigename: bis zu 3 Änderungen in 24 Stunden, mit 10 Minuten Abstand. Profilbild:
-              maximal 5 Änderungen in 24 Stunden.
-            </Text>
-          </View>
-
-          {error ? (
-            <View className="mt-3 rounded-2xl bg-red-500/10 px-4 py-3">
-              <Text className="text-sm font-semibold text-red-400">{error}</Text>
+          <ScrollView
+            style={{ flexShrink: 1 }}
+            contentContainerStyle={{ paddingBottom: 8 }}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            <View className="items-center">
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Profilbild ändern"
+                accessibilityHint="Öffnet Kamera und deine Fotos"
+                disabled={interactionLocked}
+                className="h-28 w-28 items-center justify-center overflow-visible rounded-[38px] border-2 border-primary bg-primary/15 active:opacity-80"
+                onPress={() => {
+                  haptics.light();
+                  setAvatarSourceVisible(true);
+                }}
+              >
+                <View className="h-full w-full overflow-hidden rounded-[35px]">
+                  {preview ? (
+                    <Image
+                      source={{ uri: preview }}
+                      className="h-full w-full"
+                      resizeMode="cover"
+                    />
+                  ) : (
+                    <Text className="text-3xl font-extrabold text-primary">
+                      {initials || 'DU'}
+                    </Text>
+                  )}
+                </View>
+                <View className="absolute -bottom-1 -right-1 h-9 w-9 items-center justify-center rounded-full border-2 border-card bg-primary">
+                  <Ionicons name="camera" size={16} color="#FFFFFF" />
+                </View>
+              </Pressable>
+              <Text className="mt-3 text-sm font-bold text-primary">
+                {avatarUri ? 'Anderes Profilbild wählen' : 'Profilbild ändern'}
+              </Text>
+              <Text className="mt-1 text-center text-xs text-muted-foreground">
+                Quadrat wählen, dann Ausschnitt und Drehung anpassen.
+              </Text>
             </View>
-          ) : null}
+
+            <View className="mt-7 gap-2">
+              <Text className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
+                Anzeigename
+              </Text>
+              <TextInput
+                autoFocus
+                autoCapitalize="words"
+                maxLength={50}
+                editable={!interactionLocked}
+                value={displayName}
+                onChangeText={setDisplayName}
+                className="min-h-14 rounded-2xl border border-border bg-background px-4 text-base text-foreground"
+                placeholder="Dein Name"
+                placeholderTextColor="rgba(150,150,160,0.7)"
+              />
+              <Text className="mt-1 text-xs leading-4 text-muted-foreground">
+                Anzeigename: bis zu 3 Änderungen in 24 Stunden, mit 10 Minuten Abstand. Profilbild:
+                maximal 5 Änderungen in 24 Stunden.
+              </Text>
+            </View>
+
+            {error ? (
+              <View className="mt-3 rounded-2xl bg-red-500/10 px-4 py-3">
+                <Text className="text-sm font-semibold text-red-400">{error}</Text>
+              </View>
+            ) : null}
+          </ScrollView>
 
           <Pressable
             accessibilityRole="button"
             accessibilityState={{ busy: interactionLocked, disabled: interactionLocked }}
             disabled={interactionLocked}
             onPress={() => void save()}
-            className="mt-6 min-h-14 items-center justify-center rounded-2xl bg-primary active:opacity-80"
+            className="mt-3 min-h-14 items-center justify-center rounded-2xl bg-primary active:opacity-80"
           >
             <Text className="text-base font-extrabold text-primary-foreground">
               {imageBusy

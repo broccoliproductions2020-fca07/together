@@ -23,7 +23,11 @@ import Animated, {
 
 import { useCircles } from '@/features/circles';
 import { useFriends } from '@/features/friends';
-import { FloatingSheet } from '@/features/overlay/components/FloatingSheet';
+import {
+  FLOATING_SHEET_SURFACE,
+  FloatingSheet,
+} from '@/features/overlay/components/FloatingSheet';
+import { FloatingSheetHeader } from '@/features/overlay/components/FloatingSheetHeader';
 import {
   PlanningOfferFields,
   initialPlanningOfferGroups,
@@ -544,7 +548,7 @@ export function ActivityComposerSheet({
    * statement that is true in every state and fits in every one. The bench
    * spells out WHO; the tab answers HOW MANY.
    */
-  const audienceLabel = editing ? 'fest' : `${audience.selected.size} gewählt`;
+  const audienceLabel = `${audience.selected.size} gewählt`;
 
   /**
    * Silent while something is still missing.
@@ -832,6 +836,8 @@ export function ActivityComposerSheet({
       return;
     }
 
+    submittingRef.current = true;
+    setSubmitting(true);
     try {
       onTimePlanCreated?.(onStartTimePlan(draft, planOffers));
     } catch (planError) {
@@ -842,6 +848,8 @@ export function ActivityComposerSheet({
           ? message
           : 'Die Zeitvorschläge konnten nicht gespeichert werden. Bitte versuche es erneut.',
       );
+      submittingRef.current = false;
+      setSubmitting(false);
     }
   }
 
@@ -963,45 +971,18 @@ export function ActivityComposerSheet({
                   header the open sheet uses. It stays put while the content
                   scrolls, so the way out never scrolls away under the keyboard.
                   The grabber above it belongs to FloatingSheet. */}
-              <View style={styles.header}>
-                <Animated.View style={[styles.headerIcon, headerIconStyle]}>
-                  <Ionicons
-                    name={isNow ? 'flash' : 'calendar-outline'}
-                    size={20}
-                    color={accent}
-                  />
-                </Animated.View>
-                <View style={styles.headerText}>
-                  <Text style={styles.title} {...TEXT_FLEXIBLE}>
-                    {editing ? 'Activity bearbeiten' : isNow ? 'Jetzt loslegen' : 'Activity planen'}
-                  </Text>
-                  {/* Keyed so the wording cross-fades instead of swapping mid
-                      sentence; every variant is one line, so the header keeps
-                      its height and nothing below it moves. Announced politely
-                      because it changes as a SIDE EFFECT of filling a field —
-                      an assertive region would interrupt the person typing the
-                      very name that satisfied it. */}
-                  <Animated.Text
-                    key={subtitle}
-                    entering={reducedMotion ? undefined : FadeIn.duration(220)}
-                    accessibilityLiveRegion="polite"
-                    style={styles.subtitle}
-                    numberOfLines={2}
-                    {...TEXT_FLEXIBLE}
-                  >
-                    {subtitle}
-                  </Animated.Text>
-                </View>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Composer schließen"
-                  onPress={dismiss}
-                  hitSlop={8}
-                  style={({ pressed }) => [styles.close, pressed && styles.pressed]}
-                >
-                  <Ionicons name="close" size={20} color="rgba(244,245,247,0.8)" />
-                </Pressable>
-              </View>
+              <FloatingSheetHeader
+                icon={isNow ? 'flash' : 'calendar-outline'}
+                accent={accent}
+                surface={FLOATING_SHEET_SURFACE}
+                iconTileStyle={headerIconStyle}
+                title={
+                  editing ? 'Activity bearbeiten' : isNow ? 'Jetzt loslegen' : 'Activity planen'
+                }
+                subtitle={subtitle}
+                closeLabel="Composer schließen"
+                onClose={dismiss}
+              />
 
               <ScrollView
                 style={styles.scroll}
@@ -1105,34 +1086,21 @@ export function ActivityComposerSheet({
                     />
                   ) : null}
 
+                  {/* The same picker when editing. It used to be a locked panel
+                      explaining that the audience was fixed — which answered a
+                      question nobody had asked (it talked about typos) and
+                      refused the one thing the person had opened the tab to do.
+                      Changing it is a real edit now: the server re-resolves the
+                      context against the host's friendships and keeps everyone
+                      who already joined, so widening and narrowing are both
+                      safe. */}
                   {openBench === 'audience' ? (
-                    editing ? (
-                      <View style={styles.locked}>
-                        <View style={styles.lockedIcon}>
-                          <Ionicons
-                            name="lock-closed-outline"
-                            size={17}
-                            color="rgba(244,245,247,0.5)"
-                          />
-                        </View>
-                        <View style={styles.lockedText}>
-                          <Text style={styles.lockedTitle} {...TEXT_FLEXIBLE}>
-                            Bleibt wie es ist
-                          </Text>
-                          <Text style={styles.lockedBody} {...TEXT_FLEXIBLE}>
-                            Wer eine Activity sehen darf, steht seit dem Erstellen fest. Ein
-                            Tippfehler in Titel oder Zeit soll das nie stillschweigend ändern.
-                          </Text>
-                        </View>
-                      </View>
-                    ) : (
-                      <AudienceBench
-                        index={audienceIndex}
-                        state={audience}
-                        accent={accent}
-                        onChange={changeAudience}
-                      />
-                    )
+                    <AudienceBench
+                      index={audienceIndex}
+                      state={audience}
+                      accent={accent}
+                      onChange={changeAudience}
+                    />
                   ) : null}
 
                   {openBench === 'capacity' ? (
@@ -1157,6 +1125,7 @@ export function ActivityComposerSheet({
                      back into the sheet. Nothing is sent from here. */
                   <SquircleButton
                     variant="outline"
+                    surface={FLOATING_SHEET_SURFACE}
                     color={accent}
                     icon="checkmark"
                     accessibilityLabel="Zeitfenster übernehmen und zurück"
@@ -1235,24 +1204,7 @@ const styles = StyleSheet.create({
     width: 44,
   },
   headerText: { flex: 1, minWidth: 0 },
-  innerSurface: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(11,16,22,0.9)' },
-  locked: { flexDirection: 'row', gap: 11, paddingBottom: 4 },
-  lockedBody: {
-    color: 'rgba(244,245,247,0.5)',
-    fontFamily: FONT.medium,
-    fontSize: TYPE.caption.fontSize,
-    marginTop: 2,
-  },
-  lockedIcon: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.07)',
-    borderRadius: 11,
-    height: 34,
-    justifyContent: 'center',
-    width: 34,
-  },
-  lockedText: { flex: 1 },
-  lockedTitle: { color: '#F4F5F7', fontFamily: FONT.semibold, fontSize: TYPE.label.fontSize },
+  innerSurface: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(11,16,22,0.9)' },
   pressed: { opacity: 0.72 },
   /**
    * Sized by its content, capped by the sheet — NOT `flex: 1`.

@@ -1,16 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useKeepAwake } from 'expo-keep-awake';
 import { useEffect, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  Linking,
-  Modal,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { Alert, Linking, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -22,6 +13,7 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useFriends } from '@/features/friends';
+import { loaderSizeForIcon, TogetherLoader } from '@/shared/components';
 
 import { useSafety } from '../SafetyProvider';
 import { STATUS_COLOR, STATUS_WORD, agoLabel } from '../safetyTheme';
@@ -185,7 +177,11 @@ function ConsoleContent({
         </Text>
         <View className="flex-row items-center gap-1.5">
           {activating || statusUpdating ? (
-            <ActivityIndicator size="small" color={STATUS_COLOR.blue} />
+            <TogetherLoader
+              accessibilityLabel=""
+              color={STATUS_COLOR.blue}
+              size={loaderSizeForIcon(14)}
+            />
           ) : (
             <Ionicons name="locate-outline" size={14} color="rgba(244,245,247,0.55)" />
           )}
@@ -197,7 +193,9 @@ function ConsoleContent({
                 : `Letztes Update · ${agoLabel(session.updatedAt, now)}`}
           </Text>
         </View>
-        {statusError ? <Text className="text-center text-xs text-[#E87773]">{statusError}</Text> : null}
+        {statusError ? (
+          <Text className="text-center text-xs text-[#E87773]">{statusError}</Text>
+        ) : null}
         {expirySoon ? (
           <View className="flex-row items-center gap-2">
             <Ionicons name="timer-outline" size={14} color="rgba(244,245,247,0.55)" />
@@ -273,7 +271,9 @@ function ConsoleContent({
             </Text>
           </Pressable>
         ) : null}
-        {checkInError ? <Text className="text-center text-xs text-[#E87773]">{checkInError}</Text> : null}
+        {checkInError ? (
+          <Text className="text-center text-xs text-[#E87773]">{checkInError}</Text>
+        ) : null}
 
         {session.status === 'red' ? (
           <Pressable

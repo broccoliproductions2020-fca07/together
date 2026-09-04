@@ -19,7 +19,7 @@ $avdRoot = Join-Path $androidRoot 'avd'
 $adb = Join-Path $sdkRoot 'platform-tools\adb.exe'
 $deviceId = 'emulator-5554'
 $pkg = 'com.broccolistudio.together.dev'
-$scheme = 'together-dev'
+$scheme = $null
 $apk = 'D:\Dokumente\myapp\android\app\build\outputs\apk\debug\app-debug.apk'
 
 $env:ANDROID_HOME = $sdkRoot
@@ -86,6 +86,17 @@ if (-not ($installed -match [regex]::Escape($pkg))) {
   }
   Write-Host 'Installing dev-client APK (~30s)...'
   & $adb -s $deviceId install -r $apk
+}
+
+# A locally installed dev client can lag one native rebuild behind app.config.
+# Read its declared URL scheme instead of assuming the source config's scheme.
+$packageManifest = & $adb -s $deviceId shell dumpsys package $pkg
+if ($packageManifest -match 'Scheme: "mica-dev"') {
+  $scheme = 'mica-dev'
+} elseif ($packageManifest -match 'Scheme: "together-dev"') {
+  $scheme = 'together-dev'
+} else {
+  throw "No development URL scheme found in $pkg. Rebuild the dev client."
 }
 
 & $adb -s $deviceId reverse tcp:8081 tcp:8081 | Out-Null

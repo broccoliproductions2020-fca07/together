@@ -2,7 +2,10 @@ import { Pressable, Text, View, type PressableProps } from 'react-native';
 
 import { TogetherLoader } from './brand/TogetherLoader';
 
-import { TEXT_CAPPED } from '@/shared/theme';
+import { FONT, shadow, TEXT_CAPPED, TYPE } from '@/shared/theme';
+
+/** Static font files: family only, never alongside a weight. */
+const LABEL = { ...TYPE.body, fontFamily: FONT.bold, letterSpacing: -0.15 };
 
 export type AppButtonVariant = 'primary' | 'secondary' | 'ghost';
 
@@ -13,14 +16,15 @@ const containerVariants: Record<AppButtonVariant, string> = {
 };
 
 // Soft, deep-green-tinted depth for the primary CTA — the "edel" detail that
-// reads classier than a hard box shadow.
-const primaryShadow = {
-  shadowColor: '#0E3B2E',
-  shadowOffset: { width: 0, height: 8 },
-  shadowOpacity: 0.28,
-  shadowRadius: 14,
+// reads classier than a hard box shadow. Android used to get an untinted grey
+// elevation here; it now gets the same green.
+const primaryShadow = shadow({
+  color: '#0E3B2E',
+  offsetY: 8,
+  radius: 14,
+  opacity: 0.28,
   elevation: 6,
-} as const;
+});
 
 const labelVariants: Record<AppButtonVariant, string> = {
   primary: 'text-primary-foreground',
@@ -70,10 +74,7 @@ export function AppButton({
         />
       ) : null}
       {loading ? <TogetherLoader size={24} /> : null}
-      <Text
-        className={`text-base font-bold tracking-[-0.15px] ${labelVariants[variant]}`}
-        {...TEXT_CAPPED}
-      >
+      <Text className={labelVariants[variant]} style={LABEL} {...TEXT_CAPPED}>
         {label}
       </Text>
     </Pressable>

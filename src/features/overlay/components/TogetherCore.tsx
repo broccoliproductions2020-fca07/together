@@ -10,15 +10,9 @@ import {
   type ComponentProps,
   type Ref,
 } from 'react';
-import {
-  PixelRatio,
-  Platform,
-  Pressable,
-  StyleSheet,
-  Text,
-  useWindowDimensions,
-  View,
-} from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+
+import { measureSheetOrigin, type SheetOriginResolver } from './FloatingSheet';
 import { GlassView, isGlassEffectAPIAvailable } from 'expo-glass-effect';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
@@ -51,6 +45,7 @@ import Svg, {
 import { AnimatedToggleIcon } from '@/shared/components/AnimatedToggleIcon';
 import { TogetherMark } from '@/shared/components/brand/TogetherMark';
 import type { CoreActivitySummary } from '@/features/activities';
+import { OPEN_DURATION_MS } from '@/features/presence/openWindow';
 import { FONT, TEXT_CAPPED, TYPE } from '@/shared/theme';
 import { onColorTextColor } from '@/shared/utils/contrastColor';
 import { haptics } from '@/shared/utils/haptics';
@@ -59,6 +54,7 @@ import { SEMANTIC_COLOR } from '@/shared/utils/semanticColors';
 import {
   createCoreGesturePathState,
   isCoreCloseLane,
+  isCoreDownwardCancellation,
   isCoreReturnLane,
   polarOffset,
   previewTrackAngle,
@@ -96,13 +92,11 @@ const HOLD_MS = 280;
  * genuinely becoming a hold ever draws one.
  */
 const HOLD_REVEAL_MS = 150;
-/** Past this the touch is going somewhere else, so the opening hold is off. */
-const HOLD_CANCEL_SLOP = 40;
 /**
- * How long the thumb must REST on "Aktivität" before Jetzt/Soon unfold.
+ * How long the thumb must REST on "Starten" before Jetzt/Soon unfold.
  *
  * Deliberately long, and deliberately measured from the last movement rather
- * than from the moment the target armed: "Aktivität" sits in the middle of the
+ * than from the moment the target armed: "Starten" sits in the middle of the
  * arc, so every sweep from the left half to the right half crosses it. A timer
  * that starts on arming fires during that sweep and opens a level the user was
  * only passing through. `STILL_SLOP` is what turns this into a real dwell.
@@ -112,6 +106,8 @@ const DWELL_MS = 520;
 const STILL_SLOP = 5;
 /** Past this the touch is a drag, and a drag must never publish an open status. */
 const TAP_SLOP = 12;
+/** Keeps the visual gap between Jetzt and Soon neutral until intent is lateral. */
+const ACTIVITY_NEUTRAL_ZONE = { center: 0.5, halfWidth: 0.08 } as const;
 /**
  * A screen-reader activation arrives as a synthetic press with no touch, so the
  * pan gesture never runs for it; a real touch is the opposite, because the pan
@@ -133,28 +129,21 @@ const CORE_RETURN_ACCENT = '#F0646A';
  */
 const CORE_NEUTRAL_ACCENT = '#9FB3C9';
 
-const IDLE_CORE_SIZE = 64;
+const IDLE_CORE_SIZE = 92;
 /**
  * The Core while it carries a status.
  *
- * A circle is an expensive container for text: its area grows with the square
- * of the diameter, the usable line width only linearly. This step from 88 buys
- * roughly four more characters per title line — worth it because activity names
- * are free text, but the reason not to keep going.
- *
- * Growing it moves the Nearby pill: see `NEARBY_PILL_BOTTOM` in `MapOverlay`.
+ * Large enough for a two-line activity title while remaining clearly
+ * subordinate to the expanded radial menu.
  */
-const OPEN_CORE_SIZE = 96;
+const OPEN_CORE_SIZE = 132;
 /**
  * Clear space between the Core's rim and the status ring, which sits OUTSIDE
  * the button. Flush on the edge it read as a border of the Core; outside, with
  * air between them, it is plainly a separate thing measuring the Core's time.
  *
- * The ring's outermost paint lands `CORE_RING_GAP + stroke/2 + (stroke +
- * RING_GLOW_EXTRA)/2` beyond the rim — about 10 px at the current values. There
- * is roughly 20 px of clear space above the Core before the Nearby pill starts
- * (the Core's circle tops out at `insets.bottom + 92`, the pill sits at 112),
- * so this must stay well under that.
+ * The outermost paint lands about 10 px beyond the rim and must remain inside
+ * the Core's reserved overlay area.
  */
 const CORE_RING_GAP = 3;
 /** How much wider the soft halo is than the arc it sits under. */
@@ -169,7 +158,7 @@ const RING_GLOW_EXTRA = 5;
  */
 const CORE_RING_TEXT_CLEARANCE = 30;
 /**
- * The activity title gets its own, much wider clearance.
+ * The activity title gets its own, wider clearance.
  *
  * A block of text sits in a CIRCLE, so how much width a line has depends on how
  * far it is from the middle. The title is the middle line — at ±15 px the chord
@@ -177,8 +166,8 @@ const CORE_RING_TEXT_CLEARANCE = 30;
  * clearance has to serve the tightest line and therefore starves the widest
  * one: the title was running at 58 px, which is about nine characters.
  *
- * At 74 px over two lines it holds roughly 22 — the length real activity names
- * actually have.
+ * Two title lines use the wide middle of the circle; only longer overflow is
+ * ellipsized after the second line.
  */
 const CORE_TITLE_CLEARANCE = 14;
 /**
@@ -187,14 +176,13 @@ const CORE_TITLE_CLEARANCE = 14;
  * What matters is the STEP between them. Everything used to sit at 12 / 12 / 11
  * — a ratio of 1.09 — so the eye was handed three equally loud things and had
  * nowhere to land; that, not a lack of ornament, is what made the Core read as
- * flat. 14 against 11 is 1.27, enough to be a hierarchy while still holding
- * about 22 characters of title over two lines. Going to 16 would read louder
- * and cost four characters, which is the wrong trade for free-text names.
+ * flat. 14 against 12 keeps the hierarchy clear without making free-text
+ * activity names dominate the whole control.
  */
 const CORE_HERO_SIZE = TYPE.label.fontSize;
-const CORE_HERO_LINE = 16;
-const CORE_SUPPORT_SIZE = TYPE.micro.fontSize;
-const CORE_SUPPORT_LINE = 14;
+const CORE_HERO_LINE = TYPE.label.lineHeight;
+const CORE_SUPPORT_SIZE = TYPE.caption.fontSize;
+const CORE_SUPPORT_LINE = TYPE.caption.lineHeight;
 /**
  * The hero is neutral, never the accent — the ring outside already carries that
  * colour, and a second accent element at the centre competes with it instead of
@@ -217,26 +205,26 @@ const MIN_ORBIT_RADIUS = 116;
  * to travel all the way to the outer icon was what made the far-left action
  * feel unreachable. Four root actions now span just 60 px inside the pad.
  */
-const ROOT_RAIL_TRAVEL = 60;
+const ROOT_RAIL_TRAVEL = 70;
 /** Breathing room between the outermost target and the edge of the glass lens. */
 const LENS_PADDING = 26;
 /** Empty space kept under the core so the lens can fade out below it. */
 const BOX_FOOT = 70;
 
-/** Total travel time of the bloom. Per-item windows are carved out of this. */
-const BLOOM_MS = 430;
+/** Total target reveal time. Per-item windows are carved out of this. */
+const BLOOM_MS = 300;
 const BLOOM_CLOSE_MS = 190;
 /**
- * Head start the retracting orbit gets before the chosen surface opens.
+ * Head start the closing orbit gets before the chosen surface opens.
  *
- * Deliberately shorter than `BLOOM_CLOSE_MS`: the two motions must not overlap
- * while both are travelling, but a clean gap between them reads as lag. This is
+ * Deliberately shorter than `BLOOM_CLOSE_MS`: a clean gap between the two
+ * surfaces reads as lag, while a full overlap makes both hard to read. This is
  * the one number to tune if the handover still feels off — larger separates
  * them further, smaller brings the collision back.
  */
 const HANDOFF_MS = 150;
-/** Delay, as a fraction of the bloom, per ring of targets away from the centre. */
-const BLOOM_STAGGER = 0.13;
+/** Reveal delay per step away from the primary target. */
+const BLOOM_STAGGER = 0.06;
 const CORE_SPRING = { damping: 18, mass: 0.7, stiffness: 260 };
 const EASE_OUT = Easing.bezier(0.22, 1, 0.36, 1);
 const canUseNativeCoreGlass = Platform.OS === 'ios' && isGlassEffectAPIAvailable();
@@ -257,6 +245,17 @@ export type CoreOrbitState = 'closed' | 'held' | 'parked';
 export interface TogetherCoreHandle {
   /** Retracts a parked orbit. What a tap outside it has to be able to do. */
   close: () => void;
+  /**
+   * Where the Core's own circle is right now, so a sheet opened from one of its
+   * targets can grow out of IT rather than out of nothing.
+   *
+   * Deliberately the CORE, not the orbit target the thumb released on: by the
+   * time the sheet opens, the orbit is already collapsing back into the Core,
+   * so the target is not where the eye last saw it — the Core is. Answering
+   * `null` is allowed and simply means "grow from your own base", which on a
+   * bottom-centre sheet lands within a few points of here anyway.
+   */
+  measureOrigin: SheetOriginResolver;
 }
 
 interface CoreGeometryBox {
@@ -285,6 +284,8 @@ export interface TogetherCoreProps {
   status: CoreStatus;
   /** A running or upcoming plan derived from the already-active activity feed. */
   activity?: CoreActivitySummary | null;
+  /** Earliest future plan, including one too far away to own the readout. */
+  nextActivity?: CoreActivitySummary | null;
   /** Takes over the Core's readout while an Anreise is armed or underway. */
   journey?: CoreJourneyIndicator | null;
   /** Drives the indigo countdown ring while open. */
@@ -294,6 +295,8 @@ export interface TogetherCoreProps {
   openVibeLabel?: string | null;
   /** True only when friends can actually receive the coarse map pin. */
   locationShared?: boolean;
+  /** Radius-filtered count; shown only on the Freunde target inside the orbit. */
+  nearbyCount?: number;
   postfachBadgeCount?: number;
   /** Personal status control: publish on the defaults AND open the sheet. */
   onTap: () => void;
@@ -317,6 +320,24 @@ function formatClock(ts: number): string {
 function formatIsoClock(value: string | undefined): string | null {
   const timestamp = value ? Date.parse(value) : NaN;
   return Number.isFinite(timestamp) ? formatClock(timestamp) : null;
+}
+
+function formatNextPlanLabel(value: string | undefined, now: number): string | null {
+  const timestamp = value ? Date.parse(value) : NaN;
+  if (!Number.isFinite(timestamp) || timestamp <= now) return null;
+  const start = new Date(timestamp);
+  const today = new Date(now);
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const sameDay = (left: Date, right: Date) =>
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth() &&
+    left.getDate() === right.getDate();
+  const clock = formatClock(timestamp);
+  if (sameDay(start, today)) return `Plan ${clock}`;
+  if (sameDay(start, tomorrow)) return `Morgen ${clock}`;
+  const weekday = new Intl.DateTimeFormat('de-DE', { weekday: 'short' }).format(start);
+  return `${weekday} ${clock}`;
 }
 
 /**
@@ -345,7 +366,7 @@ function CoreStatusRing({
    * `stroke + GLOW_EXTRA`, not the arc itself.
    */
   const radius = size / 2 + CORE_RING_GAP + stroke / 2;
-  const overhang = Math.ceil(CORE_RING_GAP + stroke / 2 + (stroke + RING_GLOW_EXTRA) / 2);
+  const overhang = Math.ceil(CORE_RING_GAP + stroke / 2 + (stroke + RING_GLOW_EXTRA) / 2 + 4);
   const box = size + overhang * 2;
   const center = box / 2;
   const circumference = 2 * Math.PI * radius;
@@ -360,13 +381,17 @@ function CoreStatusRing({
       style={{ height: box, left: -overhang, position: 'absolute', top: -overhang, width: box }}
     >
       <Svg width={box} height={box}>
-        {/*
-          No track behind the arc. Elapsed time is time that is GONE — drawing a
-          grey placeholder for it turns the ring into a gauge with a fixed
-          frame, where the honest reading is that the ring is simply shorter
-          than it was. It also kept a hard circle on screen in the states that
-          have no ring at all, which made the Core look permanently ringed.
-        */}
+        {/* The quiet full ring is the complete window; the bright arc is the
+            time still remaining. */}
+        <Circle
+          cx={center}
+          cy={center}
+          r={radius}
+          fill="none"
+          stroke={accent}
+          strokeOpacity={0.2}
+          strokeWidth={stroke}
+        />
         {left > 0 ? (
           <Circle
             cx={center}
@@ -374,7 +399,7 @@ function CoreStatusRing({
             r={radius}
             fill="none"
             stroke={accent}
-            strokeOpacity={0.22}
+            strokeOpacity={0.2}
             strokeWidth={stroke + RING_GLOW_EXTRA}
             strokeLinecap="round"
             strokeDasharray={`${circumference * left} ${circumference}`}
@@ -392,7 +417,19 @@ function CoreStatusRing({
           strokeDasharray={`${circumference * left} ${circumference}`}
           transform={`rotate(-90 ${center} ${center})`}
         />
-        {left > 0.02 ? <Circle cx={endX} cy={endY} r={stroke / 1.45} fill={accent} /> : null}
+        {left > 0.02 ? (
+          <>
+            <Circle cx={endX} cy={endY} r={stroke * 2.3} fill={accent} fillOpacity={0.16} />
+            <Circle
+              cx={endX}
+              cy={endY}
+              r={stroke / 1.25}
+              fill="#F2EFE9"
+              stroke={accent}
+              strokeWidth={1.6}
+            />
+          </>
+        ) : null}
       </Svg>
     </View>
   );
@@ -487,6 +524,32 @@ function CoreSurfaceOptics({
         <Rect x={0} y={0} width={size} height={size} rx={radius} fill="url(#coreSurfaceDepth)" />
         <Rect x={0} y={0} width={size} height={size} rx={radius} fill="url(#coreSurfaceState)" />
         <Rect x={0} y={0} width={size} height={size} rx={radius} fill="url(#coreSurfaceSheen)" />
+        <Circle
+          cx={radius}
+          cy={radius}
+          r={Math.max(1, radius - 5)}
+          fill="none"
+          stroke={accent}
+          strokeOpacity={orbitOpen ? 0.28 : 0.2}
+          strokeWidth={1}
+          strokeDasharray={`${Math.max(8, size * 0.12)} ${Math.max(18, size * 0.24)}`}
+          transform={`rotate(-36 ${radius} ${radius})`}
+        />
+        <Path
+          d={`M ${size * 0.22} ${size * 0.31} Q ${radius} ${size * 0.12} ${size * 0.78} ${size * 0.31}`}
+          fill="none"
+          stroke="rgba(242,249,255,0.22)"
+          strokeWidth={0.8}
+          strokeLinecap="round"
+        />
+        <Path
+          d={`M ${size * 0.3} ${size * 0.78} Q ${radius} ${size * 0.9} ${size * 0.7} ${size * 0.78}`}
+          fill="none"
+          stroke={accent}
+          strokeOpacity={0.24}
+          strokeWidth={0.8}
+          strokeLinecap="round"
+        />
         <Rect
           x={0.5}
           y={0.5}
@@ -509,7 +572,7 @@ const AnimatedPath = Animated.createAnimatedComponent(Path);
  * The ONE hold indicator, wherever the Core measures a hold.
  *
  * Same ring, same stroke, same start at twelve o'clock, same clockwise fill —
- * around the "Aktivität" chip while it unfolds Jetzt/Soon, around the Core
+ * around the "Starten" chip while it unfolds Jetzt/Soon, around the Core
  * while a return or a close fills, and around the resting Core while the hold
  * that opens the orbit matures. One form means one thing: keep going and this
  * completes. Three shapes for one promise was the reason the gestures felt
@@ -748,46 +811,37 @@ function CoreMeniscus({
   );
 }
 
-/** A quiet magnetic-capture cue before a target becomes the active choice. */
+/** A quiet capture cue driven by the exact same armed choice as confirmation. */
 function TargetIntentHalo({
   width,
   height,
   borderRadius,
-  offset,
   progress,
   retract,
   stagger,
-  joystickX,
-  joystickY,
+  active,
+  selectionStrength,
 }: {
   width: number;
   height: number;
   borderRadius: number;
-  offset: { x: number; y: number };
   progress: SharedValue<number>;
   retract?: SharedValue<number>;
   stagger: number;
-  joystickX: SharedValue<number>;
-  joystickY: SharedValue<number>;
+  active: boolean;
+  selectionStrength: SharedValue<number>;
 }) {
   const style = useAnimatedStyle(() => {
     const span = Math.max(0.001, 1 - stagger);
     const raw = Math.max(0, Math.min(1, (progress.value - stagger) / span));
-    const distance = Math.hypot(offset.x, offset.y) || 1;
-    const intent = Math.max(
-      0,
-      (joystickX.value * offset.x + joystickY.value * offset.y) / distance,
-    );
-    // A small dead zone prevents the whole menu glowing while the thumb is
-    // simply resting. Beyond it, the halo becomes a continuous capture meter.
-    const capture = Math.max(0, Math.min(1, (intent - 0.18) / 0.82));
+    const capture = active ? Math.max(0, Math.min(1, selectionStrength.value)) : 0;
     const visible = Math.min(1, raw * 2.1) * (1 - (retract?.value ?? 0));
 
     return {
       opacity: visible * capture * 0.68,
       transform: [{ scale: 0.88 + capture * 0.2 }],
     };
-  });
+  }, [active]);
 
   return (
     <Animated.View
@@ -997,14 +1051,13 @@ interface OrbitItemProps {
   accessibilityLabel: string;
   offset: { x: number; y: number };
   box: CoreGeometryBox;
-  /** Master bloom clock, 0 → parked in the core, 1 → fully out. Linear. */
+  /** Master reveal clock, 0 → hidden, 1 → fully visible. Linear. */
   progress: SharedValue<number>;
-  /** Retraction driver: root items ride this back into the core. */
+  /** Root visibility driver during level changes and close previews. */
   retract: SharedValue<number>;
-  /** Fraction of the bloom this item waits before it starts travelling. */
+  /** Fraction of the bloom this item waits before it becomes visible. */
   stagger: number;
-  joystickX: SharedValue<number>;
-  joystickY: SharedValue<number>;
+  selectionStrength: SharedValue<number>;
   active: boolean;
   accent: string | null;
   dwellProgress?: SharedValue<number>;
@@ -1021,8 +1074,7 @@ function OrbitItem({
   progress,
   retract,
   stagger,
-  joystickX,
-  joystickY,
+  selectionStrength,
   active,
   accent,
   dwellProgress,
@@ -1045,15 +1097,7 @@ function OrbitItem({
     const u = raw - 1;
     const eased = 1 + 2.15 * u * u * u + 1.15 * u * u;
 
-    // The travel curves. Starting the offset rotated and unwinding it as the
-    // item flies means the targets sweep OUT of the core along an arc, which
-    // reads as one control opening instead of separate chips being dealt.
-    const swirl = (1 - eased) * 0.42;
-    const cos = Math.cos(swirl);
-    const sin = Math.sin(swirl);
-    const travel = eased * (1 - retract.value);
-    const x = (offset.x * cos - offset.y * sin) * travel;
-    const y = (offset.x * sin + offset.y * cos) * travel;
+    // The visible target centre is always the selection centre.
 
     // Leaning into the thumb is signalled by `TargetIntentHalo` ALONE, never by
     // scaling this chip. The chip carries an Ionicons glyph, which is rastered
@@ -1062,20 +1106,18 @@ function OrbitItem({
     // which is exactly when it is being looked at. The halo is a plain bordered
     // View with nothing rastered inside it, so it can scale for free.
 
-    // The icon counter-rotates as it rides out and settles level. Small on
-    // purpose — 26° reads as the chip having been flicked into place, where
-    // anything larger turns a menu into a spinner.
-    const spin = (1 - eased) * -26;
+    // A small counter-rotation keeps the reveal alive without moving the target.
+    const spin = (1 - eased) * -12;
 
     return {
       opacity: Math.min(1, raw * 2.1) * (1 - retract.value),
       transform: [
-        { translateX: x },
-        { translateY: y },
+        { translateX: offset.x },
+        { translateY: offset.y },
         { rotate: `${spin}deg` },
         // Settles on exactly 1 and stays there, so the resting and selected
         // chip are both pixel-aligned.
-        { scale: 0.34 + 0.66 * eased },
+        { scale: 0.72 + 0.28 * eased },
       ],
     };
   });
@@ -1093,12 +1135,11 @@ function OrbitItem({
         width={ITEM_SIZE}
         height={ITEM_SIZE}
         borderRadius={ITEM_SIZE / 2}
-        offset={offset}
         progress={progress}
         retract={retract}
         stagger={stagger}
-        joystickX={joystickX}
-        joystickY={joystickY}
+        active={active}
+        selectionStrength={selectionStrength}
       />
       <Pressable
         accessibilityRole="button"
@@ -1146,8 +1187,7 @@ interface ActivityCardProps {
   box: CoreGeometryBox;
   progress: SharedValue<number>;
   stagger: number;
-  joystickX: SharedValue<number>;
-  joystickY: SharedValue<number>;
+  selectionStrength: SharedValue<number>;
   interactive: boolean;
   onPress: () => void;
 }
@@ -1172,8 +1212,7 @@ function ActivityCard({
   box,
   progress,
   stagger,
-  joystickX,
-  joystickY,
+  selectionStrength,
   interactive,
   onPress,
 }: ActivityCardProps) {
@@ -1183,20 +1222,19 @@ function ActivityCard({
     const u = raw - 1;
     const eased = 1 + 2.15 * u * u * u + 1.15 * u * u;
 
-    // Same flick as the root icons, but each card tilts AWAY from the core, so
-    // the pair opens outwards like a hand of two rather than twisting in step.
-    const spin = (1 - eased) * (offset.x < 0 ? 9 : -9);
+    // Opposing tilts distinguish the pair without moving either selection centre.
+    const spin = (1 - eased) * (offset.x < 0 ? 6 : -6);
 
     return {
       opacity: Math.min(1, raw * 2.1),
       transform: [
-        { translateX: offset.x * eased },
-        { translateY: offset.y * eased },
+        { translateX: offset.x },
+        { translateY: offset.y },
         { rotate: `${spin}deg` },
         // Intent is the halo's job here too — see `OrbitItem`. This card holds a
         // glyph and a label, so a held fractional scale softened both for as
         // long as the thumb pointed at it. Settles on exactly 1.
-        { scale: 0.62 + 0.38 * eased },
+        { scale: 0.74 + 0.26 * eased },
       ],
     };
   });
@@ -1219,11 +1257,10 @@ function ActivityCard({
         width={CORE_ACTIVITY_CARD_WIDTH}
         height={CORE_ACTIVITY_CARD_HEIGHT}
         borderRadius={20}
-        offset={offset}
         progress={progress}
         stagger={stagger}
-        joystickX={joystickX}
-        joystickY={joystickY}
+        active={active}
+        selectionStrength={selectionStrength}
       />
       <Pressable
         accessibilityRole="button"
@@ -1271,11 +1308,13 @@ function ActivityCard({
 export function TogetherCore({
   status,
   activity = null,
+  nextActivity = null,
   journey = null,
   expiresAt,
   openedAt,
   openVibeLabel = null,
   locationShared = false,
+  nearbyCount = 0,
   postfachBadgeCount = 0,
   onTap,
   onSelectTarget,
@@ -1297,8 +1336,7 @@ export function TogetherCore({
   const [now, setNow] = useState(() => Date.now());
   /**
    * Outlives `mode` by exactly one closing animation. Unmounting the targets
-   * the moment the orbit closes would delete them mid-retraction, so they would
-   * blink out instead of riding their paths back into the core.
+   * the moment the orbit closes would delete them before their closing fade.
    */
   const [orbitMounted, setOrbitMounted] = useState(false);
 
@@ -1356,6 +1394,8 @@ export function TogetherCore({
    * on the Core, so it has to be tested against the Core's own centre.
    */
   const touchOriginRef = useRef({ x: 0, y: 0 });
+  /** The Core's circle, so the surfaces it opens can be measured against it. */
+  const coreShellRef = useRef<View | null>(null);
   const pathRef = useRef(createCoreGesturePathState());
   const returnPhaseRef = useRef<CoreReturnPhase>('idle');
   const returnVisualRef = useRef(false);
@@ -1379,20 +1419,18 @@ export function TogetherCore({
   const touchActiveRef = useRef(false);
   const handoffRef = useRef<(() => void) | null>(null);
   const handoffTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const replayHeldPointRef = useRef<(dx: number, dy: number) => void>(() => {});
 
   /**
    * Hands the screen over to the surface a confirmed target opens.
    *
    * The confirm used to close the orbit and open the surface in the SAME frame,
-   * so the targets flew inwards to the core while the sheet rose past them out
-   * of the bottom edge — two motions crossing in opposite directions over the
-   * same half of the screen, each making the other hard to read. Neither is at
-   * fault; running them together is.
+   * so the orbit was still closing while the sheet rose through the same part
+   * of the screen. Each motion made the other harder to read.
    *
    * Sequenced, but overlapping on purpose: the wait is shorter than the
-   * retraction, so the surface starts while the orbit is on its last few frames
-   * home. Fully sequential would read as a stall, and there is nothing to wait
-   * for once the eye has seen where the menu went.
+   * close, so the surface starts during the orbit's last few frames. Fully
+   * sequential would read as a stall.
    */
   const handOff = useCallback(
     (run: () => void) => {
@@ -1599,8 +1637,8 @@ export function TogetherCore({
   }, [activity?.id, activity?.mode, reducedMotion, statePulse, status]);
 
   // Reports the MODE, not the mount. `orbitMounted` outlives the close by one
-  // retraction so the targets can ride their paths back in — driving the map's
-  // own controls from it made them return 230 ms after the menu had visibly
+  // closing fade — driving the map's own controls from it made them return
+  // 230 ms after the menu had visibly
   // let go of the space.
   useEffect(() => {
     onOrbitStateChange?.(mode === 'idle' ? 'closed' : mode === 'persistent' ? 'parked' : 'held');
@@ -1695,8 +1733,7 @@ export function TogetherCore({
       joystickX.value = withTiming(0, timing(110));
       joystickY.value = withTiming(0, timing(110));
       selectionPulse.value = withTiming(0, timing(100));
-      // Leads the retraction slightly, so the light goes out and THEN the menu
-      // folds away. It can only ever rise again on the next open.
+      // Leads the closing fade slightly, so the rim light goes out first.
       closingMute.value = withTiming(1, timing(90));
       resetIndicator();
       burst.value = 0;
@@ -1738,7 +1775,11 @@ export function TogetherCore({
 
   // The only thing the outside may do to a parked orbit: retract it. Everything
   // that CHOOSES still leaves through the typed callbacks.
-  useImperativeHandle(ref, () => ({ close: closeOrbit }), [closeOrbit, ref]);
+  useImperativeHandle(
+    ref,
+    () => ({ close: closeOrbit, measureOrigin: () => measureSheetOrigin(coreShellRef) }),
+    [closeOrbit, ref],
+  );
 
   const enterActivityLevel = useCallback(() => {
     if (levelRef.current === 'activity') return;
@@ -1746,9 +1787,9 @@ export function TogetherCore({
     levelRef.current = 'activity';
     clearReturnIntent();
     // Selection restarts one level down — but NOT from the thumb's unchanged
-    // position. "Aktivität" sits at −22° and "Jetzt" at −26°, so re-reading the
-    // resting thumb against the new level armed Jetzt on the very next sample:
-    // the hold that exists to REVEAL the two options went on to create one, and
+    // position. Re-reading the resting thumb against the new level can arm a
+    // child on the next sample: the hold that exists to REVEAL the options then
+    // goes on to create one, and
     // whether it did came down to whether one more jitter event arrived. The
     // latch makes the next arming require a deliberate move.
     armedRef.current = null;
@@ -1758,13 +1799,12 @@ export function TogetherCore({
     haptics.medium();
     resetIndicator();
     activityExpansion.value = withSpring(1, reducedMotion ? { duration: 0 } : CORE_SPRING);
-    // Root targets fall back into the core first, and the two cards bloom out
-    // of the space they leave behind — one continuous move, not a cross-fade.
+    // Root targets clear first, then the two cards reveal at their fixed centres.
     retract.value = withTiming(1, timing(170));
-    subProgress.value = withDelay(
-      70,
-      withTiming(1, { duration: reducedMotion ? 0 : BLOOM_MS, easing: Easing.linear }),
-    );
+    subProgress.value = withTiming(1, {
+      duration: reducedMotion ? 0 : BLOOM_MS,
+      easing: Easing.linear,
+    });
   }, [
     activityExpansion,
     clearReturnIntent,
@@ -1792,10 +1832,10 @@ export function TogetherCore({
       duration: reducedMotion ? 0 : 150,
       easing: Easing.in(Easing.cubic),
     });
-    retract.value = withDelay(
-      70,
-      withTiming(0, { duration: reducedMotion ? 0 : BLOOM_MS, easing: Easing.linear }),
-    );
+    retract.value = withTiming(0, {
+      duration: reducedMotion ? 0 : BLOOM_MS,
+      easing: Easing.linear,
+    });
   }, [
     activityExpansion,
     reducedMotion,
@@ -1874,17 +1914,13 @@ export function TogetherCore({
       armAngle.value = 0;
       trackAngle.value = 0;
       closingMute.value = 0;
-      // Opening always starts from a fully un-retracted root fan. This is not
-      // belt-and-braces: closing through the lower zone deliberately LEAVES the
-      // targets retracted so they do not fly back out under a closing menu, and
-      // nothing else ever set them back. The next open then showed an empty
-      // orbit — with selection still live underneath it, because selection is
-      // computed from angles and never asked whether anything was visible.
+      // Opening always starts from a fully visible root fan. A close preview may
+      // leave its visibility driver at one, while selection itself stays live.
       retract.value = 0;
       subProgress.value = 0;
 
       // The iris: the core is pressed in, snaps open, and throws one ring of
-      // light outwards that the targets then ride out on.
+      // light outwards before the targets reveal at their stable centres.
       coreExpansion.value = withSequence(
         withTiming(0.24, { duration: reducedMotion ? 0 : 55, easing: EASE_OUT }),
         withSpring(1, reducedMotion ? { duration: 0 } : CORE_SPRING),
@@ -1898,10 +1934,10 @@ export function TogetherCore({
       // this clock, so it has to advance in real time. The overshoot lives in
       // each target's own worklet.
       progress.value = 0;
-      progress.value = withDelay(
-        45,
-        withTiming(1, { duration: reducedMotion ? 0 : BLOOM_MS, easing: Easing.linear }),
-      );
+      progress.value = withTiming(1, {
+        duration: reducedMotion ? 0 : BLOOM_MS,
+        easing: Easing.linear,
+      });
     },
     [
       aimArmed,
@@ -1935,6 +1971,8 @@ export function TogetherCore({
   const openFromHold = useCallback(() => {
     if (!touchActiveRef.current || modeRef.current !== 'idle') return;
     openOrbit('joystick');
+    const { x, y } = currentPointRef.current;
+    replayHeldPointRef.current(x, y);
   }, [openOrbit]);
 
   const confirmRoot = useCallback(
@@ -2041,10 +2079,6 @@ export function TogetherCore({
       joystickX.value = 0;
       joystickY.value = 0;
       press.value = withTiming(1, { duration: reducedMotion ? 0 : 60, easing: EASE_OUT });
-      // Touching the core at all retires the introduction. Keeping it until
-      // someone actually holds would carry a "hint" across sessions, which is the
-      // permanent helper pill this is supposed not to be.
-      onHoldHintDismiss?.();
       if (modeRef.current !== 'idle') return;
       openHoldProgress.value = 0;
       openHoldProgress.value = withDelay(
@@ -2091,10 +2125,10 @@ export function TogetherCore({
       const travelling = moved > STILL_SLOP;
       if (travelling) lastSampleRef.current = { x: dx, y: dy };
 
-      // A touch that has wandered this far is on its way somewhere else. It used
-      // to keep its opening hold alive, so parking a finger 100 px down the map
-      // opened the orbit and the return lane closed it again in the same breath.
-      if (modeRef.current === 'idle' && Math.hypot(dx, dy) > HOLD_CANCEL_SLOP) cancelOpenHold();
+      // Preserve an early upward/sideways mark and replay it when the hold
+      // matures. Only the same clear downward gesture used by the open menu
+      // cancels the opening hold.
+      if (modeRef.current === 'idle' && isCoreDownwardCancellation(dx, dy)) cancelOpenHold();
 
       if (heldRef.current) {
         const joystickRadius = Math.max(1, HOLD_CORE_SIZE / 2);
@@ -2141,7 +2175,7 @@ export function TogetherCore({
 
       // A moving thumb is a thumb that has not chosen yet. Restarting the dwell
       // on real movement is what stops a sweep across the middle target from
-      // unfolding Jetzt/Soon on the way past.
+      // unfolding the Starten choices on the way past.
       if (travelling) armDwell();
 
       const activityLevel = levelRef.current === 'activity';
@@ -2155,6 +2189,7 @@ export function TogetherCore({
         horizontalReach: activityLevel ? activityRailReach : rootRailReach,
         previous: armedRef.current,
         path: pathRef.current,
+        neutralZone: activityLevel ? ACTIVITY_NEUTRAL_ZONE : undefined,
       });
       pathRef.current = selection.path;
       applyArmed(selection.index);
@@ -2188,6 +2223,8 @@ export function TogetherCore({
     ],
   );
 
+  replayHeldPointRef.current = handleMove;
+
   /**
    * What a plain press on the core means, depending on where we are.
    *
@@ -2215,7 +2252,7 @@ export function TogetherCore({
       clearTimers();
       if (modeRef.current === 'idle') onTap();
       // One level up, never a dead tap. The Core used to do literally nothing here
-      // while reading "Wählen", so the only ways out of Jetzt/Soon were a drag
+      // while reading "Wählen", so the only ways out of the Starten level were a drag
       // gesture and the backdrop — and for a screen reader, only the backdrop,
       // which closes everything instead of stepping back.
       else if (levelRef.current === 'activity') leaveActivityLevel();
@@ -2378,18 +2415,6 @@ export function TogetherCore({
         ? Math.max(0, Math.min(1, (activityEnd - now) / (activityEnd - activityStart)))
         : 1
       : null;
-  /**
-   * The title's second line only exists while the system font is near default.
-   *
-   * The text block sits inside a ROUND mask (`coreSurface` clips), so its
-   * height decides how much width the outermost rows still have. At the default
-   * scale a two-line title leaves the label 61 px of chord for its 58 px; at
-   * 1.15 that chord is down to 50 px and at 1.3 to 32, and the label gets cut
-   * off mid-word. One line holds less text but stays whole, and a clipped line
-   * is worse than a short one.
-   */
-  const titleLines = PixelRatio.getFontScale() > 1.12 ? 1 : 2;
-
   const journeyMeta = journey
     ? journey.status === 'armed'
       ? 'Vorbereitet'
@@ -2404,21 +2429,17 @@ export function TogetherCore({
       : status === 'soon'
         ? CORE_ACCENT.soon
         : CORE_ACCENT.open;
-  /**
-   * `soon` gets NO ring at all. There is no window to count down — nothing has
-   * started — so any arc would be a shape standing in for time that does not
-   * exist yet; the previous fixed 0.16 beacon only looked plausible because a
-   * grey track framed it. The ring appears when the plan actually starts:
-   * `ownCoreActivity` runs through `resolveActivityMode`, so the status flips
-   * to `now` on its own and `activityRemaining` then counts the real window.
-   */
+  const soonRemaining =
+    status === 'soon' && Number.isFinite(activityStart) && activityStart > now
+      ? Math.max(0, Math.min(1, (activityStart - now) / OPEN_DURATION_MS))
+      : null;
   const ringProgress = journey
     ? // An Anreise has no window to deplete, and the underlying activity's or
       // open status's countdown would be a ring measuring something the Core is
       // no longer showing — mislabelled time, which is the thing this ring must
       // never be.
       null
-    : (openRemaining ?? activityRemaining ?? (status === 'now' ? 1 : null));
+    : (openRemaining ?? soonRemaining ?? activityRemaining);
   const activityTime = activity
     ? status === 'now'
       ? formatIsoClock(activity.endsAt)
@@ -2429,6 +2450,8 @@ export function TogetherCore({
         activityTime ? ` · ${status === 'now' ? 'bis' : 'um'} ${activityTime}` : ''
       }`
     : null;
+  const nextPlanLabel = formatNextPlanLabel(nextActivity?.startsAt, now);
+  const openSupportLabel = [openVibeLabel ?? 'Egal', nextPlanLabel].filter(Boolean).join(' · ');
 
   const restingCoreSize = status === 'idle' ? IDLE_CORE_SIZE : OPEN_CORE_SIZE;
   const renderedCoreSize = orbitOpen ? HOLD_CORE_SIZE : restingCoreSize;
@@ -2577,16 +2600,19 @@ export function TogetherCore({
               box={box}
               progress={progress}
               retract={retract}
-              // Blooms from the centre outwards. Launching every target on one beat
-              // makes the ring simply appear; a beat between the rings is what
-              // makes the eye follow it out of the core.
+              // A short centre-out reveal keeps the fixed target order legible.
               stagger={Math.abs(index - CORE_PRIMARY_INDEX) * BLOOM_STAGGER}
-              joystickX={joystickX}
-              joystickY={joystickY}
+              selectionStrength={commit}
               active={activeRoot === index}
               accent={activeRoot === index ? rootTargetAccent(target.id) : null}
               dwellProgress={target.id === 'activity' ? activityDwellProgress : undefined}
-              badge={target.id === 'postfach' ? postfachBadgeCount : 0}
+              badge={
+                target.id === 'postfach'
+                  ? postfachBadgeCount
+                  : target.id === 'nearby'
+                    ? nearbyCount
+                    : 0
+              }
               interactive={interactive && level === 'root' && !rootClosing}
               onPress={() => confirmRoot(index)}
             />
@@ -2605,8 +2631,7 @@ export function TogetherCore({
               // Jetzt leads by a beat, establishing a stable left/right order
               // without ever preselecting either activity mode.
               stagger={index * 0.09}
-              joystickX={joystickX}
-              joystickY={joystickY}
+              selectionStrength={commit}
               interactive={interactive && level === 'activity' && !rootClosing}
               onPress={() => confirmActivity(index)}
             />
@@ -2615,6 +2640,7 @@ export function TogetherCore({
       ) : null}
 
       <Animated.View
+        ref={coreShellRef}
         style={[
           styles.core,
           {
@@ -2737,12 +2763,12 @@ export function TogetherCore({
             ) : journey ? (
               <View pointerEvents="none" style={styles.coreStatusContent}>
                 <CoreStateLabel icon="navigate" label="ANREISE" accent={SEMANTIC_COLOR.journey} />
-                {/* Two lines, and the ellipsis decides where they end — NOT a
-                    character cap. "IIIIIIIIIIIIIIIIIIIIIIIII" and
-                    "mmmmmmmmmmmmmmmmmmmmmmmmm" are both 25 characters and
-                    differ by roughly threefold in width, so a count either
-                    overflows or wastes the line depending on the name. */}
-                <Text {...TEXT_CAPPED} numberOfLines={titleLines} style={styles.coreHero}>
+                <Text
+                  {...TEXT_CAPPED}
+                  numberOfLines={2}
+                  ellipsizeMode="tail"
+                  style={styles.coreHero}
+                >
                   {journey.title}
                 </Text>
                 {journeyMeta ? (
@@ -2764,7 +2790,7 @@ export function TogetherCore({
                   </Text>
                 ) : null}
                 <Text {...TEXT_CAPPED} numberOfLines={1} style={styles.coreSupport}>
-                  {openVibeLabel ?? 'Egal'}
+                  {openSupportLabel}
                 </Text>
                 {locationShared ? (
                   <View pointerEvents="none" style={styles.locationIndicator}>
@@ -2783,12 +2809,12 @@ export function TogetherCore({
                   label={status === 'now' ? 'JETZT' : 'SOON'}
                   accent={statusAccent}
                 />
-                {/* Two lines, and the ellipsis decides where they end — NOT a
-                    character cap. "IIIIIIIIIIIIIIIIIIIIIIIII" and
-                    "mmmmmmmmmmmmmmmmmmmmmmmmm" are both 25 characters and
-                    differ by roughly threefold in width, so a count either
-                    overflows or wastes the line depending on the name. */}
-                <Text {...TEXT_CAPPED} numberOfLines={titleLines} style={styles.coreHero}>
+                <Text
+                  {...TEXT_CAPPED}
+                  numberOfLines={2}
+                  ellipsizeMode="tail"
+                  style={styles.coreHero}
+                >
                   {activity?.title ?? 'Aktivität'}
                 </Text>
                 {activityMeta ? (
@@ -2798,7 +2824,7 @@ export function TogetherCore({
                 ) : null}
               </View>
             ) : (
-              <View pointerEvents="none">
+              <View pointerEvents="none" style={styles.coreIdleContent}>
                 {/* The Mica figure is portrait (0.82:1) where the old mark was
                     landscape (1.79:1), so the same number would read a third
                     smaller in the rest state. Sized by optical weight, not by
@@ -2836,7 +2862,6 @@ export function TogetherCore({
             progress={returnProgress}
           />
         ) : null}
-
       </Animated.View>
 
       {/* Both rings sit OUTSIDE the core's Animated.View on purpose. As children
@@ -2896,6 +2921,10 @@ export function TogetherCore({
 }
 
 const styles = StyleSheet.create({
+  coreIdleContent: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   /**
    * One container for every status, and three text roles inside it. There used
    * to be two containers and six text styles carrying three different
@@ -2905,7 +2934,7 @@ const styles = StyleSheet.create({
   coreStatusContent: {
     alignItems: 'center',
     justifyContent: 'center',
-    maxWidth: OPEN_CORE_SIZE - CORE_RING_TEXT_CLEARANCE,
+    width: OPEN_CORE_SIZE - CORE_TITLE_CLEARANCE,
   },
   coreStateLabelRow: {
     alignItems: 'center',
@@ -2974,8 +3003,8 @@ const styles = StyleSheet.create({
   badgeText: {
     color: '#fff',
     fontFamily: FONT.bold,
-    fontSize: 10,
-    lineHeight: 13,
+    fontSize: TYPE.micro.fontSize,
+    lineHeight: TYPE.micro.lineHeight,
   },
   burst: {
     borderWidth: 2,

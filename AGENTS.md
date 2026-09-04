@@ -81,12 +81,13 @@ Rules that govern all backend work:
 
 **The whole procedure, in order. Do not reconstruct it — copy it.**
 
-1. Bump `extra.internalVersion` in `app.json` (see format rule below). Skip only if someone already bumped it since the last publish — check the value against the last published one first.
-2. `npm run typecheck` and `npx eslint src --quiet` (both must be clean).
-3. Run exactly this — one line, staging, iOS only:
+1. **If the diff touches `functions/index.js`, `firestore.rules`, `firestore.indexes.json` or `database.rules.json`: deploy the backend FIRST** (`npm run deploy:dev`, or the narrower `deploy:rules:dev` / `deploy:functions:dev`). Order, not preference — see the rule below.
+2. Bump `extra.internalVersion` in `app.json` (see format rule below). Skip only if someone already bumped it since the last publish — check the value against the last published one first.
+3. `npm run typecheck` and `npx eslint src --quiet` (both must be clean).
+4. Run exactly this — one line, staging, iOS only:
 
 ```bash
-APP_VARIANT=staging EXPO_PUBLIC_FIREBASE_EMULATORS=false EXPO_PUBLIC_FIREBASE_APP_CHECK_ENABLED=true EXPO_PUBLIC_CRASH_REPORTING_ENABLED=true EXPO_PUBLIC_STAGING_DIAGNOSTICS=true npx eas update --channel staging --environment preview --platform ios --non-interactive --message "<internalVersion> <was sich geändert hat>"
+APP_VARIANT=staging EXPO_PUBLIC_FIREBASE_EMULATORS=false EXPO_PUBLIC_FIREBASE_APP_CHECK_ENABLED=true EXPO_PUBLIC_CRASH_REPORTING_ENABLED=true EXPO_PUBLIC_STAGING_DIAGNOSTICS=true npx --yes eas-cli@22.2.0 update --channel staging --environment preview --platform ios --non-interactive --message "<internalVersion> <was sich geändert hat>"
 ```
 
 Why each part, so nobody "simplifies" it back into a break:
@@ -94,13 +95,16 @@ Why each part, so nobody "simplifies" it back into a break:
 - **The inline env vars are mandatory.** `eas update` sets `EXPO_NO_DOTENV`, so `.env` is not read and `app.config.js`'s local-dev guard throws before the project id resolves — the real error is swallowed (`expo config --json exited with non-zero code: 1`; use `EXPO_DEBUG=1` to see it). The values mirror the `staging` profile in `eas.json`.
 - **`--platform ios`, never `all`.** Android is not shipped this way.
 - **`--message` is mandatory** in non-interactive mode. Start it with the internalVersion so the dashboard list is readable. Avoid umlauts — the shell mangles them.
-- **Do not use `npm run update:staging`.** It still carries the missing-env bug AND hardcodes `--platform all`.
-- No EAS build, no Firebase deploy: `functions/index.js` and `firestore.rules` changes ship via `firebase deploy`, never via an OTA. If the diff touches them, say so explicitly rather than letting the client run against an older backend.
+- **Do not use `npm run update:staging` for a real push** — not because it is wrong (it carries the same env vars, the same channel/environment and `--platform ios`), but because `--message` cannot reach it: it runs `--non-interactive`, where the message is mandatory, and `npm run <script> -- --message "…"` does not forward args through PowerShell on Windows. The inline command above stays the canonical one. The script's own extra step, `verify:release`, is worth running by hand when the diff is large.
+- **`npx eas` does not work on this machine — it must be `npx --yes eas-cli@22.2.0`.** The npm package is `eas-cli`; there is no package called `eas`, so the bare form dies with the useless "could not determine executable to run". `eas-cli` is installed neither globally nor in `node_modules`, and `eas.json` pins an EXACT version (`cli.version`), so an unpinned `npx eas-cli` pulls latest and is rejected by the CLI itself. Keep the pin in this command in sync with `eas.json`. The Expo session in `~/.expo/state.json` is valid — no login step.
+- **The backend NEVER ships with an OTA, and it must be deployed BEFORE it.** An OTA carries only the JS bundle and its assets; `functions/index.js` and the rules/indexes files run on Google's servers and get there solely via `firebase deploy`. This separation is deliberate, not a gap to close: an update reaches each device on its next app start, so old and new clients always run against ONE shared backend for a while. Two rules fall out of it and neither is optional:
+  - **Backend first, then the OTA.** The other order publishes a client that calls a callable which does not exist yet — an error that never reproduces locally, because the emulator already has the new code.
+  - **Backend changes stay additive.** Add a callable, add an optional field; never rename or remove what a client still in the field calls. Devices that have not taken the update yet are the ones that break, so nobody testing will see it.
+  Deployed-vs-committed is not the same question: `git status` showing `functions/index.js` as modified does NOT mean it is undeployed. Check with `npx --no-install firebase functions:list --project dev` before warning about it. That listing proves a function EXISTS, not that its deployed body matches the working copy.
 
 - **Format is `x.y.zz` — the patch part is TWO digits, zero-padded** (`0.3.07`, then `0.3.08` … `0.3.99`). Fixed width so the number a human reads off a device sorts and compares at a glance; `0.3.6` was the last single-digit one and equals `0.3.06`.
 - **Bump `extra.internalVersion` in `app.json` by hand on EVERY OTA push — before publishing, not after.** It is the number a human reads off a test device to answer "am I running the update I just pushed?" (`buildInfo.ts` → `BuildInfo.line`). The EAS update id is the machine truth and is always unique, but two bundles published from the same `internalVersion` are indistinguishable to the person holding the phone, which defeats the field's only purpose. Patch-bump per push.
-- **The `update:*` scripts must set `APP_VARIANT` and `EXPO_PUBLIC_FIREBASE_EMULATORS` inline.** `eas update` sets `EXPO_NO_DOTENV`, so `.env` is NOT loaded, and `app.config.js`'s local-dev guard then throws before the project id can even be resolved (`expo config --json exited with non-zero code: 1`, with the real error swallowed — pass `EXPO_DEBUG=1` to see it). Values must mirror that channel's build profile in `eas.json`. Fixed for `update:development`; **`update:staging` and `update:production` still carry this bug.**
-- `npm run <script> -- --message "…"` does not forward the args through PowerShell on Windows. Invoke `npx cross-env … eas update … --message "…"` directly instead — `--message` is mandatory in non-interactive mode.
+- **The `update:*` scripts must set `APP_VARIANT` and `EXPO_PUBLIC_FIREBASE_EMULATORS` inline.** `eas update` sets `EXPO_NO_DOTENV`, so `.env` is NOT loaded, and `app.config.js`'s local-dev guard then throws before the project id can even be resolved (`expo config --json exited with non-zero code: 1`, with the real error swallowed — pass `EXPO_DEBUG=1` to see it). Values must mirror that channel's build profile in `eas.json`. All three scripts now do this, and all three go through `npx --yes eas-cli@22.2.0` and `--platform ios` (September 2026 — they used to call a bare `eas` that is not installed here, and `update:development` / `update:production` hardcoded `--platform all`). Keep the pin in step with `eas.json`.
 
 ---
 
@@ -218,7 +222,7 @@ nearbyCount = selectNearbyFriends(radiusKm).length   // radius only, NO viewport
 
 `MapScreen` computes these once, uses `nearbyFriends.length` for the pill AND passes `friends` + `friendsWithoutLocation` into `NearbySheet`. The sheet does NOT filter — it renders what it's given, so pill count === sheet "in deiner Nähe" count by construction.
 
-**Map pins are a SEPARATE concern.** `pin`-visibility friends render as map markers (activity docs with a matching `friendId`). These pins are NOT added to the pill number. The map shows locations; the pill counts social relevance.
+**An open friend gets NO map pin (August 2026).** `pin` visibility still decides whether they count as nearby and whether a distance is shown — the tiers are unchanged — but the map itself shows only activities. Open is a STATUS, not a place: a pin said "someone is here" without there being anything to go to, and a screenful of them buried the actual plans, which are the only thing on that map you can act on. The status lives where it can be acted on: the nearby pill and its sheet. The pill count was always viewport-independent and is unaffected.
 
 Tapping the pill opens `NearbySheet`.
 
@@ -249,7 +253,7 @@ Receives `friends: NearbyFriend[]` (pin in radius, pre-sorted) and `friendsWitho
   This is the current model after two reversals, so the history matters: (1) the original one-tap model let the **map pill** go open, which announced you on a mis-tap over the map — that failure is what the rule exists to prevent, and the pill's handler must stay a pure `setNearbySheetVisible(true)`. (2) A pre-open draft form with a confirm button then moved the whole refinement *before* going open; it was rejected as friction standing in front of the one thing the app exists for. The surviving principle is narrower than "confirm before you announce": **the surface you can hit by accident (the map) never announces you; the surface you had to deliberately open (this sheet) may.** Refinement follows the announcement, it does not gate it — every field is optional anyway. The defaults carry the old rule's intent: no vibe, +`OPEN_DURATION_MS` = 3 h, no location, hard maximum 12 h.
 
   Open → a **collapsed-by-default** card in two stacked rows. Row 1 is the summary "Du bist offen · <vibe> · bis HH:MM" + an animated disclosure chevron, and the **whole row** is the expand target. Row 2 is a full-width **"Offen beenden"** button. **The destructive control must never share a row with the disclosure.** It did: the chevron sat 8 px from a "Beenden" chip, so reaching for one hit the other and ended your status outright. Separating them on the *vertical* axis is what fixes it — a thumb crosses 8 px of horizontal gap by accident, never a row boundary. (The button also spells out what it does; it was once a two-letter "aus" chip that read as a label, and people did not know it ended their status.) Tap the summary to expand `RefineControls`, which sits *between* the two rows so "Offen beenden" stays the last thing in the card in both states:
-  - **Duration** ("Bis wann?"): the **shared `DurationPicker`** from the activity composer (`src/features/activities/components/DurationPicker.tsx`, exported from that feature's barrel), in the open colour via its `accent` prop. Deliberately the same control, not a lookalike: an open window and an activity answer the identical question ("how long is this good for?"), and the picker's own 15 min – 12 h range already equals `OPEN_MAX_DURATION_MS`. It replaced a native time wheel — two different widgets for one question on two screens is exactly the inconsistency that reads as unfinished. The picker speaks minutes-from-now while the status stores an absolute `expiresAt`; `expiryToMinutes`/`minutesToExpiry` convert, and the summary row keeps showing the resulting clock time as "bis HH:MM" so the absolute answer stays visible. → `setExpiresAt`, capped at 12 h. Default on going open is +3 h (`OPEN_DURATION_MS`).
+  - **End time** ("Bis wann?"): `OpenExpiryPicker` uses the shared `TimeRangePicker` engine in `end-only` mode. The start is the fixed label "Jetzt" and cannot be dragged or accessibility-adjusted; touching the selected bar controls only the end. Live dragging stays local and only release commits the absolute `expiresAt`, capped at 12 h and at the next Activity. Default on going open is +3 h (`OPEN_DURATION_MS`).
   - **Vibe**: the FIRST control in the expanded card (above "Bis wann?" — the "what" is the social headline, time is just the frame): a **free-text field only** (placeholder "Egal"). **No vibe set displays as "Egal"** in the collapsed summary ("Du bist offen · Egal · bis HH:MM"): a pure display convention — the data stays `null`, never write a magic "Egal" label into the presence doc. Free text carries a `label` only (no emoji).
   - **Location** ("Standort"): a toggle "Standort teilen" → `shareLocation`. (Wording rule: never call this "Für Freunde sichtbar" — you are ALWAYS visible to friends while open; the toggle only controls whether your coarse position/distance is shared.) On = friends see you on the map (`pin`); off = you appear in the list only, no location (`none`) — same two-tier model as `LocationVisibility`. **Privacy-first: resets to off each time you go open** (explicit opt-in per session). A small navigate icon shows in the collapsed summary when sharing.
   - **Corner radii are assigned by role, not picked per screen.** `src/global.css` defines the scale (`--radius-sm: 12`, `--radius-md: 16`, `--radius-lg: 20`, `--radius-xl: 28`) but a scale alone does not stop drift: the same kind of input field was 16 in the composer and 12 in this card, which is the sort of thing that reads as unconsidered without anyone being able to name why. The rule: **an input/tap field is 16, the card containing it is 20.** Nesting still decreases inward — that part was never the problem; the disagreement across screens was.
@@ -265,7 +269,7 @@ Receives `friends: NearbyFriend[]` (pin in radius, pre-sorted) and `friendsWitho
 - `MapCanvas` is the single rendering swap point. Native uses `react-native-maps`; the platform-specific browser file uses `PreviewMapCanvas` only to keep native-only imports out of a browser bundle.
 - **Map provider = Google on BOTH platforms ("Option A", see docs/backend-plan.md → Karten/Orte).** Reason: `onPoiClick` (tap a POI label → create an activity there) only exists in the Google provider. Android is always Google; iOS uses Google in dev/release builds with a configured key (`GOOGLE_MAPS_API_KEY_IOS` via `app.config.js`) and falls back to Apple Maps in Expo Go (no Google SDK there — POI labels not tappable, long-press/search instead). Do not move place search to a non-Google provider: Places data may only be displayed on Google maps.
 - `MapOverlay` floats absolutely over the map with all controls (SpeedDial, search bar, recenter, nearby pill). All copy is German ("Orte suchen", "Profil öffnen" — never English placeholders). It renders a soft SVG top scrim (dark → transparent, `insets.top + 64`) so the status bar stays readable over the bright map.
-- **Mode switching animates.** `MainSurface` wraps each mode in a `ModeLayer` that cross-fades (240 ms ease-out + scale 0.985→1) instead of hard opacity 0/1 swaps; inactive layers stay mounted and non-interactive (same semantics as before). `MarkerDetailSheet` renders a subtle mode-tinted top wash as an SVG **gradient fading to transparent** (accent 0.1 → 0 over 110px) — never a hard-edged color block that cuts across content.
+- **There is only ONE main surface, and it is the map (September 2026).** `MainSurface` renders `MapScreen` and nothing else; the calendar became a card on it (see Calendar below), which removed the last reason for a second mode. `MainMode`, `useMainMode`, the cross-fading `ModeLayer` and `FloatingModeSwitch` are all deleted — do not reintroduce a mode layer to host a surface that could be a `FloatingSheet`. `MarkerDetailSheet` renders a subtle mode-tinted top wash as an SVG **gradient fading to transparent** (accent 0.1 → 0 over 110px) — never a hard-edged color block that cuts across content.
 - **`WelcomeIntro`** (features/main): one-time welcome hero shown after the first sign-in (AsyncStorage `together:welcomeSeen:v2`), mounted in `MainSurface`. It uses the Mica figure (`TogetherMark`, `tone="brand"` — one of only two in-app places that show the mark in colour) and three value rows (Freunde/Karte/Kalender). The PRIMARY CTA is "Freunde hinzufügen" (→ `/friends`) — a friendless account gets zero value from map or calendar, so the first action a new user is offered must be building the graph; "Erst mal umsehen" dismisses as the quiet secondary. Modal is `statusBarTranslucent` + `navigationBarTranslucent` so it truly covers the whole screen. Never blocks returning users; storage errors → skip the intro.
 - **The map rotates (two fingers), flat AND pitched.** `rotateEnabled` + `showsCompass` on the `MapView`. The compass is not decoration: Google draws it only while heading ≠ 0 and hides it on reset, and it is the ONLY way back to north — without it a turned map is somewhere users get stuck. `pitchEnabled` stays **false**: tilt is a deliberate view choice owned by the perspective button (`props.pitched` → `PERSPECTIVE_PITCH`), not something to fall into mid-pan.
   - **A rotation must survive every programmatic camera move.** `animateToRegion` and `fitToCoordinates` describe a flat, north-up viewport, so the renderer levels the tilt *and* turns back to north. `restoreCameraAfter(delay)` re-applies both after recenter/focus/fit; it runs whenever there is a pitch OR a heading to restore (it used to bail unless pitched, which is exactly why a rotated flat map snapped north the moment anything focused a marker). The perspective toggle likewise passes the current heading instead of `0` — that was free when the map could not turn and silently destroys the rotation now that it can.
@@ -278,7 +282,7 @@ Receives `friends: NearbyFriend[]` (pin in radius, pre-sorted) and `friendsWitho
 - **`PLACE_FOCUS_*_DELTA` is the ONLY prescribed jump zoom.** The single-coordinate branch of a fit request used to carry its own 0.012/0.01, so a Safety focus on one friend arrived at a different zoom than "auf Karte zeigen" on the same person; it now goes through `focusCamera` like everything else (which also gives it the heading/pitch preservation and the covered-height offset the multi-coordinate branch gets from its `edgePadding`). Two numbers for one job is how a map starts feeling arbitrary — do not add a third. Both halves of the request are set through **one** `focusMapOn(coordinate, { keepZoom })` in `MapScreen`, never as two separate `setState` calls — a stale `keepZoom` left over from an earlier focus silently changes how the next one behaves. **Every camera request must go through `focusMapOn`;** `setMapFocusCoordinate` has no other call site, and reintroducing one means the next focus inherits the previous request's zoom rule. (The old comment on `PLACE_FOCUS_*` justified the value with place *search*; search has long gone through `selectionFocus` + `POI_RESULT_FOCUS` instead.)
 - **"Centred" means centred in the VISIBLE map.** Both focus paths shift the camera south by `focusCenterOffset(coveredHeight, viewportHeight)` = half the covered share of the screen, where `coveredHeight` is the live height of whatever hides the map's bottom (`bottomSheetHeight` — the detail sheet reports its own measured height via `onHeightChange` — or the Safety split deck's `bottomOverlayHeight`). This replaced a hard-coded `DETAIL_SHEET_CENTER_OFFSET = 0.28`, which was calibrated for one sheet and put the pin too high for every other sheet size and too low for none at all. The formula is self-calibrating: no obstruction → dead centre, a sheet covering 56% → exactly the old 0.28. Capped at 80% covered, past which no meaningful map strip remains to centre in.
 - `onRegionChange` fires on every `onRegionChangeComplete` (native) or `focusCoordinate` change (`PreviewMapCanvas`). It passes a full `MapRegion` (center + both deltas). Its ONLY consumer is `updateMapPickerCenter` for the location picker — it does NOT feed the nearby count (which is viewport-independent by design).
-- `pin`-visibility friends have a matching map marker with a `friendId` field linking marker ↔ friend. Keep positions and the friend's `coordinate` in sync (the emulator seed owns both).
+- `pin`-visibility friends carry a `friendId` linking marker ↔ friend and keep their coordinate in sync with the seed, but they are **not rendered on the map** — see the open-presence rule above. The link stays because the nearby list and its "auf Karte zeigen" focus still need it.
 - **Markers are image-based, NOT custom-View children (`markerCapture.tsx`).** On Android + the New Architecture (Fabric), `react-native-maps` snapshots a custom marker `View` to a bitmap before layout settles and clips it to the top-left corner (the "avatar only half visible" bug — reproduced even in a real dev client, so it is NOT an Expo Go quirk). Fix: `MapCanvas` builds a descriptor per marker (`id`, `captureKey` encoding full visual state, `coordinate`, `node`, `onPress`), renders each `node` (`AvatarMarker`/`ClusterMarker`/`JourneyAvatarMarker`) off-screen inside a hidden `View`, captures it to a PNG via `react-native-view-shot`, and hands THAT to `<Marker image>`. Captures are cached by `captureKey` (so pan/zoom never re-captures; an appearance change produces a fresh image). Do NOT go back to passing marker Views as `<Marker>` children. `react-native-view-shot` is a native module — adding/removing it requires a dev-client rebuild.
 - **Publishing and cancelling an activity are OPTIMISTIC — the map never waits for the callable→Firestore→listener round-trip** (same rule as chat sending, see the ChatProvider section). Activity writes are callables, so the feed listener echoes a change seconds later; without local state the map has nothing to animate and the pin appears/disappears whenever the server answers, which reads as a broken tap. `ActivityEntityProvider` therefore keeps two local layers merged into `activityDocs`: `pendingDocs` (a twin of a just-created activity under the id the server will use — the callable mirrors the client's fields back unchanged, so twin and real doc agree; dropped when the feed knows the id, on write failure, or after a 10 s expiry) and `cancellingIds` (a just-cancelled activity hidden everywhere at once; restored if the write throws, held until the feed reports the doc as no longer `active`). Both animations are driven from these, never from the server: **"Wurf & Pop"** on publish (`MarkerLaunchOverlay` — seed morphs into the marker, flies an arc, squashes and rebounds on impact) and its mirror on cancel (`MarkerDismissOverlay` — the pin inhales and bursts, leaving the same impact ring). The dismiss id is armed one frame BEFORE the entity is dropped, because that frame is the only one in which the node and its projected position still exist. A failed write must always say so AND say what was undone (`writeFailureMessage`): connection-class callable codes get an honest "prüfe deine Internetverbindung", every other `HttpsError` message is already German and user-facing and is passed through.
 - **Map style selector (`mapStyle/` + `MapStyleMenu`).** A layers button (bottom-right, above recenter) opens a menu: Tageszeit · Automatisch · Tag · Nacht · Satellit. Backed by `MapStyleProvider`/`useMapStyle` (mirrors `ThemePreferenceProvider`, persisted at `together.map.style.v1`, mounted at root inside `ThemePreferenceProvider`). `preference: 'sonne'|'system'|'day'|'night'|'satellite'`, **default `sonne`**; `effectiveStyle: 'day'|'golden'|'dusk'|'night'|'satellite'` resolves `sonne` against the real solar phase and `system` against the app's `resolvedScheme` (dark→night). `MapCanvas` maps it to `mapType` (`satellite`→`hybrid`, else `standard`) + `customMapStyle` from `SUN_MAP_STYLES` (`utils/sunMapStyles.ts`). Caveat: `onPoiClick` may not fire on satellite/hybrid — long-press to drop a place still works.
@@ -289,14 +293,16 @@ Receives `friends: NearbyFriend[]` (pin in radius, pre-sorted) and `friendsWitho
 **Surfaces that mean different things must LOOK different — audited with CIEDE2000, not contrast ratio.** Contrast ratio only measures lightness, so it scores a dark-green park on dark-grey ground as identical while missing nothing, and misses the real trap (same hue *and* lightness) entirely. Semantically distinct neighbours must clear ΔE00 ≈ 2 (below that they are indistinguishable in practice) and should clear ≈ 4; the ceiling is taste, not a number — these are meant to read as one family, so most sit in the 4–8 band. The audit caught 18 such collisions after the buildings fix: all four POI category rules rendering within ΔE00 1.1 of each other and of plain built-up (five rules producing one mush), minor vs main roads at ΔE00 1.0 in daylight, and forest vs park at 1.04 at night — the last directly contradicting the comment claiming they differ "at a glance". POI categories now carry a faint HUE identity (medical→red, school→amber, attraction→violet, business→warm neutral), stronger in the dark phases where luminance cannot carry it. **Road hierarchy legitimately lives in the CASING on light palettes** — main and minor roads are both white and Google separates them by width, which the style spec cannot set — so that pair passes on fill *or* casing. **`landscape.natural` is deliberately identical to the base ground in `dusk` and `night`**: unbuilt, unlit ground is one surface, the dark palettes have no luminance headroom to spend on a distinction carrying no information, and Google's dark map merges them too. That is asserted as an equality, so drifting to "nearly identical" fails.
 
 **Every palette owes the city a silhouette.** Buildings once sat within 1.03–1.06:1 of the ground in day, golden and night, so the map read as streets floating in a void. `landscape.man_made` must clear ~1.15:1 on the fill (massing) and ~1.5:1 on the stroke (the outline is what actually draws the block) — darker than the ground on light palettes, lighter on dark ones — while staying ≥3:1 below the lit roadway so the city never competes with the street network. Measured: lit road vs ground 11.24:1 at night, 7.72:1 at dusk; lit road vs building 9.48:1 / 6.41:1; every label ≥4:1 across all four static palettes and all 12 blends at 21 steps each. The sky blends on ONE shared curve — the old per-feature lead/lag that ran roads ahead of the ground was faking street lighting and is gone now that lighting is modelled for real. **Structural contract:** `blendSunMapStyles` pairs entries BY ARRAY INDEX, so all four palettes must keep the identical 30 entries in identical order — adding a rule to one means adding it to all four, in place, or a transition will blend roads into water.
-- **The live pulse (`MapLiveAuraOverlay`) is the marker's OWN squircle, not a circle behind it.** Height, corner radius and the width maths live in `activityMarkerLayout.ts` and are imported by both `ActivityMarkerChrome` and the aura, so the two cannot drift into "circle behind a squircle" — do not re-declare those numbers anywhere. Waves scale from the shell's centre but start at **scale 1.0**, i.e. exactly on the outline: the overlay draws ABOVE the native map (and therefore above the markers), so anything starting below 1.0 would crawl across the avatars' faces. The steady halo is sized `shell + 2×HALO_WIDTH` with radius `+ HALO_WIDTH` because RN draws borders inside the box — that is what puts the stroke fully outside the marker. **`ACTIVITY_MARKER_AURA_OFFSET_Y` is DERIVED from the anchor and the canvas height, never typed in** — it was hard-coded to `-40`, which is the centre of the whole marker block (bubble *plus* the name pill below it) rather than the centre of the bubble, so the pulse sat ~10.6 px too low. The soft oversized circle hid that for as long as it existed; a squircle hugging the outline shows it instantly. Waves get the settled shell width from `activityMarkerShellWidth(...)`; sampling the settled morph progress is correct because the aura only renders while the map is still. All wave arithmetic stays **inlined in the worklets**: a helper declared in the component body is a plain JS function and calling it on the UI thread throws.
+- **The `captureKey` MUST carry the zoom stage.** A marker's PNG is a snapshot of one `zoomProgress`: face sizes and the title reveal are Reanimated styles baked in at capture time, and `markerCapture` never re-shoots a key it already holds (`if (cache.uris[request.captureKey]) return false`). The key had no stage in it, so whichever stage a marker first came into view at won forever — two identical activities sat side by side at the same zoom, one with 34 px faces and a title, the other with 14 px faces and none, purely by order of appearance. It looked like two different marker implementations and was one implementation photographed twice. `morphStage` (the settled progress quantized to the three settle points) is now part of both activity keys, so a marker has at most three cached images. Anything else that reads `progress` inside the chrome has the same requirement.
+- **A cluster and a single-avatar marker are the SAME marker.** `AvatarMarker` and `ClusterMarker` are data shells; every pixel comes from `ActivityMarkerChrome`. Any prop one passes and the other does not is a bug, not a variant — `unreadCount` was missing on the cluster path, so the identical joined activity showed a badge as a solo marker and none as a group.
+- **There is no live pulse (removed August 2026).** `MapLiveAuraOverlay` drew a green wave on the ground under every `now` activity. It is deleted, and the reason is worth keeping: it was the ONLY thing that made a `now` marker structurally different from a `soon` one. The two modes are the same object at different times, so they must be the same shape and differ in colour alone — the ring already carries the mode, and it already carries the urgency by draining. A second, animated signal for the same fact was noise, and it cost a per-frame projection through `pointForCoordinate` on every camera move. Do not reintroduce a mode-conditional layer on the map.
 - **Cluster marker (`ClusterMarker`)** shows the first 4 avatars as a 2×2 quad (cells ≈half the inner circle so two fit per row; `slice(0,4)`). Count badge shows `N/MAX` when the cluster's `maxParticipants` is set (mirrors `AvatarMarker`), else the raw count. `MarkerCluster.maxParticipants` flows from the backing activity and is part of the cluster `captureKey`.
 - **`MarkerDetailSheet` participant navigation.** The activity detail shows only a compact avatar stack with the participant count (more than 4 → 3 avatars + a "+N" chip). Tapping it keeps the same sheet container mounted and drills into a **content-sized** participant view (rows in a card, capped at ~60% screen height with inner scroll — never a fixed tall sheet with dead space below a handful of names) with back + close controls; it must not stack a second modal or push the chat down. Returning preserves the detail/chat state. Chat mode keeps its own fixed-height layout + inner scroll.
 
 ### App Routes / Main Surfaces
 
 - The authenticated app has one primary route (`/`) that renders `MainSurface`.
-- `MainSurface` currently owns Map and Calendar. **Calendar is NOT a map pill segment**: it opens via the calendar button in the map top bar and shows one compact "Karte" return control. Socialize is deliberately not mounted or reachable until its later release. Do not add stale placeholder routes for Open/Plans just to mirror older tab ideas.
+- `MainSurface` owns the map alone. **The calendar is a card over it**, opened from the Core's "Pläne" target or the top-bar calendar button and closed by its own header button — no mode, no segment, and no return control at the bottom edge. Socialize is deliberately not mounted or reachable until its later release. Do not add stale placeholder routes for Open/Plans just to mirror older tab ideas.
 - Profile lives at `/profile`. Joined activities, chats and notifications are reached from the map overlay via `PostfachSheet`, not via a separate tab/route.
 - If a route is not implemented as a real surface, remove it instead of leaving placeholder copy in production UI.
 
@@ -348,7 +354,16 @@ The bridge is a **participant-vouched guest invite**, host opt-in per activity:
 - Synergy: the guest and host can befriend each other afterwards via the existing
   `shared_activity` friend-request path.
 
-**Editing an existing activity (host-only, fix-a-mistake flow):** `MarkerDetailSheet` shows a small "Bearbeiten" pencil next to the mode line when `canEdit` is true (the current user is the activity's host — `selection.hostId === currentUid`). It reopens `ActivityComposerSheet` with `editing` + `initialDraft` (built by `useActivityEntities().getEditableDraft(id)`), and submits via `updateActivityFromDraft(id, draft)` instead of creating a new activity. The Sichtbarkeit/audience picker is hidden in edit mode and must stay hidden: `ActivityDocUpdate` has no `audienceUids` field on purpose, so a title/time typo fix must never silently change who can see the activity. `getEditableDraft` returns `null` for expired activities and other people's activities — no edit affordance shows for those. **The draft is seeded with the STORED `doc.mode`, never the resolved one** — `updateActivityFromDraft` writes `mode` back whenever it differs from the document, so seeding it with the display mode turned every typo fix on a started `soon` activity into a permanent conversion to `now`. Since `now` activities have no Anreise (see Journey section), that silently stripped a running Anreise off a plan. The resolved mode still drives how the form reads the time fields (`expiresInMinutes`); it must never drive what gets written.
+**Editing an existing activity (host-only, fix-a-mistake flow):** `MarkerDetailSheet` shows a small "Bearbeiten" pencil next to the mode line when `canEdit` is true (the current user is the activity's host — `selection.hostId === currentUid`). It reopens `ActivityComposerSheet` with `editing` + `initialDraft` (built by `useActivityEntities().getEditableDraft(id)`), and submits via `updateActivityFromDraft(id, draft)` instead of creating a new activity.
+
+**The audience IS editable after creation (Produktentscheidung September 2026; reverses "the Sichtbarkeit picker is hidden in edit mode and must stay hidden").** Choosing who may see a plan is a decision people revise — someone gets added to the evening, someone should not have been on the list — and locking it meant the only way to fix it was to cancel and rebuild the activity, losing its chat and its participants. The old rule's real concern was never "the audience must not change"; it was **"an unrelated edit must not change it silently"**, and that is now what the mechanism enforces instead:
+
+- **The client sends a CONTEXT, never a uid list.** `ActivityDocUpdate.audienceContext` goes through the same `parseAudienceContext` → `audienceForContext` path creation uses, so the server re-resolves it against the host's own confirmed friendships. A raw `audienceUids` on an update is still rejected outright — that is the difference between changing who may see it and being trusted on who they are.
+- **It is sent only when it actually changed**, and the comparison looks at the FRIEND half of the stored audience alone. Comparing the whole list would report a change on every save, and re-resolving on a title fix would quietly pull in friends added since — exactly the silent widening the lock existed to prevent.
+- **Two groups survive every audience edit.** PARTICIPANTS, because someone who already joined would otherwise lose the activity and its chat out from under them; and GUESTS (`inviteFriendToActivity`), who were vouched for by a participant and are not necessarily the host's friends at all, so the host's picker cannot express them. What the host edits is precisely what the host can address.
+- Nobody is notified by an audience change: publication is passive by design (being in an audience is not an invitation).
+
+`getEditableDraft` therefore seeds the REAL audience (`doc.audienceUids` minus the host), never `createDefaultVisibility()` — that default was harmless only while the picker was locked and would now widen every activity to all friends on any save. `getEditableDraft` returns `null` for expired activities and other people's activities — no edit affordance shows for those. **The draft is seeded with the STORED `doc.mode`, never the resolved one** — `updateActivityFromDraft` writes `mode` back whenever it differs from the document, so seeding it with the display mode turned every typo fix on a started `soon` activity into a permanent conversion to `now`. Since `now` activities have no Anreise (see Journey section), that silently stripped a running Anreise off a plan. The resolved mode still drives how the form reads the time fields (`expiresInMinutes`); it must never drive what gets written.
 
 **Leaving vs. cancelling — hosting is a ROLE, cancelling is a decision about the Activity.** The host has BOTH actions, and they must never be collapsed into one:
 
@@ -367,7 +382,7 @@ The bridge is a **participant-vouched guest invite**, host opt-in per activity:
 5. **Participant list** — vertical rows, each avatar + name (`ParticipantListRow`).
 6. **Join button** — "Beitreten"/"Mitplanen"/"Dazustoßen" (per mode), white text on `accent`.
 
-Time/place rows only render when the field is present. No placeholder copy, no fake chat mockup, no redundant intent sentence. **Button labels on an accent fill use a contrast-safe foreground** — `onColorTextColor(accent)` from `src/shared/utils/contrastColor.ts`, NOT hard-coded white: white on the mid-tone mode accents (`now` #41C08D, `soon` #E0A23E, `open` #3B82F6) measures ~2.2–3.7:1 and fails WCAG AA, so the helper drops to dark ink on those. (Superseded the old "white text on accent, never dark text" rule for accessibility.) Chat bubbles and iOS-style notification badges deliberately keep white-on-colour as a convention. Place selections are separate: they keep map/route/create-at-place actions and never show join/chat. **`PlaceContent` is a COMPACT action-first bar (August 2026), not a full sheet:** icon + place name + one prominent "Aktivität hier starten", with Route and "In Karten öffnen" as 52px icon buttons beside it. Rationale: a POI tap is an ambiguous, easily-mistapped gesture, so the response must stay cheap to dismiss — never auto-open the full composer on a POI tap. Dismissal is a tap on the empty map (`onCanvasPress` → `setSelection(null)`); the sheet deliberately renders with `pointerEvents="box-none"` and has **no blocking backdrop**, so tapping another marker switches selection directly instead of forcing a close first. Do not add a full-screen backdrop.
+Time/place rows only render when the field is present. No placeholder copy, no fake chat mockup, no redundant intent sentence. **Button labels on an accent fill use a contrast-safe foreground** — `onColorTextColor(accent)` from `src/shared/utils/contrastColor.ts`, NOT hard-coded white: white on the mid-tone mode accents (`now` #41C08D, `soon` #E0A23E, `open` #3B82F6) measures ~2.2–3.7:1 and fails WCAG AA, so the helper drops to dark ink on those. (Superseded the old "white text on accent, never dark text" rule for accessibility.) **The mirror-image case is `onTintTextColor(accent, surface, alpha)`, for an accent printed as INK** — `SquircleButton`'s `tonal`/`outline`/`ghost`/`destructive`, where the label is the accent itself on a bare card or on a low-alpha wash of the same colour. Measured before it existed: `soon` 1.98:1 and `now` 2.02:1 on the light card, i.e. label and icon drawn but invisible, so the button read as EMPTY rather than as low-contrast — the exact report that found it was "in dem Button steht nichts". On the dark card those same pairings measure ~5.5:1 and look fine, which is why it survived; the default accent `#0E3B2E` failed the other way round at 1.30:1 in dark. The helper walks the accent toward black or white — whichever way the composited fill demands — so a darkened amber is still amber, and it always terminates at an endpoint that passes. **Non-solid variants therefore need the real `surface` prop wherever the scheme can change** (`useThemeColors().card`); the `#FFFFFF` default is only right for half the schemes. `onColorTextColor` also picks the BETTER of ink and white when neither clears 4.5:1 — it used to fall through to ink unconditionally, which chose the worse colour in exactly the case that needed help (Safety pink `#C45178` and red `#D64557`, the two accents no black-or-white label can carry to AA; reaching it there needs a darker palette, which is a product decision). `npm run test:button-contrast` measures every accent × variant × scheme against the real helper and runs in `verify:release`. Chat bubbles and iOS-style notification badges deliberately keep white-on-colour as a convention. Place selections are separate: they keep map/route/create-at-place actions and never show join/chat. **`PlaceContent` is a COMPACT action-first bar (August 2026), not a full sheet:** icon + place name + one prominent "Aktivität hier starten", with Route and "In Karten öffnen" as 52px icon buttons beside it. Rationale: a POI tap is an ambiguous, easily-mistapped gesture, so the response must stay cheap to dismiss — never auto-open the full composer on a POI tap. Dismissal is a tap on the empty map (`onCanvasPress` → `setSelection(null)`); the sheet deliberately renders with `pointerEvents="box-none"` and has **no blocking backdrop**, so tapping another marker switches selection directly instead of forcing a close first. Do not add a full-screen backdrop.
 
 ### Journey / Anreise Focus
 
@@ -510,7 +525,7 @@ the current constraints; the RTDB service stores last-point-only coordinates.
 - Text messages and proposal cards must keep visible sender context. `MessageBubble` / `ProposalCard` show the sender at author changes (`Du` for the current user, `authorName` for others), so group chats stay readable like WhatsApp-style group threads.
 - Never reintroduce a router route for chat unless the nested-route registration is verified.
 
-**One colour model for chats (`features/chat/chatAccent.ts`).** A room's colour says what KIND of room it is and must be identical on every surface it appears on: an **activity chat inherits its activity's mode colour** (`activityChatAccent(mode)` — open blue / soon amber / now green), a **planning round is `GROUP_CHAT_ACCENT`** (`SEMANTIC_COLOR.action`, violet) and is NEVER Open-blue. `accent` is therefore a **required prop** on `ActivityChatView`, `InlineActivityChat`, `InlineChatPreview`, `ChatThread`, `ChatInputBar`, `MessageBubble`, `ProposalCard`, `ProposalComposer` and `ChatRoomInfoSheet` — no component may carry a literal default. The old `const ACCENT = '#6E8BF7'` fallbacks are exactly how one room rendered blue full-screen and green inline, and `#3B82F6` is the `open` mode colour that `semanticColors.ts` forbids reusing for unrelated state. Hosts resolve the accent once (`MapScreen`, `CalendarScreen`, `PostfachSheet`, `ActivityContent`) and thread it down. **Never fake a group as an activity with `mode: 'open'`** — `PostfachRoom` is a discriminated union (`kind: 'activity' | 'group'`) precisely so a Planung cannot look like an Open activity in the list.
+**One colour model for chats (`features/chat/chatAccent.ts`).** A room's colour says what KIND of room it is and must be identical on every surface it appears on: an **activity chat inherits its activity's mode colour** (`activityChatAccent(mode)` — open blue / soon amber / now green), a **planning round is `GROUP_CHAT_ACCENT`** (`SEMANTIC_COLOR.action`, violet) and is NEVER Open-blue. `accent` is therefore a **required prop** on `ActivityChatView`, `InlineActivityChat`, `InlineChatPreview`, `ChatThread`, `ChatInputBar`, `MessageBubble`, `ProposalCard`, `ProposalComposer` and `ChatRoomInfoSheet` — no component may carry a literal default. The old `const ACCENT = '#6E8BF7'` fallbacks are exactly how one room rendered blue full-screen and green inline, and `#3B82F6` is the `open` mode colour that `semanticColors.ts` forbids reusing for unrelated state. Hosts resolve the accent once (`MapScreen`, `CalendarSheet`, `PostfachSheet`, `ActivityContent`) and thread it down. **Never fake a group as an activity with `mode: 'open'`** — `PostfachRoom` is a discriminated union (`kind: 'activity' | 'group'`) precisely so a Planung cannot look like an Open activity in the list.
 
 **Typography in chat and Postfach.** Both features use `FONT`/`TYPE`/`TEXT_FLEXIBLE`/`TEXT_CAPPED` from `@/shared/theme` and nothing else. Tailwind weight classes (`font-bold`, `font-semibold`, `font-extrabold`) are banned on `Text`/`TextInput` there: the app ships STATIC Schibsted files, so a `fontWeight` next to a `fontFamily` makes Android synthesize a second fake bold, and a weight class WITHOUT a `fontFamily` silently renders the system font — which is what the whole chat and Postfach used to do. `TextInput` needs `fontFamily: FONT.medium` too. No new ad-hoc sizes (`text-[15px]`, `text-[10px]`, `text-xl`): map the role onto the scale (body → `TYPE.body` + `FONT.medium`, label → `TYPE.label` + `FONT.semibold`, meta → `TYPE.caption`/`TYPE.micro`), and add `TEXT_CAPPED` inside fixed-height controls and pills.
 
@@ -527,6 +542,39 @@ the current constraints; the RTDB service stores last-point-only coordinates.
 - Opening a room passes a `PostfachChatTarget` (id, title, **accent**, kind, memberCount) to `MapScreen`, which opens the existing chat Modal.
 - **"Mitteilungen" is ALWAYS reachable.** The row renders at all times — with a badge and preview when something is new, and as "Alles gelesen" with no badge otherwise. It used to render only while something was unread, so reading everything deleted the only entry point and made notification history unreachable until the next push. The empty Mitteilungen view says "Keine Mitteilungen".
 - **The seen cursor moves on the way OUT, never on open.** `openNotifications()` snapshots the currently-unread ids into local state and does NOT call `markAllSeen()`; the cursor advances in `showHome()` / `closeSheet()`. A group counts as new while it is still unread OR was in that snapshot, so entries stay visibly new for the whole visit and notifications arriving mid-visit light up too. Marking on open turned every card grey in the same frame the list animated in.
+- **„Neu für dich" ist ABGELEITET, nicht gespeichert (September 2026).** Ein Abschnitt
+  ganz oben auf der Postfach-Startseite listet Aktivitäten, die seit dem letzten Besuch
+  veröffentlicht wurden und denen man noch beitreten kann (`newActivitiesSince` im
+  `ActivityEntityProvider`: `createdAt > Cursor`, nicht Host, nicht Teilnehmer, nur
+  `liveDocs`). Er kostet **keinen einzigen zusätzlichen Schreib- oder Lesevorgang**: Der
+  Feed liegt ohnehin auf dem Gerät, der Cursor ist das schon vorhandene
+  `users/{uid}.notificationsSeenAt`. Genau deshalb schreibt `createActivity` seinen Push
+  über `queuePushOnly` und legt KEIN Notification-Dokument pro Empfänger an — das wären
+  bei 150 Freunden 150 Schreibvorgänge für eine Zeile, die sich aus vorhandenen Daten
+  ergibt.
+  - **Gedeckelt auf `NEW_FOR_YOU_LIMIT` (8), und das ist der Punkt.** Die App hat
+    bewusst keinen Feed; eine ungedeckelte Liste dessen, was alle Freunde geplant haben,
+    ist genau das, wozu so ein Abschnitt sonst wird. Er ist der Rettungsweg für einen
+    verpassten Push, nicht die Hauptfläche.
+  - **Der Abschnitt hat einen EIGENEN, lokalen Cursor** (`newForYouCursor.ts`,
+    AsyncStorage `together.postfach.newSeenAt.v1`). Er darf NICHT auf
+    `users/{uid}.notificationsSeenAt` reiten: dieses Feld wird vom Client nirgends
+    geschrieben — Mitteilungen führen ihren Lesezustand pro Dokument (`markSeen`) —, der
+    Cursor stünde also für immer auf 0 und der Abschnitt zeigte dauerhaft die neuesten
+    acht Aktivitäten. Das ist kein Schönheitsfehler, sondern genau der Feed, den es hier
+    nicht gibt. Lokal statt Firestore-Feld aus drei Gründen: kein Schreibvorgang pro
+    Besuch, „habe ich schon gesehen" ist eine Eigenschaft dieses GERÄTS, und das
+    ungenutzte Serverfeld bekommt nicht still eine zweite Bedeutung. Ohne gespeicherten
+    Wert startet der Cursor auf JETZT — eine frische Installation hat nichts nachzuholen,
+    und acht Aktivitäten als „neu" zu präsentieren wäre schlicht unwahr.
+  - **Er rückt beim VERLASSEN vor** (`showHome` / `closeSheet`), nie beim Öffnen, und
+    der Wert wird beim Öffnen zusätzlich eingefroren (`visitCursor`) — sonst leerte sich
+    der Abschnitt mitten im Besuch und zöge dem Lesenden die Zeilen unter dem Daumen weg.
+    Dieselbe Vorsichtsmaßnahme wie beim Einfrieren der ungelesenen Mitteilungs-Ids. Die
+    LISTE rechnet dagegen weiter mit: eine Aktivität, die währenddessen entsteht, ist
+    genau der Fall, den man sehen will.
+  - Der Abschnitt zählt in `count` (Kartenknopf), aber NICHT in `mitteilungenCount` — er
+    steht neben der Mitteilungen-Zeile, nicht dahinter.
 - **Two badge numbers, two meanings** (`usePostfachBadge`): `count` is the map button — unread chats + friend requests + actionable Safety + unread notification groups + push-only hints. `mitteilungenCount` is the Mitteilungen row — the same minus chats, because chats already carry their own badges one screen below and counting them twice showed one event as two. The Mitteilungen header carries a stable description ("Aktuelles und Mitteilungen"), never a count: the old "N wichtig oder neu" used a third formula and disagreed with the badge that led to it.
 
 ### Open → Group → Proposal → Plan (the core flow)
@@ -567,22 +615,29 @@ Flow: `FriendRow.onPress` → `handleNavigate(coord)` → `onClose()` + `onNavig
 
 ## Calendar
 
+- **The calendar is a `FloatingSheet` card over the map, not a screen (September 2026).** `CalendarSheet` uses the same shell as an activity overview — even 8 dp frame, no backdrop, the map live around it — with `themeColors.card` as its surface, so it is the app's card in both schemes. It replaced a full-screen mode (`ModeLayer` + `FloatingModeSwitch`); that machinery is deleted, not disabled.
+- **It grows out of the control that OPENED it, and there are two of them.** `onCalendarPress` carries a `SheetOriginResolver` (exported by `FloatingSheet`): the top-bar button hands over `() => measureSheetOrigin(calendarButtonRef)`, the Core target hands over `coreRef.current.measureOrigin()`. `MapScreen` keeps the last one in a ref and passes it on as `resolveOrigin`. **A resolver, never a rect** — the card asks again when it leaves, which is the difference between flying back into a button and flying back into where a button used to be. The Core answers with its own CIRCLE, not with the orbit target the thumb released on: the orbit is already collapsing into the Core by then, so the target is not where the eye last saw it.
+  This was the gap that made "open from the top-right button" look unanimated: without an origin `FloatingSheet` falls back to a 88×44 pill at the sheet's own bottom centre, which reads correctly only for a control that happens to sit there — the Core does, the top bar does not. **Every other floating sheet still has this gap** (Postfach, Freunde, composer); the mechanism above is what to copy, not a second one.
+- **The card's top row is `FloatingSheetHeader`, and its right-hand control is the CLOSE button.** The old header's "+ Plan" button is gone and must not come back: creating an activity belongs to the Core, and a create action on a surface you opened to READ your plans was two buttons for one job. The empty state lost its CTA for the same reason and only says where to go. The header accent is `themeColors.primary` — deliberately NOT a mode colour, because the card holds `soon` and `now` plans alike.
+- **There is no bottom return control.** The "Karte" pill existed only because the calendar covered the map; a card does not, and the header's close button is the single way out. Never re-add a bottom bar to leave a surface that is already floating on the thing you would be going back to.
+- **Editing from the card closes the card first.** The composer can hand you to the map picker, and a card covering the map while the picker owns it is a dead end. Heimweg-Fokus closes it for the same reason.
+- **Anything that snaps by the page takes the CARD's width, never the window's.** `WeekStrip` receives `width` as a prop and the month carousel uses the same number, derived once in `CalendarSheet` as `windowWidth - FLOATING_SHEET.inset * 2` — from the very constant `FloatingSheet` measures itself with, so the two cannot drift. With the window width the seventh day of every week sat past the card's right edge.
 - Two view modes: **Week** (single 7-day strip) and **Month** (grid).
 - Single toggle button switches between them — button label shows the opposite mode.
 - **The agenda ALWAYS shows every plan.** Chronological, grouped by day (`groupPlansByDate`), one continuous vertical scroll — tapping a day does **not** filter to that day. (The old `selectedKey`-filter that showed only one day's plans was removed.)
 - **Initial position = TODAY.** On mount the agenda scrolls (non-animated) to the first section on/after today (`didInitialScroll` ref in `handleSectionLayout`) — it must never open on yesterday's expired plans. Past sections stay reachable by scrolling up.
-- **Week strip = spinnable wheel that ALSO follows the agenda.** `WeekStrip` is a horizontal, week-snapping `FlatList` (`cellWidth = width/7`, `snapToInterval = width`, `disableIntervalMomentum`) — you can freely swipe through weeks. It takes an `activeKey` (= the day the agenda is currently scrolled to, `highlightKey = scrollActiveKey ?? sections[0].key`): it highlights that day and **auto-scrolls the wheel to its week**, so as the agenda crosses into a new week the strip jumps along. Manual swiping is **pure browsing** — it does NOT move the agenda (only `onMomentumScrollEnd` updates the internal week ref so the follow-scroll guard stays correct); **tapping a day** scrolls the agenda there (`focusDay` → `scrollAgendaTo`, first section on/after that day). Do not remove the horizontal spinning again.
-- **Scroll-sync mechanics:** `AgendaList` reports each section's y via `onSectionLayout`; `CalendarScreen.handleScroll` picks the section nearest the top → `scrollActiveKey`. This drives both the week strip and the month grid highlight.
-- **Month = 3-panel carousel.** Month view still uses the reanimated `[prev, current, next]` carousel (row of `3×screen`, translated `-width + drag`, centered middle). On release past threshold `navigate(dir)` slides the neighbour month in with `withTiming` (ease-out, no spring → **no wobble**), then `commit` shifts `gridMonth` one month and resets `translateX` to 0 (neighbour == new current, so seamless). Month arrows call the same `navigate`. Wrapped in `overflow-hidden`. Tapping a month day scrolls the agenda to it (`selectDay`), it does not filter.
+- **Week strip = spinnable wheel that ALSO follows the agenda.** `WeekStrip` is a horizontal, week-snapping `FlatList` (`cellWidth = width/7`, `snapToInterval = width`, `disableIntervalMomentum`, `width` from the host — see the card rule above) — you can freely swipe through weeks. It takes an `activeKey` (= the day the agenda is currently scrolled to, `highlightKey = scrollActiveKey ?? sections[0].key`): it highlights that day and **auto-scrolls the wheel to its week**, so as the agenda crosses into a new week the strip jumps along. Manual swiping is **pure browsing** — it does NOT move the agenda (only `onMomentumScrollEnd` updates the internal week ref so the follow-scroll guard stays correct); **tapping a day** scrolls the agenda there (`focusDay` → `scrollAgendaTo`, first section on/after that day). Do not remove the horizontal spinning again.
+- **Scroll-sync mechanics:** `AgendaList` reports each section's y via `onSectionLayout`; `CalendarSheet.handleScroll` picks the section nearest the top → `scrollActiveKey`. This drives both the week strip and the month grid highlight.
+- **Month = 3-panel carousel.** Month view still uses the reanimated `[prev, current, next]` carousel (row of `3×card`, translated `-width + drag`, centered middle). On release past threshold `navigate(dir)` slides the neighbour month in with `withTiming` (ease-out, no spring → **no wobble**), then `commit` shifts `gridMonth` one month and resets `translateX` to 0 (neighbour == new current, so seamless). Month arrows call the same `navigate`. Wrapped in `overflow-hidden`. Tapping a month day scrolls the agenda to it (`selectDay`), it does not filter.
 - `failOffsetY: [-15, 15]` on the month gesture prevents conflict with vertical scroll. Never revert the month carousel to the single-panel "slide out → blank → spring in" approach (page-wide gap + wobble); keep `withTiming`.
 
 ### Plan cards
 
 - **No status labels.** Do NOT show "Fix"/"Vielleicht"/"Einladung" badges or "aus Open/Soon/Now" source lines. `PlanStatusBadge` was removed.
 - **Mode label (top-right):** a single tinted pill in the title row — "Jetzt" (green accent) when `sourceMode === 'now'`, otherwise "Soon" (orange accent). Plain `border-border`, no colored card border.
-- **Expand in place, NOT a bottom sheet.** Tapping a card toggles an inline accordion (`expandedPlanId` lifted to `CalendarScreen`, single card open at a time). Expanded shows description, address, people names, and a **Beitreten / Zum Chat** action. Tapping the card background again (outside the inner buttons) collapses it. There is NO `MarkerDetailSheet` in the calendar anymore.
+- **Expand in place, NOT a bottom sheet.** Tapping a card toggles an inline accordion (`expandedPlanId` lifted to `CalendarSheet`, single card open at a time). Expanded shows description, address, people names, and a **Beitreten / Zum Chat** action. Tapping the card background again (outside the inner buttons) collapses it. There is NO `MarkerDetailSheet` in the calendar anymore.
 - **Agenda motion:** expand/collapse animates via reanimated `LinearTransition(220ms)` on PlanCard + AgendaSection + AgendaList wrappers (surrounding cards slide smoothly); expanded content uses `FadeInDown(200)`/`FadeOut(120)`; cards get a subtle press-scale (0.985). The TODAY section header shows a small `bg-primary` dot + `text-primary` label. All animations are `useReducedMotion`-guarded.
-- **Chat** opens as a full-screen `ActivityChatView` Modal hosted by `CalendarScreen` (only via the "Zum Chat" button, shown when joined). Room id = `plan.activityId ?? plan.id`.
+- **Chat** opens in the host's ONE chat surface: the card hands `MapScreen` a target (`onOpenChat`) and its existing `ActivityChatView` Modal takes it (only via the "Zum Chat" button, shown when joined). Room id = `plan.activityId ?? plan.id`. The calendar used to mount a second, identical chat Modal of its own — one room must not have two surfaces.
 
 ---
 
@@ -644,8 +699,8 @@ aber bis zu den dortigen Release-Gates nicht produktionsreif.
   Heimwegstatus, Bestätigungen, Check-in, 112 und Hold-Buttons. Keine kleine freischwebende Karte
   und keine Activity-Bedienelemente in diesem Bereich; die frühere „Auch unterwegs"-Liste ist
   ersatzlos entfallen — die Karte zeigt es besser. (3) nur
-  empfangen → Vollbild-Fokus ohne Panel. MainSurface dreht beim Aktivieren STILL auf die
-  Karten-Ebene (sonst schiene Kalender/Socialize durch) und versteckt den Mode-Switch. Der Wechsel
+  empfangen → Vollbild-Fokus ohne Panel. Es gibt keine zweite Ebene mehr, auf die MainSurface
+  drehen müsste; `MapScreen` schließt beim Aktivieren nur die Kalenderkarte. Der Wechsel
   nutzt kurze Ease-out-Fades mit nur minimaler Skalierung/Vertikalbewegung; Karten-Chrome geht in
   125–190 ms, die Fokus-Ebene folgt leicht versetzt in höchstens 220 ms. Keine großen Flugwege,
   keine federnden Layoutwechsel und keine starke Kino-Vignette. Dieser Spezialübergang gilt NUR
@@ -793,8 +848,8 @@ nebenbei wieder in `MainSurface` oder eine Release-Konfiguration eingehängt wer
   - **Tabs are GREYED until the guide has passed them, and nothing else marks them.** `set` no longer means "the value differs from its default" — it means the walk is past this step (`GUIDE_STEPS.indexOf(id) < maxStep`, or the walk is finished). `maxStep` is a HIGH-WATER MARK and only ever grows, so tapping back to an earlier tab cannot re-grey what was already passed. The required amber label and its dot are gone from Wann and Wo (product decision, August 2026, reversing "a required tab that is unsatisfied turns amber with a dot"): with a guide, two different things were claiming to say what to do next, and the button is the one that can actually take you there. **Label and value share one rule**: both grey (`rgba(244,245,247,0.34)`) until the walk has passed the step, then the label takes the mode accent and the value goes full white and bold. An accent label on an untouched tab had the whole strip claiming to be decided from the first frame, which also made the greyed value read as a rendering fault rather than as "not your turn yet". The ACTIVE tab always renders decided regardless — that is what keeps the last step of the walk reading as current rather than as skipped, since it never gets a "Weiter" of its own.
   - **The CTA walks EVERY step, and it is never disabled** (`GUIDE_STEPS` = title → time → place → audience → capacity; `title` is in the list although it is not a tab, because the guide has to reach the field above the strip too). It used to name the gap ("Noch Name und Ort ergänzen") and be `disabled` in the same breath — stating the next task while refusing to help with it, which is the worst of both.
   - **The walk's PROGRESS and your POSITION are two separate things, and one variable must never carry both.** `maxStep` is how far the walk has got (it greys the tabs, only grows); the OPEN tab is where you are. A first version used a single cursor that tab taps did not move, so navigating back by hand left the button naming a step that was no longer on screen. The button therefore reads, in this order: (1) the step you are STANDING on is required and unanswered → REPAIR it ("Name eingeben"/"Ort wählen"), which puts you there and does NOT move the walk on — standing there already, it spells the gap out, because a tap that moves nothing and says nothing reads as a broken button; (2) the walk is unfinished → ADVANCE to whatever follows the open tab ("Weiter: Wann" … "Weiter: Anzahl"), Wann/Wer/Anzahl carrying valid defaults so they can only advance; (3) otherwise the real CTA — unless something required is still missing anywhere, the safety net for jumping ahead by hand. **The last step has no "Weiter"** — the button there is already the real CTA, because a confirming tap at the end of every creation is friction this app cannot afford. It only ADVANCES; it never publishes early, so the guide cannot become a second, softer gate that disagrees with `validateActivityDraft`. A prefilled or edited draft starts PAST the end of the walk: those values are facts, and stepping someone through five stops to fix a typo is the wizard this is not. **This costs the fast path four taps** and was chosen deliberately (product decision, August 2026, reversing "guidance, never gating").
-  - **The Wer tab shows a HEADCOUNT, always — never a group name.** The audience is a set of people and groups are only windows onto it, so a selection combines freely and no name survives that: "Mädels und Uni, ohne zwei" fits in no quarter-width tab. Two naming attempts already failed — "Nur du" for an account without friends read as a verdict on the person's social life, and "Alle Freunde" claimed a group that a multi-group selection is not. `${selected.size} gewählt` is true in every state and fits in every one. The bench states WHO (`describeAudience` still names it there, where there is room); the tab answers HOW MANY. Editing shows "fest", because the audience is not editable then.
-  - **A place counts as answered only with a COORDINATE.** The draft default `CURRENT_LOCATION_PLACE` is a label with no position until the map supplies one, and an activity published in that state gets `visibility: 'none'` — no pin, no distance, invisible. It looked created and reached nobody. `validateActivityDraft` therefore tests the coordinate in BOTH modes, never the presence of a place object. **A workbench never gets a second chip layer** — it switches through its own control (the map for Ort, checkbox rows for Wer, the slider for Wie viele). The benches live in `components/benches/`. Workbenches must stay roughly 180–240 px tall, or the sheet moves a long way on every switch and the height animation has too much ground to cover.
+  - **The Wer tab shows a HEADCOUNT, always — never a group name.** The audience is a set of people and groups are only windows onto it, so a selection combines freely and no name survives that: "Mädels und Uni, ohne zwei" fits in no quarter-width tab. Two naming attempts already failed — "Nur du" for an account without friends read as a verdict on the person's social life, and "Alle Freunde" claimed a group that a multi-group selection is not. `${selected.size} gewählt` is true in every state and fits in every one. The bench states WHO (`describeAudience` still names it there, where there is room); the tab answers HOW MANY. Editing shows the same headcount — the audience is editable there too (see the edit section above); it used to read "fest" beside a locked panel that explained itself in terms of typos, which answered a question nobody had asked and refused the one thing the tab had been opened to do.
+  - **A `soon` or `now` activity without a pin does not exist — this is a hard guarantee at four layers, not a validation rule.** The draft default `CURRENT_LOCATION_PLACE` is a label with no position until the map supplies one, and an activity published in that state gets `visibility: 'none'` — no pin, no distance, invisible on the map for the host and for everyone else, while the sheet said "Aktueller Standort" the whole time. It looked created and reached nobody, which is the worst failure this app has. The layers: (1) `validateActivityDraft` tests the COORDINATE in both modes, never the presence of a place object; (2) `locationChoice: 'current'` is the one case allowed past that gate WITHOUT coordinates, because `resolveCurrentLocationDraft` answers it one step later — it acquires the position, prompting if needed, and throws a readable error when it cannot. Blocking it at the gate instead made that resolver unreachable and told someone whose device had no fix yet to "choose a place" while the app could perfectly well determine one. **That resolver runs on the EDIT path too**; it used to run only on create, so an edit could save an activity place-less. (3) `getEditableDraft` never produces `locationChoice: 'open'` — that value was the last way past the coordinate check, so a legacy place-less document is seeded as "Aktueller Standort" and handed to the same resolver. `draftPlaceLabel` likewise falls back rather than dropping a place that HAS a position for want of a name. (4) `createActivity` and `updateActivity` REJECT anything that is not `visibility: 'pin'`, because only the server checks it for every client version, including an old build in the field. `'open'` remains in the `ActivityLocationChoice` type for legacy documents; nothing may produce it. **A workbench never gets a second chip layer** — it switches through its own control (the map for Ort, checkbox rows for Wer, the slider for Wie viele). The benches live in `components/benches/`. Workbenches must stay roughly 180–240 px tall, or the sheet moves a long way on every switch and the height animation has too much ground to cover.
 - **Time is the headline, not a segment.** It carries the mode and its colour, and it is the only other value of unbounded length — two flexible values in one row would mean both truncating. In the row, only Ort flexes (`flex: 1 1 0` + `min-width: 0` + ellipsis); Publikum and Kapazität carry naturally short values ("18", "∞", "8") and stay at their intrinsic width. That is what makes the single line a structural guarantee rather than something that holds until someone picks a long restaurant name.
 - **"Jetzt" is a deliberate choice and carries NO start time until publish.** `ActivityModeSwitch` still offers Jetzt/Soon; any concrete clock time is a `soon` plan, even two minutes out. While the composer is open a Jetzt draft holds a PROVISIONAL start, frozen when the sheet opened, purely so the rail has something to draw — `resolveDraftForPublish` (`utils/modeDefaults.ts`, called in `createActivityFromDraft`) stamps the real moment. Never write a Jetzt draft's `startsAt` straight through: a two-minute composing session would publish an activity that already started. For the same reason the headline shows Jetzt as a **duration** ("läuft 1 Std"), never a clock time — a printed end would drift while the person is still typing. Editing is exempt (an existing start is a fact) and the mode switch is therefore hidden in edit mode.
 - **Zeit = ONE row (`TimeBand`, inside `ScheduleBench`).** Start, end and duration are a single decision ("which slice of the evening is this"), so they are a single control: a horizontal hour rail carrying one draggable span, 56 px tall. It replaced two `DateTimeField`s plus a `DurationPicker` — three controls and ~180 px — and `DateTimeField` was deleted with it (no consumers left). `ScheduleBench` merged the old `NowFields`/`SoonFields`/`ScheduleFields` trio. Rules that must survive any redesign:
@@ -817,7 +872,7 @@ nebenbei wieder in `MainSurface` oder eine Release-Konfiguration eingehängt wer
 - **`autoConfirm` (`useMapLocationPicker`)** — set where *picking is the decision* (map search bar, composer "Ort suchen", composer "Aktueller Standort"); the resolved place is handed back on the tap that chose it. Deliberately OFF for "Auf Karte auswählen", where moving the map IS the act of choosing and the confirm button is the only thing that can end it. All exits run through the single `finishWith`, so a place can never be delivered while the picker stays half-open.
 - **Every place returned from the picker moves the camera.** `openMapPicker` wraps the caller's `onPick` with `setMapFocusCoordinate`, from whichever entry point. The composer reopening with "Café Central" over a map still showing somewhere else is the one thing you would want to check and could not. Centring goes through `focusCenterOffset(coveredHeight, viewportHeight)` (`MapCanvas`) so the place lands centred in the *visible* map, not behind the sheet.
 - **The place ALWAYS shows an address.** A picked place brings its own; the device position does not, so `useCoordinateAddress` resolves one through `expo-location`'s reverse geocoder (`describeCoordinate`) — a platform call, no Places billing — cached per ~11 m and remembering failures so a jittering fix cannot re-resolve every second. "Aktueller Standort" alone never answered the only question worth asking, which is *which* current location. **Known issue (August 2026, unsolved):** the preview map ignores `customMapStyle` and renders Google's stock light map even at night. Verified it is NOT lite mode (removing it changed nothing) and not the style value (the main map gets the identical array); the remaining suspect is the Android Modal window it sits in.
-- **Composer location options: "Ort suchen" / "Aktuellen Standort verwenden" / "Auf Karte auswählen" / "Noch offen".** Search is listed FIRST and is its own entry — it used to be reachable only by going through "Auf Karte auswählen", and a search field hidden behind a map picker is a search field nobody finds. "Aktuellen Standort verwenden" resolves a real coordinate through the picker rather than storing the `CURRENT_LOCATION_PLACE` placeholder, so the activity carries an actual position and the camera can move to it.
+- **Composer location options: "Ort suchen" / "Aktuellen Standort verwenden" / "Auf Karte auswählen".** There is deliberately no "Noch offen" — an activity without a pin is invisible to everyone (see the four-layer guarantee above), so it was never a choice worth offering. Search is listed FIRST and is its own entry — it used to be reachable only by going through "Auf Karte auswählen", and a search field hidden behind a map picker is a search field nobody finds. "Aktuellen Standort verwenden" resolves a real coordinate through the picker rather than storing the `CURRENT_LOCATION_PLACE` placeholder, so the activity carries an actual position and the camera can move to it.
 - **Location default:** Always `CURRENT_LOCATION_PLACE` (Aktueller Standort, `utils/currentPlace.ts`) — never "Ort noch offen". This is the DRAFT default (`utils/modeDefaults.ts`); it is not what the "Aktueller Standort" button writes.
 - **"Auf Karte auswählen"** uses the same plain glass style as "Aktuellen Standort verwenden" (no colored wash)
 - **Zeitvorschläge live IM Wann-Bench, nicht in einem zweiten Sheet (August 2026).** `TimePlanOfferSheet` is deleted: a full-screen surface stacked over the composer meant leaving the activity you were creating to answer a question about that same activity. `PlanningOfferFields` takes the whole workbench (the single-time band is replaced, not stacked under). **The day chooser stays on screen the whole time (August 2026; reverses the earlier STAGED version where picking a day folded the chooser away and a "+ Weiterer Tag" button was the only way back).** Proposing days is not a step you finish — it is what you keep doing while looking at the rails you already have — and hiding the chooser made every additional day cost a tap on a button whose only job was to undo the hiding. The cost is height, which was the staging's whole reason: chooser plus a stack of rails exceeds one screenful. That is carried by the composer's ScrollView (the sheet caps at its ceiling and scrolls), never by hiding half the control. **The planner never sends.** While it is open the footer switches to an OUTLINED "N Vorschläge übernehmen", which only closes the planner and returns to the sheet — it used to be the same filled accent CTA in the same place as the one that creates the activity, and two different outcomes wearing one button is how someone taps "senden" believing they still have capacity and audience to set. The filled CTA keeps its single meaning (this creates the activity) and reads "N Vorschläge senden" once windows exist. With windows proposed the Wann bench stops showing the single band and states the count instead: one concrete time beside a CTA offering to send several is two answers to the same question. **The way back to ONE fixed time must clear the windows, and must be offered where it left you.** "Fester Termin" used to only close the planner: the offers stayed in the draft, so the bench kept showing the count and the single band never returned — the control promised the opposite of what it did, and the only route back was deleting every window by hand. It now discards them (asking first, since that is what the label means) and the same action sits on the proposals row itself as "Doch eine feste Zeit": an action has to be undoable where it left you, not only from inside the mode you must re-enter to find the exit. **The rails shrink with the STACK, not to a fixed "planner size" (`TimeBandDensity`: `regular` 56 · `snug` 46 · `compact` 36, table in `PlanningTimeBand`).** One proposed window gets exactly the scheduler's band — a planner that renders a thinner control than the one it replaced looks like a downgrade for the case where there is no crowding to pay for — and each further window buys its own row by giving up chrome, never reach: the grips keep their 44 px hit size and span the full row at every step. **The span is CENTRED in the space above the hour labels** (`trackTop` derived, never typed in), because the labels own a fixed bottom strip and hanging the bar off the top edge made every row read as top-heavy. `labelZone` is a floor: the hour labels are drawn inside it, so a smaller strip lets the span cover the very hours it is being read against.
@@ -826,7 +881,13 @@ nebenbei wieder in `MainSurface` oder eine Release-Konfiguration eingehängt wer
 - **Activity category (`ActivityCategory`, `utils/activityCategories.ts`, `utils/activityUnderstanding.ts`, `data/activityCategoryKnowledge.json`).** Optional; set either by the user (the `CategoryPicker` chips, see Kategorie below) or by title auto-detection. The title field may auto-apply a category via local activity understanding (large curated German/English example list + keyword boosts + ambiguity thresholds) as long as the user has not manually touched the category; manual chip selection always wins and is never overwritten while the sheet is open. Valid values: Essen/Drinks/Kaffee/Sport/Outdoor/Feiern/Kultur/Spiele/Lernen/Chillen/Shopping/Sonstiges. Keep new examples and keyword patterns in `activityCategoryKnowledge.json`, not inline in components. The knowledge base must handle full phrases AND single-word inputs (`Bier`, `Kino`, `Gym`, `Bib`, `Zocken`, `Chillen`, `coffee`, `hike`, `thrifting`, etc.). `npm run test:activity-understanding` evaluates the same knowledge base with `Xenova/multilingual-e5-small` and includes regression cases plus separate holdout cases. Treat exact/keyword/regression scores as coverage, not proof of generalization; the fair quality signal is the holdout/free score printed by the script. Once a holdout miss is promoted into `activityCategoryKnowledge.json`, that case becomes regression/coverage, so create fresh holdout cases for the next honest blind measurement. Direct on-device model loading is a separate packaging decision and must not be slipped into the runtime path casually. **Not derived from the Google Places venue type**, for a product reason first: the venue is not the activity (studying in a café is `Lernen`, not `Kaffee`; a birthday dinner is `Feiern`, not `Essen`). The classifier reads what the person is DOING. Cost is a secondary argument and only applies to some paths — `types` is in the free Place Details **Essentials** SKU, so on the SEARCH path (where `resolvePlaceLocation` already runs) it would cost nothing, while a POI tap makes no Details call at all today and long-press/current-location have no venue. Venue type is therefore acceptable ONLY as a silent fallback when the title classifier abstains, never as the primary source, and never on the POI path. On markers the category renders as a 24px dark coin at the marker's **TOP-LEFT**; the unread badge sits at the **TOP-RIGHT** and the name/count pill spans the bottom — all three coexist, no slot is shared (verified in `ActivityMarkerChrome`, August 2026; an earlier note here wrongly claimed category and unread collide). Validated as an enum in firestore.rules.
 - **Activity understanding maintenance:** when expanding category knowledge, curate from real user language: German/English synonyms, slang, common phrases, venue/activity names, and ambiguous edge cases. Prefer adding multiple representative examples plus targeted keyword boosts over relying on embedding similarity alone. Add or refresh `web_stress_*` / holdout cases in `scripts/evaluate-activity-embeddings.mjs` whenever new vocabulary is introduced, and report exact/keyword/free counts honestly.
 - **Classifier architecture — two-tier, embedding deferred.** The shipping runtime is `classifyActivityTitleHybrid`: **Tier-1** = lexical token-overlap + keyword boosts (instant, offline, no model) — this is what ships and what `PROTO_STRATEGY=lexical node scripts/evaluate-activity-embeddings.mjs …` measures. **Tier-2** = an on-device e5-small embedding fallback (`top3`), consulted only when Tier-1 is ambiguous and wired via `registerEmbeddingFallback(...)`; **currently unregistered → the app runs pure Tier-1**. The eval's _default_ (`top3`, e5-small embeddings) is the target/validator for Tier-2, NOT the shipping path — the runtime is lexical (`PROTO_STRATEGY` also supports `compare` for centroid/max/top3). Honest generalization on a fresh unseen-slang holdout: Tier-1 ~27%, Tier-2 ~45%; both ~100% on normal inputs; both **abstain rather than guess wrong** on hard slang (the user can always override the chip). Tier-2 is **deferred** because e5's tokenizer is SentencePiece Unigram + a binary Precompiled charsmap (17 MB vocab) with no clean/low-risk JS path, and the model is ~120 MB. When revisiting: keep the model out of git (fetch at build → embed in the APK); tokenizer options in preference order — (a) `onnxruntime-extensions` native SentencePiece, (b) transformers.js tokenizer in-app, (c) switch to a WordPiece model and re-validate the eval. `EXPORT_VECTORS=1` regenerates the per-example vectors the Tier-2 provider will need. On-device _generative_ LLMs were measured and rejected (Llama-3.2-1B 32%, Qwen2.5-1.5B 47% on the honest holdout — worse than Tier-1, +0.7–1 GB, ~2–6 s/inference).
-- **Countdown ring (`utils/countdown.ts`).** `now` activities with a usable `startsAt`→`endsAt` window render their mode ring as a depleting clock: remaining share as a vivid SVG arc (starts 12 o'clock, clockwise), elapsed share as the faded border track (`colorWithAlpha(mode, 0.25)`). The fraction is **quantized to 8 steps** (`countdownBucket`) and included in the `captureKey`, so cached marker images only re-capture on a step change (driven by the provider's 30s mode tick). `soon`/ring-less markers keep the plain full border.
+- **Countdown ring (`utils/countdown.ts`).** `now` activities with a usable `startsAt`→`endsAt` window render their mode ring as a depleting clock: remaining share as a vivid SVG arc (starts 12 o'clock, clockwise), elapsed share as the faded track (`colorWithAlpha(mode, 0.3)`). The fraction is **quantized to 8 steps** (`countdownBucket`) and included in the `captureKey`, so cached marker images only re-capture on a step change (driven by the provider's 30s mode tick). `soon`/ring-less markers keep the plain card.
+  **The ring runs on the SHELL, never on the whole silhouette** (`activityMarkerShellPath` / `…Perimeter` / `…ClockStart`, August 2026). The board is two fused bands of different widths joined by a shoulder; a stroke chasing that outline stops reading as a clock, and its perimeter has to be re-derived every time the shape is touched. The shell is one closed stadium of constant shape, so the arc length is exact and the reading is instant. Corners are true circular `A` arcs, not quadratic approximations, precisely so the analytic perimeter matches the drawn path. Twelve o'clock is `shellWidth/2 − radius` along the path — the path starts *after* the top-left radius — and the dash offset is pushed one full period positive rather than written as a negative.
+- **Exactly ONE element carries the mode colour at a time.** With a countdown, that is the ring, and the base edge goes neutral (`#B4BAC1`); without one, the base edge carries it. Two coloured edges stacked 2.5 px apart read as a rendering fault, and the ring stops being the thing your eye goes to.
+- **Marker material: depth from light, not from mass (August 2026).** The old marker was a sandstone tablet — `#EFEAE1` / `#DED8CE` / `#BDB5A9`, a 4 px opaque grey side wall with its own dark outline, a tapered plinth that darkened downward, and a hairline around every surface. What made it read as carved was never the 3D; it was those four things. Now: a cool near-white card (`#FFFFFF`→`#F1F3F6`), no accent outline, and depth as a **2.5 px base edge in the mode colour running STRAIGHT down** (`ACTIVITY_MARKER_BASE_DEPTH`). Straight down is deliberate — offsetting along the view vector put the visible sliver along the *top* edge, where it read as a stray line above the card instead of as thickness. The old card also ended at `#F0ECE4` against a `#F1F1F1` day map, i.e. it separated from the ground only by its coloured border.
+- **Round is a contract, not a taste — and it is a BAND, not a maximum.** The shell radius is a SQUIRCLE at ~0.37 of the shell height, asserted between 0.30 and 0.42, and the avatar plates carry the same ratio. Both ends of that band are failures: below 0.30 the marker reads as a rounded box; at 0.5 it is a pill. The pill was tried and reverted — it broke the family resemblance to the rest of the app, and its corner curves away so hard that a corner badge must be pushed ~3 px inward to stay inside, which is exactly what took the icons off the edge. **A corner badge is sized against the SHELL and sits flush with the outline**: 18/20 px were 38 %/42 % of the old 48 px shell and became 47 %/53 % of today's 38 px one, at which point they stopped reading as badges on an edge and started reading as two discs with a marker behind them. 14/16 restores the ratio, and `badgeInset` derives the offset from the real corner radius instead of pinning a guessed 1 px. Both are asserted. **The title band hugs the name**: one line is the 12.5 px line box plus 1.25 px of air, sides get 4.5 px, and the test holds both to a budget — padding is what made the band read as a plate the text floats in. The band's bottom radius IS half the band height, The transition between them may never own more than a third of the band (`ACTIVITY_MARKER_TRANSITION_MAX`, `TRANSITION_SHARE`): at 2×8 px against a 20 px band it owned 68 %, so the edge was nowhere parallel to the content it wraps — that, not the corner radii, is what read as a bulge.
+- **The avatar plates must stay INSIDE the shell, and a test says so.** `quadCenters` used to own its own ±8.5 spread with a comment justifying it against a **48 px** shell; the shell later became 38 and four plates poked 1.3 px out of the rounded corner at city zoom. Neither typecheck nor review can see that. The spread is now passed in from the layout module (`ACTIVITY_MARKER_QUAD_SPREAD`) — the shell owns how far its contents may open — and `test-marker-geometry.mjs` checks every plate's corner-arc centre against the shell shrunk by the plate radius, at every zoom stage. The 2×2 stage also states its width outright (`ACTIVITY_MARKER_QUAD_SHELL`) instead of deriving it from face + spread + padding: the quad needs clearance on both axes but the height is fixed, so it has to be bought with width, and the derivation gave 36 where 40 is needed.
+- **The preview renders the shipped module, it does not imitate it.** `node design-prototypes/render-from-source.mjs` loads `activityMarkerLayout.ts` itself and draws from its real paths and widths → `design-prototypes/map-marker-shipped.html`. A hand-built lookalike is how a mock quietly stops describing the app; this one found the city-zoom overflow above.
 - **Kategorie (`CategoryPicker`):** horizontal icon-chip row (Essen/Drinks/Kaffee/Sport/Outdoor/Feiern/Kultur/Spiele/Lernen/Chillen/Shopping/Sonstiges from `ACTIVITY_CATEGORIES`); single-select, tap-again deselects; selected chip = mode accent via `style` (never a Tailwind color class). **Mounted in the composer under "Kategorie"** (re-added August 2026). It is the manual half of the suggestion contract: the classifier only auto-applies when `shouldAutoApplyCategory` passes (confidence ≥ 0.58 AND a clear margin AND not `sonstiges`), so unseen slang deliberately leaves the row **empty** — the person picks a chip or leaves it blank. Never lower the threshold to force a guess; abstaining is the designed behavior.
 - **Gelernte Kategorien (`utils/categoryMemory.ts`, Tier 0):** a chip the user picks BY HAND is recorded as `normalisierter Titel → Kategorie` and consulted BEFORE the lexical classifier on the next title change, so slang the knowledge base will never contain ("Zocken", "Bib", "Feierabendbier") resolves instantly from the second use on. Exact wording wins; otherwise a shared whole word picks the most-often-confirmed entry. Capped at 200 entries (LRU), cleared per wording when the user clears the chip. **On-device only (AsyncStorage) — never sync this to Firestore or a server:** activity titles are user content, so keeping it local means no consent, no processor entry in the Datenschutzerklärung, offline operation and zero cost. Only an explicit manual pick trains it — an auto-applied suggestion must never train the memory on itself, or one wrong guess would harden permanently. To grow the SHARED knowledge base, curate `activityCategoryKnowledge.json` deliberately from observed user language; do not harvest it silently.
 - **"Aktivität übernehmen" button:** Uses `style={{ backgroundColor: accent }}` — never `AppButton` or Tailwind color classes (class-order conflict)
@@ -875,6 +936,18 @@ kein fixes Datum, bis der Host einen Slot festzurrt.
   kann, wird als Teilnehmer übernommen** — nochmal fragen hieße eine schon
   beantwortete Frage stellen. `participantUids[0] == hostId` bleibt gewahrt. Die
   Audience ist die Runde, nicht die ganze Freundesliste.
+- **Eine Runde stirbt mit der Sache, die sie verabredet hat — auf derselben Uhr
+  wie deren Chat** (`TIME_PLAN_RETENTION_MS === ACTIVITY_CHAT_RETENTION_MS`,
+  12 h; September 2026, ersetzt 14 Tage nach dem letzten Vorschlagsfenster).
+  „Wer konnte am Samstag" ist eine Antwort auf EINE Entscheidung und darf die
+  Entscheidung nicht überleben. Beim Anlegen wird der Stempel aus dem letzten
+  Fenster geschnitten, beim Festlegen aus dem **gewählten** Slot neu — sonst
+  hielte eine Runde mit Fr/Sa/So, die am Freitag festgelegt wird, alle
+  Verfügbarkeiten bis Sonntag am Leben. **Die Mitglieder müssen mitgestempelt
+  werden**, und das ist keine Kosmetik: Eine TTL löscht das Plan-DOKUMENT, nie
+  seine Subcollection — `timePlanMembers` trägt die heikle Hälfte und würde mit
+  dem alten, späteren Stempel den Plan überleben. `scripts/seed-time-plan.mjs`
+  spiegelt die Konstante; `test:time-plan-functions` prüft alle drei Ebenen.
 - **Auswertung: `utils/availability.ts`, eine Quelle.** `aggregateWindow` teilt das
   Fenster an jeder Grenze und zählt Deckung → **harte Kanten**, nie ein Verlauf: Die
   Zahl der Verfügbaren springt an der Minute, ein Gradient würde eine Stetigkeit
@@ -889,44 +962,47 @@ kein fixes Datum, bis der Host einen Slot festzurrt.
   eine Stunde in jeder Zeile anders breit und der Vergleich, den der Stapel geradezu
   einlädt, wäre falsch. Der leere Platz ist Information (man SIEHT, dass Samstag ein
   Nachmittag ist), keine Verschwendung.
-- **Die Übersicht ist eine Availability-MATRIX, kein deaktivierter Picker**
-  (`TimeMatchingCard`). Sie teilt mit `TimeRangePicker` nur die Zeit-zu-Pixel-Rechnung.
-  Eine Read-only-Fläche, die den Körper eines Bedienelements ausleiht (Schiene, Pille,
-  Griffe), liest sich als „Eingabefeld, das du nicht anfassen darfst" — das hier liest
-  sich als Diagramm, weil es eines ist. **Nur Amber `#E0A23E`**, kein Grün, kein
-  Violett: Höhe ist `verfügbar / geantwortet`, die Deckkraft trägt dieselbe Zahl ein
-  zweites Mal, damit Farbe nie der einzige Kanal ist. Kanten hart, keine Verläufe.
-  Alles außerhalb des Peaks behält seine echte Höhe und bleibt amber, nur 18 % durch-
-  sichtiger — **ausgrauen wäre eine andere und falsche Aussage** („nicht verfügbar"
-  oder „außerhalb des Vorschlags"). Zeilenhöhe sinkt mit der Zahl der Vorschlagstage
-  (48 → 32 dp, `dayRowHeight`) und hört bei 32 auf, weil darunter der Höhenunterschied
-  verschwindet; die Tastfläche wird per `hitSlop` auf 44 dp gehalten.
-- **Kein Rahmen um den Vorschlag.** `createTimePlan` beantwortet für den Host das
-  GANZE Fenster, die Kurve fällt innerhalb eines Vorschlags also nie auf null und
-  deckt seine Breite bereits exakt ab. Ein gezeichneter Rahmen würde nur wiederholen,
-  was die Form zeigt.
-- **Jede Zeile nennt ihr EIGENES Maximum — Zahl und Rahmen, genau einmal.** Nicht zu
-  verwechseln mit der Regel darüber: die verbietet einen Rahmen um den ganzen
-  *Vorschlag*, weil er nichts sagt, was die Form nicht schon zeigt. Der Peak ist ein
-  Ausschnitt daraus und wird bisher nur durch eine um 22 % kräftigere Füllung
-  markiert. Der Grund ist gemessen: die gesamte Treppenhöhe ist 12–20 px
-  (`stepArea`), bei 18 Antworten ist eine Person also **1,1 px** — die Höhe kann
-  „15 von 18" und „16 von 18" nicht mehr trennen, und die Deckkraft trägt dieselbe
-  Zahl. Vorher stand die Zahl NUR in der Gewinnerzeile, alle anderen Tage waren
-  unbeziffert; genau der Vergleich, zu dem die gemeinsame Achse einlädt, war damit
-  nicht zu machen. Also: `availability.best` pro Zeile → ein `x/y` in der höchsten
-  Stufe plus ein Hairline-Rechteck in exakt deren Höhe, Breite und `STEP_RADIUS`.
-  Beides wird aus DENSELBEN Ausdrücken abgeleitet wie die Stufen (ein zweites
-  Runden setzt den Umriss um Halbpixel neben die Form, die er nachzeichnen soll).
-  Die stärkere Füllung bleibt auf dem globalen Sieger — Füllung = „die Empfehlung",
-  Rahmen = „das Beste dieser Zeile", zwei Kanäle für zwei Fakten. Bei Gleichstand
-  innerhalb einer Zeile gewinnt der dokumentierte `bestSlot`-Rang, damit es bei
-  genau einer Zahl pro Zeile bleibt. **Der Rahmen ist Tinte bzw. Papier
-  (`peakOutline`), nie Amber** — Amber ist schon Bedienelement UND Daten, eine
-  dritte Amber-Linie läge als weitere Messung obendrauf statt als Markierung
-  darüber. Aus demselben Grund ist die Zahl (`peakLabel`) themenabhängig: sie steht
-  auf der Füllung, und die kippt zwischen den Modi von hellem Sand zu dunklem Oliv.
-- **Farben: drei, je eine Aufgabe** (`planningTheme.ts`). Violett = Identität („das ist
+- **Die Übersicht ist eine UMFRAGE, keine Verdichtungsgrafik** (September 2026;
+  ersetzt die Availability-Matrix als Hauptfläche). Genau das Modell, das Leute
+  aus WhatsApp-Umfragen kennen: `TimeTallyCard` zeigt pro Vorschlagstag eine
+  Zeile mit Tag, Zeit, `N von M` und einem anteiligen Balken; Antippen öffnet
+  `TimePlanDayAnswers` mit den Einzelantworten. **Es gibt nur noch diese eine
+  Fläche.** `TimeMatchingCard` (Treppen auf gemeinsamer Achse, Auffächern,
+  `staircase.ts`, `dayAxis.ts`) bleibt als Code liegen, wird aber **nirgends
+  mehr gemountet**; die Weiche `anyNarrowedAnswer` ist raus. Grund: Die Treppe
+  war nicht falsch, aber sie war eine zweite Maschine für dieselbe Frage — zwei
+  Karten mit verschiedenen Titeln, verschiedenen Layouts und einem Schalter
+  dazwischen, sodass jemand, der beide sah, zwei Features sah. Nicht wieder
+  einhängen, ohne dieselbe Frage neu zu beantworten.
+- **Die Zeile nennt die beste GEMEINSAME Zeit, nie das Fenster des Hosts.** Die
+  Zahl daneben kam schon immer aus `best.count` („zu der besten Zeit an diesem
+  Tag können N"). Danebengedruckt stand aber das vorgeschlagene Fenster: bei
+  einem Vorschlag 18–24, den vier von fünf nur 20–22 können, las sich die Zeile
+  als „vier können den ganzen Abend". Zahl und Zeit müssen dieselbe Strecke
+  meinen. Ohne `best` kann niemand — dann ist der Vorschlag selbst das Einzige,
+  was ehrlich zu nennen bleibt.
+- **Jeder darf einen Tag öffnen, nicht nur der Host**, und der Host legt IN der
+  geöffneten Zeile fest — auf der besten gemeinsamen Strecke, nicht auf dem
+  ganzen Vorschlag. Die Entscheidung sitzt dort, wo die Begründung steht; ein
+  Knopf am Fuß der Karte, der ein anderes Zeitfenster festlegt als das, das
+  darüber ausgewertet wurde, verliert genau die Leute, für die die Runde lief.
+- **Abweichler werden NICHT markiert — sie sehen anders aus.** In
+  `TimePlanDayAnswers` bekommt jede Person eine Zeile mit Namen und Balken auf
+  der Breite des Vorschlags. Wer „Passt" gesagt hat, hat einen identischen
+  Balken über die volle Breite; wer eingeschränkt hat, ist damit die einzige
+  Zeile mit anderer FORM — und die einzige mit einer Uhrzeit rechts. **Uhrzeiten
+  stehen nur dort, wo sie abweichen**: das Host-Fenster auf jeder vollen Zeile zu
+  wiederholen sagt dieselbe Sache fünfmal. Eine Markierung wäre ein zweites
+  Signal für das, was das Bild schon zeigt, und läse sich als Anprangern.
+  Die beste gemeinsame Strecke liegt als EIN senkrechtes Band über allen Zeilen,
+  in Tinte bzw. Papier (`peakOutline`), nie in Amber — Amber ist schon
+  Bedienelement und Daten.
+- **Die Balken fahren gestaffelt aus** (35 ms pro Zeile, 260 ms, Ease-out), und
+  zwar über die BREITE, nicht über `scaleX`: `transformOrigin` ist hier nicht
+  verlässlich, und eine mittige Skalierung ließe den Balken aus seiner eigenen
+  Position wachsen — die Position IST die Information. Reduced Motion setzt
+  direkt auf voll.
+- **Farben: vier, je eine Aufgabe** (`planningTheme.ts`). Violett = Identität („das ist
   eine Planungsrunde", dasselbe Violett wie `GROUP_CHAT_ACCENT`). **Amber = das
   BEDIENELEMENT** — die Schiene des Hosts und dein eigener Balken darin, in der
   Übersicht auch deine eigene Zeile. **Grün = die DATEN** — was die anderen
@@ -936,23 +1012,75 @@ kein fixes Datum, bis der Host einen Slot festzurrt.
   durch einen Umriss — und zwang die Zeile „Du" beim Auffächern auf Fast-Schwarz, nur
   um überhaupt unterscheidbar zu sein. Amber passt außerdem zum Composer, wo derselbe
   Picker amber ist. „Alle können" wird über die **Form** markiert (kräftiger Rahmen +
-  Wort), nie über eine zweite Farbstufe.
+  Wort), nie über eine zweite Farbstufe. **Ton-Rot (`DECLINED_COLOR`) = die eigene
+  Absage**, und zwar ausschließlich im Antwortschalter: dort muss „nein" von „ja" auf
+  einen Blick zu trennen sein. FREMDE Nichtverfügbarkeit bleibt `UNAVAILABLE_COLOR`
+  — eine Spalte roter Zeilen mit Namen wäre ein Pranger.
 - **Lesen ist chronologisch, Entscheiden ist sortiert.** Die Übersicht bleibt in
   Tagesreihenfolge — den besten Tag nach oben zu schieben, bevor jemand geantwortet
   hat, drückt ihn in eine Richtung. Gerankt wird nur dort, wo das Ranking die Frage
   IST: am „festlegen"-Knopf des Hosts.
-- **Antippen fächert einen Tag an Ort und Stelle auf** (nur einer offen, wie beim
-  Kalender-Akkordeon). Das Aggregat bleibt als Summenzeile darüber stehen, weil die
-  Verdichtung buchstäblich diese Zeilen gestapelt IST. Ab ~10 Personen wird gruppiert
-  statt aufgelistet — 30 Balken liest niemand, und die Stapel-Metapher trägt dort auch
-  nicht mehr.
-- **Antworten: pro Tag ein Tap.** `[ ✓ | ✕ ]` sitzt in der **Kopfzeile des Tages**,
-  nicht auf oder neben der Schiene: im Balken kollidiert es mit den Griffen und passt
-  bei der 15-Minuten-Mindestdauer (~16 dp) gar nicht hinein, neben der Schiene kostet
-  es ein Viertel Breite und vermischt die Tages- mit der Stundenentscheidung. „Passt"
-  wählt den GANZEN Zeitraum vor; Einschränken ist optional. **Keine Vorbelegung auf
-  „Passt"** — eine Vorbelegung darf eine EINSTELLUNG raten, nie eine AUSSAGE ÜBER DIE
-  WIRKLICHKEIT; ein unüberlegtes „ich kann immer" macht die Runde kaputt.
+- **Antippen öffnet einen Tag an Ort und Stelle** (nur einer offen, wie beim
+  Kalender-Akkordeon). Die Zeile mit `N von M` bleibt darüber stehen, weil die
+  Zahl buchstäblich diese Antworten zusammengefasst IST.
+- **Antworten sind DREI Zustände pro Tag, und der Picker ist der dritte** (September
+  2026; ersetzt „nur Ablehnung ist explizit", wo jede Zeile ein Zeit-Picker war). Eine
+  Zeile ist ein segmentierter Schalter **Passt · Teilweise · Passt nicht**, Reihenfolge
+  als Skala gelesen: ja, ja-aber, nein. Der Picker klappt AUSSCHLIESSLICH unter
+  „Teilweise" auf. Begründung: Die alte Zeile war bereits eine Umfrage in Verkleidung —
+  jeder Vorschlag startete aktiv und mit dem ganzen Host-Zeitraum, die normale Antwort
+  war also „bei den Tagen, an denen ich nicht kann, auf X tippen" — sie stellte dafür
+  aber jedem eine ziehbare Spanne vor die Nase, die er lesen und deuten musste. Der
+  Normalfall kostet jetzt einen Tap.
+  - **Freie Intervalle bleiben, sie sind nur nicht mehr die DEFAULT-Form der Frage.**
+    „Samstag kann ich, aber erst ab 19" ist die häufigste echte Antwort auf einen
+    Tagesvorschlag; ein reines Ja/Nein zwingt diese Person zu NEIN an einem Tag, an dem
+    sie kann — schlechter als keine Antwort, weil es den Host aktiv vom passenden Slot
+    wegschiebt. Der Ausweg wäre, dass der Host den Tag vorher in Slots schneidet: mehr
+    Arbeit für ihn und genau das Checkbox-Raster, das Doodle unbenutzbar macht.
+  - **Die drei Zustände werden ABGELEITET, nie gespeichert** (`responseDraft.ts`): leeres
+    Array = `none`, Intervall deckt das Host-Fenster = `full`, alles Engere = `partial`.
+    Das Wire-Format bleibt unverändert — der Server kennt weiterhin nur Intervalle und
+    nichts von diesem Bedienelement —, und Antworten aus der Zwei-Zustands-UI öffnen
+    ohne Migration im richtigen Zustand.
+  - **`full` sendet das Host-Fenster, nie den letzten Picker-Stand.** Wer „Passt" sagt,
+    meint den ganzen Tag; eine übriggebliebene enge Spanne aus einem früheren
+    „Teilweise" würde ihm still widersprechen.
+  - **Farbe im Schalter: Amber für beide Ja-Antworten, Ton-Rot für die Absage**
+    (September 2026; ersetzt „der ausgewählte Schalter ist grün" UND „‚Passt nicht'
+    bekommt KEINEN Akzent und dimmt die Zeile"). Das ist die Farbregel dieses
+    Features, angewandt: **Amber ist das Bedienelement**, und der Schalter IST eines
+    — er trägt also dasselbe Amber wie der Picker, den er aufklappt. Grün bleibt, was
+    der Rest des Features damit meint: die DATEN, was andere geantwortet haben. Ein
+    grüner Schalter hatte ausgerechnet die eine Fläche, die man bedient, in der Farbe
+    der Antworten, die man liest. **„Passt" und „Teilweise" teilen sich damit eine
+    Farbe, und das ist richtig** — beides ist ja, und WELCHE Stunden ist die Frage des
+    Pickers, nicht der Pille; Position, Beschriftung und der aufklappende Picker
+    trennen sie ohnehin lauter, als ein Farbton es könnte. Die Absage war in der
+    Border-Farbe gemalt — derselbe Wert, den der Track ohnehin als Haarlinie trägt,
+    gemessen 1,24:1 hell und 1,40:1 dunkel: von drei Antworten sah genau eine gar
+    nicht ausgewählt aus. Sie ist weiterhin NICHT das Destruktiv-Rot der App (das
+    gehört Absagen, Blockieren, Gruppe verlassen; ΔE00 9,7 bzw. 18,4 Abstand) — nicht
+    zu können ist kein Fehler. Aber Farbe ist auch, womit man seine eigenen fünf
+    Zeilen vor dem Senden überfliegt, und Grau trug das über einen Scroll nicht.
+    Bedeutung hängt nie allein an der Farbe: Position und Beschriftung tragen sie mit.
+  - **Über dem Schalter steht GENAU EINE Zeitangabe, direkt neben dem Tag.** Tag und
+    Uhrzeit sind ein Hauptwort („Samstag · 20:00–02:00"); eine einzige Wortgruppe auf
+    die beiden Enden einer Zeile zu verteilen — mit einer Lücke, die je nach Wochentag
+    anders breit ist — ist genau das, was unfertig aussieht. Sie nennt die Stunden,
+    nach denen der Host fragt, und „Teilweise" ERSETZT sie durch die selbst gewählten:
+    dort SIND die Zeiten die Antwort, eine zweite Kopie des Host-Fensters daneben wäre
+    nur die wiederholte Frage. Amber sagt, welche der beiden man liest, und bindet die
+    Zeile an den Picker darunter. Der Picker kann die gewählte Spanne nicht allein
+    tragen: sein Balken-Label ist eine DAUER und blendet sich aus, sobald der Balken
+    schmaler als rund acht Zeichen ist — bei der 15-Minuten-Mindestdauer also immer.
+    Bei einer Absage stand dort einmal „Du bist raus" — eine dritte Art, das zu sagen,
+    was die gefüllte Pille und der ausgegraute Tag schon sagen, und der einzige
+    Zustand, in dem die Zeile aufhörte, eine Zeit zu sein.
+  - Erst „Zeiten übernehmen & beitreten" sendet den sichtbaren Gesamtstand; bis dahin
+    ist die Vorbelegung keine veröffentlichte Aussage. **Aus dem Bearbeiten führt ein
+    „Abbrechen" zurück**, das aus dem gespeicherten Stand neu seedet — „Meine Zeiten
+    ändern" war sonst eine Einbahnstraße: senden oder das ganze Sheet schließen.
 - **Der Picker zeichnet die Verdichtung selbst** (`layers`-Prop auf
   `TimeRangePicker`). Die Achse ist privat und ändert sich beim Ziehen gegen den Rand;
   ein vom Elternteil danebengemalter Streifen hätte eine zweite Zeit-zu-Pixel-Rechnung
@@ -970,50 +1098,92 @@ kein fixes Datum, bis der Host einen Slot festzurrt.
   Kalender-Icon. Aufklappen läuft über `planningView` im Sheet (`summary` | `full` |
   `members`) mit demselben Zurück-Kopf wie die Teilnehmerliste; ein offener Drill-in wird
   zurückgesetzt, sobald eine andere Runde angetippt wird.
-- **Die Statuszeile zählt PERSONEN, die Zeitleiste zählt VERFÜGBARKEIT — nie vermischen.**
-  „18 von 20 Antworten" sind beantwortende von eingeladenen Personen (`memberUids` gegen
-  `audienceUids`; „Beitreten IST Antworten", also ist jedes Mitglied genau eine Antwort).
-  Das `x/y` in der Matrix ist etwas anderes: Verfügbarkeit INNERHALB der bereits
-  Antwortenden. Würden beide dieselbe Formulierung teilen, sähe eine Runde beantwortet
-  aus, weil die wenigen Antwortenden sich zufällig einig sind. Die Wortwahl lebt allein in
-  `describePlanStatus` (`utils/planSummary.ts`) und sagt **nie** eine Zeit als
-  festgelegt an: vor dem Vollzähligwerden „Aktueller Favorit", danach „Favorit", und eine
-  festgelegte Runde zeigt die Zeile gar nicht mehr. Mehrere gleichwertige Fenster werden
-  zu „Mehrere Favoriten" — zwei lange Zeiträume passen nicht in die Zeile, und einen davon
-  zu wählen erfände eine Entscheidung, die der Host nicht getroffen hat.
+- **Die Statuszeile führt mit der ANTWORT, und ihr Nenner sind die Antworten**
+  (September 2026; ersetzt „Die Statuszeile zählt PERSONEN, die Zeitleiste zählt
+  VERFÜGBARKEIT — nie vermischen"). Sie liest jetzt
+  „Favorit: Mi 26. Aug, 19:00–21:00 · 4 von 5 können": erst die Zeit, dann wie
+  viele der Antworten sie decken. **„N von M Antworten" ist ersatzlos weg** — M
+  war `audienceCount`, also alle Adressierten. Bei „Alle Freunde" und vierzig
+  Freunden steht dort für immer „5 von 40": keine Aufgabenliste, sondern die
+  Größe der Kontaktliste, und jede Runde sieht nach Misserfolg aus. Der alte
+  Grund für die Trennung bleibt trotzdem gültig — eine Runde darf nicht
+  beantwortet AUSSEHEN, weil die wenigen Antwortenden sich zufällig einig sind —,
+  und wird jetzt anders getragen: die Zahl der Antworten steht ohne Nenner
+  daneben („5 Antworten") und ist dieselbe, gegen die „4 von 5" zählt.
+  Die Wortwahl lebt allein in `describePlanStatus` (`utils/planSummary.ts`) und
+  sagt **nie** eine Zeit als festgelegt an: davor steht immer „Favorit", und eine
+  festgelegte Runde zeigt die Zeile gar nicht mehr. Mehrere gleichwertige
+  Fenster werden zu „Mehrere Favoriten · je N von M können" — zwei lange
+  Zeiträume passen nicht in die Zeile, und einen davon zu wählen erfände eine
+  Entscheidung, die der Host nicht getroffen hat.
 - **Für Eingeladene fehlt der Favorit, und das ist die Regel, nicht ein Bug.**
   `timePlanMembers` ist ihnen verschlossen, also gibt es keine fremde Verdichtung zu
-  zeigen; die Zeile nennt dann nur den Fortschritt (`canSeeFavourite: false`), der aus dem
-  Plan-Dokument selbst kommt. Die Teilnehmerliste sagt es aus demselben Grund offen:
+  zeigen; die Zeile nennt dann nur die Zahl der Antworten (`canSeeFavourite: false`),
+  die aus dem Plan-Dokument selbst kommt. Die Teilnehmerliste sagt es aus demselben Grund offen:
   „Wer schon dabei ist, siehst du, sobald du selbst geantwortet hast."
-- **Kein eigenes Sheet — alles im `MarkerDetailSheet`.** Eine Runde mit Ort liegt als
-  ringloser Marker auf der Karte; Antippen öffnet dieselbe Detailfläche wie jede
+- **Eine Terminfindung IST eine `soon`-Aktivität, nur ohne feste Uhrzeit**
+  (Produktentscheidung September 2026; ersetzt „ringloser Marker"). Sie bekommt den
+  ganz normalen Soon-Marker in Amber — `timePlanToMapMarker` setzt `mode: 'soon'`
+  und `planning: true` — und wird durch einen **gestrichelten Ring**
+  gekennzeichnet, nicht durch einen fehlenden. Der Ring ist in dieser App die Uhr,
+  und bei einer Runde ist genau die Uhr das Unentschiedene: dieselbe Farbe, derselbe
+  Pfad, dieselbe Stelle, eine Eigenschaft anders. Legt der Host einen Slot fest,
+  schließt sich der Ring und beginnt zu leeren. Ein fehlender Ring war zwar logisch
+  („keine feste Zeit"), las sich aber als *da fehlt was* statt als *die Zeit wird
+  gerade gesucht*, und gab der Runde keine sichtbare Verwandtschaft mit der Aktivität,
+  die sie gleich wird. Kein Wort auf dem Marker und kein fünfter Anbau: oben links
+  sitzt die Kategorie, oben rechts das Ungelesen-Abzeichen, unten der Titel.
+  `activityMarkerPlanningDash` LEITET das Muster aus dem echten Umfang ab (ganze Zahl
+  von Perioden, sonst sitzt an einer Zoomstufe ein Rest-Strich an der Naht) und zieht
+  eine volle Strichstärke ab, weil runde Enden je eine halbe dazugeben — bei 3 px
+  Strich und ~7,5 px Periode wäre die Lücke sonst zu und der Ring sähe geschlossen
+  aus. Gemessen über alle Schalenbreiten: 18–38 Striche, sichtbar ~4,1 px mit ~3,3 px
+  Lücke. `test-marker-geometry.mjs` prüft das.
+- **Kein eigenes Sheet — alles im `MarkerDetailSheet`.** Antippen öffnet dieselbe Detailfläche wie jede
   Aktivität (Titel, Host, Ort), nur steht an der Stelle der Uhrzeit die Übersicht
   bzw. die Antwortzeilen (`PlanningContent` neben `ActivityContent`). Ein zweites
   Detail-Sheet ist genau das, was diese Fläche verhindern soll. Sichtbar wird die
-  Runde über `audienceUids` auf dem Plan-Dokument — eine Regel, die ein zweites
-  Dokument liest, kann keine Query tragen, und ohne Query kann der Client nicht
-  fragen, in welchen Runden er ist.
-- **Die Antwort ist eine ZEILE pro Tag, keine Karte.** Label + Picker + `[ ✓ | ✕ ]`
-  nebeneinander, rund 62 statt 142 dp. Die Kartenhülle (Rand, Füllung, Polster)
-  trug keine Information und schob den Knopf, der die Sache abschließt, aus dem
-  Bild. **Die Stundenskala bleibt** — sie sagt als Einziges, wohin man einen Griff
-  zieht, und kostet nichts, weil der Picker sie in seinem eigenen Kasten zeichnet.
-  Der Schalter ist sichtbar 30 dp und per `hitSlop` 44 dp groß, dieselbe Trennung
-  wie bei den 6-dp-Griffen des Pickers. **Nicht in den Balken legen:** bei der
+  Runde über die private Projektion `timePlanAudience/{planId}_{uid}`. Sie enthält
+  sichere Planfelder und Zähler, aber keine Liste der Eingeladenen oder Mitglieder;
+  dadurch bleibt die eine begrenzte Inbox-Query erhalten, ohne Identitäten zu leaken.
+- **Die Antwortfläche ist EINE Liste mit Haarlinien, kein Kartenstapel**
+  (September 2026; ersetzt „eine ZEILE pro Tag" aus der Zeit, als jede Zeile ein
+  Picker war). Vier Vorschläge waren vier Kästen mit eigenem Rand, 12 dp Polster
+  ringsum und 12 dp Abstand dazwischen: 98 dp pro Tag, davon 26 Rahmen und
+  Polster plus 12 Lücke. Es sind vier Antworten auf dieselbe Frage, also ein
+  Kasten mit Haarlinien — dasselbe Muster wie `TimePlanRows`. Gemessen: 428 → 365
+  dp bei vier Tagen. **Die Haarlinie gehört der ZEILE (`separated`), nicht der
+  Liste:** die Zeile animiert ihre eigene Höhe, wenn der Picker aufklappt, und
+  ein danebengesetzter Trenner spränge an seinen neuen Platz, während die Zeile
+  dorthin gleitet.
+- **Tag und Schalter bleiben ÜBEREINANDER, und das ist gemessen.** Bei
+  `TYPE.caption` braucht „Passt nicht" rund 73 dp Glyphen, der Dreier-Schalter
+  also mindestens ~273 dp; auf einem 390-dp-Gerät bleiben in der Liste ~318 dp,
+  also 45 dp für ein „Sa · 20:00–02:00", das etwa 100 braucht. Nebeneinander
+  bricht entweder der Tag oder der Schalter.
+- **Über der Liste steht keine Anleitung.** „Sag pro Tag kurz Bescheid …" ist
+  entfernt: Drei Segmente, die Passt · Teilweise · Passt nicht heißen, erklären
+  sich selbst, und das Einzige, was der Satz hinzufügte — dass „Teilweise" den
+  Picker öffnet —, erfährt man durch genau den Tap, der es tut. **Die
+  Stundenskala im Picker bleibt** — sie sagt als Einziges, wohin man einen Griff
+  zieht, und kostet nichts, weil der Picker sie in seinem eigenen Kasten
+  zeichnet. **Aktionen nicht in den Balken legen:** bei der
   15-Minuten-Mindestdauer ist der ~16 dp breit, und an seinen Enden sitzen die
   Griffe.
 - **Planungsflächen nehmen die App-Farben** (`usePlanningColors`). Sie waren zuerst
   für ein dunkles Sheet gezeichnet und hart auf Weiß gesetzt — im hellen
   Detail-Sheet war davon nichts mehr zu sehen.
-- **Tests:** `npm run test:time-planning` (Aggregation, bester Slot, geteilte Achse),
+- **Tests:** `npm run test:time-planning` (Aggregation, bester Slot, geteilte Achse,
+  die drei Antwortzustände und die Formulierung der Statuszeile),
   `npm run test:time-plan-functions` (Callables im Emulator: kein Mitglied ohne
   Antwort, Lock-Regeln, Idempotenz), `npm run test:marker-countdown` (Ringe).
 
 ### Marker-Ringe: der Ring ist eine Uhr
 
-`src/features/map/utils/countdown.ts` ist die einzige Quelle. **Kein Ring heißt genau
-eine Sache: keine feste Zeit.**
+`src/features/map/utils/countdown.ts` ist die einzige Quelle. **Der Ring sagt, was mit
+der Zeit los ist: durchgezogen = feste Uhrzeit, gestrichelt = Terminfindung
+(`PlanningRing`, siehe Terminfindung). Gar kein Ring kommt auf einer Aktivität nicht
+mehr vor.**
 
 - **Grün = anteilig** (unverändert): „wie weit ist das schon?". Fast leer heißt „lohnt
   nicht mehr", fast voll „gerade erst los" — und das liest sich bei 1 h wie bei 6 h

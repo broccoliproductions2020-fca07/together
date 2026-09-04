@@ -1,20 +1,19 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Modal, Pressable, Text, View } from 'react-native';
 import Animated, { FadeInDown, useReducedMotion } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { TogetherMark } from '@/shared/components';
 
-const STORAGE_KEY = 'together:welcomeSeen:v2';
+const STORAGE_KEY = 'together:welcomeSeen:v3';
 
 // Product-mode colors remain functional UI signals; the brand itself now has
 // an independent woven-path mark.
 const COLORS = {
   now: '#41C08D',
-  soon: '#E0A23E',
   open: '#3B82F6',
 };
 
@@ -67,31 +66,50 @@ function BrandGlow() {
 
 /**
  * One-time welcome hero shown after the first sign-in (persisted via
- * AsyncStorage). Explains the two current Together surfaces — map and calendar.
+ * AsyncStorage). Explains the private network and the two primary map gestures.
  * Never blocks returning users.
  */
-export function WelcomeIntro() {
+export function WelcomeIntro({ onResolved }: { onResolved?: () => void }) {
   const insets = useSafeAreaInsets();
   const reducedMotion = useReducedMotion();
   const [visible, setVisible] = useState(false);
+  /**
+   * Fires exactly once, when this step is out of the way — whether the hero was
+   * shown and dismissed, was never due, or storage failed. Whoever wants to put
+   * something in front of the user next needs that signal, not just "dismissed":
+   * a returning account never sees this modal at all, and would otherwise wait
+   * forever for a callback that cannot come.
+   */
+  const onResolvedRef = useRef(onResolved);
+  onResolvedRef.current = onResolved;
+  const resolvedRef = useRef(false);
+  const resolve = useCallback(() => {
+    if (resolvedRef.current) return;
+    resolvedRef.current = true;
+    onResolvedRef.current?.();
+  }, []);
 
   useEffect(() => {
     let active = true;
     AsyncStorage.getItem(STORAGE_KEY)
       .then((seen) => {
-        if (active && !seen) setVisible(true);
+        if (!active) return;
+        if (seen) resolve();
+        else setVisible(true);
       })
       .catch(() => {
         // Storage unavailable — skip the intro rather than risk showing it forever.
+        if (active) resolve();
       });
     return () => {
       active = false;
     };
-  }, []);
+  }, [resolve]);
 
   function dismiss() {
     setVisible(false);
     AsyncStorage.setItem(STORAGE_KEY, '1').catch(() => {});
+    resolve();
   }
 
   if (!visible) return null;
@@ -138,10 +156,10 @@ export function WelcomeIntro() {
             delay={200}
           />
           <ValueRow
-            icon="calendar-outline"
-            tint={COLORS.soon}
-            title="Kalender"
-            text="Alle gemeinsamen Pläne in einer Agenda — von heute bis in ein paar Wochen."
+            icon="radio-button-on-outline"
+            tint={COLORS.open}
+            title="Der Mica-Button"
+            text="Tippe unten, um dich offen zu stellen — ohne Standort. Halte ihn gedrückt, um etwas für jetzt oder später zu planen."
             delay={280}
           />
         </View>

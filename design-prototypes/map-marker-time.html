@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Marker — rund + Zeitanzeige</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;background:#EDEFF2;font:13px/1.55 ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif;color:#0F1417}
+  .wrap{padding:26px 24px 40px}
+  h1{font-size:21px;margin:0 0 4px;letter-spacing:-.02em}
+  .lede{color:#5A6570;margin:0 0 22px;font-size:13.5px;max-width:110ch}
+  h2{font-size:15px;margin:28px 0 10px;letter-spacing:-.01em}
+  .opt{background:#fff;border:1px solid rgba(15,20,23,.09);border-radius:18px;padding:16px 18px 12px;margin-bottom:14px}
+  .oh{display:flex;align-items:baseline;gap:9px;margin-bottom:2px}
+  .oh b{font-size:14.5px;letter-spacing:-.01em}
+  .oh .rec{font-size:10px;font-weight:700;color:#177453;background:#DFF6EC;border-radius:99px;padding:2px 8px}
+  .od{font-size:12.5px;color:#5A6570;margin:0 0 12px;max-width:96ch}
+  .strip{display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap}
+  .sc{text-align:center}
+  .sb{background:#F1F1F1;border-radius:12px;display:inline-block;padding:2px}
+  .sb.n{background:#212121}
+  .sb svg{display:block;transform:scale(2);transform-origin:top left}
+  .sl{font-size:10.5px;color:#8A939B;padding-top:3px;font-variant-numeric:tabular-nums}
+  .panelrow{display:flex;gap:16px;align-items:flex-start}
+  .panel{position:relative;width:390px;height:600px;border-radius:26px;overflow:hidden;
+         box-shadow:0 1px 2px rgba(15,20,23,.10),0 10px 26px rgba(15,20,23,.13)}
+  .ph{font-size:13px;font-weight:700;padding:0 4px 7px}
+  .mk{position:absolute}.mk svg{display:block}
+  .note{font-size:12.5px;color:#3C464F;background:#F6F8FA;border-left:3px solid #C7CFD6;padding:10px 13px;border-radius:0 9px 9px 0;margin-top:12px}
+  .note.win{border-left-color:#41C08D;background:#F1FBF7}
+  .note.out{border-left-color:#E0A23E;background:#FDF8EF}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Runder — und wohin mit der Uhr</h1>
+  <p class="lede">Schale und Titelband sind jetzt Stadien (Radius = halbe Höhe), die Avatar-Plättchen fast Kreise. Darunter drei Wege, die Restzeit unterzubringen. Jede Variante bei voller, halber, fast abgelaufener Zeit und ohne feste Zeit.</p>
+
+  <div id="opts"></div>
+
+  <h2>Auf der Karte, echte Größe</h2>
+  <div class="panelrow" id="panels"></div>
+</div>
+
+<script src="marker-shapes.js"></script>
+<script>
+const V = MarkerShapes.variants, MODE = MarkerShapes.MODE;
+const F=(...a)=>a.map(s=>s==='+3'?{label:'+3',o:true}:{label:s});
+
+const STEPS = [
+  {rem:1.00, lbl:'voll'},
+  {rem:0.62, lbl:'62 %'},
+  {rem:0.25, lbl:'25 %'},
+  {rem:null, lbl:'keine feste Zeit'},
+];
+const SAMPLE = {faces:F('JK','AS','MR','+3'), solo:false, title:'Feierabendbier', accent:MODE.soon, progress:1};
+const SOLO   = {faces:F('LM'), solo:true, title:'Grillen im Park', accent:MODE.now, progress:1};
+
+const OPTS = [
+  {k:'rring', rec:true,
+   d:'Die <b>Kontur der Schale</b> läuft leer — dasselbe Prinzip wie heute, aber nur um den Gesichter-Teil, nicht um die ganze Silhouette. Der Sockel wird dabei neutralgrau: es trägt immer nur ein Element die Modusfarbe.',
+   n:['win','<b>Empfehlung.</b> Ein Ring ist als Uhr sofort lesbar, und er sitzt auf der Kante, die durch das Runden ohnehin die auffälligste Form des Markers geworden ist. Weil er nur die Schale umläuft, bleibt das Titelband ruhig — der Ring muss keine Schräge und keine zwei Breiten mitmachen. Fehlt die Zeit, fehlt der Ring: die heutige Regel „kein Ring heißt keine feste Zeit" bleibt wörtlich gültig.']},
+  {k:'rbase',
+   d:'Der <b>Sockel</b> ist die Uhr. Die Tiefenkante bleibt immer vollständig stehen (sonst hätte die Karte halb keine Tiefe), aber nur der verbleibende Teil trägt die Modusfarbe, der verbrauchte wird grau.',
+   n:['out','<b>Im Test durchgefallen — schau in die Kartenspalte unten, dort ist die Uhr schlicht nicht zu sehen.</b> Der Sockel ist 2,5&nbsp;px hoch. Auf dieser Fläche ist die Restzeit nur ein Farbwechsel in einem Splitter, und bei echter Kartengröße verschwindet er. Dazu der Nullfall: ohne feste Zeit müsste der Sockel voll in der Modusfarbe stehen, und das wäre von „noch viel Zeit" nicht zu unterscheiden. Die Idee war gut — die Kante ist ohnehin da, kostet also nichts —, aber sie hat zu wenig Fläche.']},
+  {k:'rsplit',
+   d:'Titelpille <b>abgetrennt</b> von der Schale. Damit gibt es überhaupt keine Schräge mehr — und die Schalenkontur ist frei für die Uhr.',
+   n:['','Löst dein Schrägen-Problem, indem es den Übergang abschafft. Die runde Schale mit Ring liest sich am saubersten von allen dreien. Preis: zwei getrennte Formen wirken auf der Karte etwas loser, und der Titel verliert den sichtbaren Zusammenhalt mit den Gesichtern — bei dicht stehenden Markern muss man kurz zuordnen, welche Pille zu welcher Schale gehört.']},
+];
+
+document.getElementById('opts').innerHTML = OPTS.map(o=>{
+  const v=V[o.k];
+  const cells = STEPS.map(s=>`<div class="sc">
+      <div class="sb" style="width:${v.W*2}px;height:${v.H*2}px">${v.render({...SAMPLE, remaining:s.rem})}</div>
+      <div class="sl">${s.lbl}</div></div>`).join('')
+    + `<div class="sc"><div class="sb n" style="width:${v.W*2}px;height:${v.H*2}px">${v.render({...SOLO, remaining:0.45})}</div>
+       <div class="sl">solo · nachts · 45 %</div></div>`;
+  return `<div class="opt">
+    <div class="oh"><b>${v.name}</b>${o.rec?'<span class="rec">Empfehlung</span>':''}</div>
+    <p class="od">${o.d}</p>
+    <div class="strip">${cells}</div>
+    <div class="note ${o.n[0]}">${o.n[1]}</div>
+  </div>`;
+}).join('');
+
+/* ── Kartenszene ─────────────────────────────────────────────────── */
+function mapBg(night){
+  const g = night
+    ? {ground:'#212121',block:'#2B2B2B',blockEdge:'#3A3A3A',road:'#E8D6AE',roadMinor:'#6E6353',park:'#1E2A20',water:'#17242E',label:'#8C8C8C'}
+    : {ground:'#F1F1F1',block:'#E6E6E6',blockEdge:'#DBDBDB',road:'#FFFFFF',roadMinor:'#F7F7F7',park:'#DCE8D5',water:'#C9DDE8',label:'#9AA0A6'};
+  const blocks=[[14,40,96,74],[126,26,104,88],[246,52,118,62],[18,140,88,96],[122,146,58,60],
+    [196,138,74,84],[286,150,86,70],[24,268,110,66],[150,258,92,88],[262,272,104,58],
+    [16,388,80,74],[112,396,120,52],[248,378,116,90],[28,494,104,72],[152,500,86,64],[258,486,108,80]];
+  return `<svg width="390" height="600" viewBox="0 0 390 600" style="position:absolute;inset:0">
+    <rect width="390" height="600" fill="${g.ground}"/>
+    <rect x="0" y="330" width="390" height="44" fill="${g.water}"/>
+    <rect x="180" y="0" width="26" height="600" fill="${g.roadMinor}"/>
+    <rect x="0" y="238" width="390" height="22" fill="${g.roadMinor}"/>
+    <rect x="0" y="120" width="390" height="14" fill="${g.road}"/>
+    <rect x="106" y="0" width="12" height="600" fill="${g.road}"/>
+    <rect x="0" y="466" width="390" height="14" fill="${g.road}"/>
+    <rect x="272" y="0" width="10" height="600" fill="${g.road}"/>
+    <rect x="288" y="404" width="94" height="54" rx="6" fill="${g.park}"/>
+    ${blocks.map(([x,y,w,h])=>`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="3" fill="${g.block}" stroke="${g.blockEdge}" stroke-width="1"/>`).join('')}
+  </svg>`;
+}
+const SCENE = [
+  {x:78, y:104, faces:F('LM'),                solo:true,  title:'Grillen im Park',  accent:MODE.now,  progress:1, remaining:0.38},
+  {x:236,y:214, faces:F('JK','AS','MR','+3'), solo:false, title:'Feierabendbier',   accent:MODE.soon, progress:1, remaining:0.72},
+  {x:118,y:322, faces:F('TN','BW'),           solo:false, title:'Kaffee',           accent:MODE.open, progress:1, remaining:null},
+  {x:308,y:300, faces:F('SD'),                solo:true,  title:'Bouldern',         accent:MODE.now,  progress:1, remaining:0.9},
+  {x:96, y:452, faces:F('PL','KH','RS'),      solo:false, title:'Kino heute Abend', accent:MODE.soon, progress:1, remaining:0.2},
+  {x:286,y:536, faces:F('EV'),                solo:true,  title:'Laufrunde',        accent:MODE.now,  progress:1, remaining:0.55},
+];
+document.getElementById('panels').innerHTML = ['rring','rbase','rsplit'].map(k=>{
+  const v=V[k];
+  return `<div><div class="ph">${v.name}</div><div class="panel">${mapBg(false)}
+    ${SCENE.map(s=>`<div class="mk" style="left:${s.x-v.anchor.x*v.W}px;top:${s.y-v.anchor.y*v.H}px">${v.render(s)}</div>`).join('')}
+  </div></div>`;
+}).join('');
+
+/* Die Konturuhr bekommt ihre Länge aus der echten Kurve, nicht aus
+   nachgerechneter Geometrie — sonst meinen Strich und Form Verschiedenes. */
+document.querySelectorAll('path[data-clock]').forEach(p=>{
+  const frac = parseFloat(p.getAttribute('data-clock'));
+  const len = p.getTotalLength();
+  const start = parseFloat(p.getAttribute('data-clock-start')) || 0;
+  p.setAttribute('stroke-dasharray', `${len*frac} ${len}`);
+  p.setAttribute('stroke-dashoffset', `${-start}`);
+});
+</script>
+</body>
+</html>

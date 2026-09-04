@@ -115,11 +115,34 @@ async function main() {
   await denied('other user cannot advance notification cursor', () =>
     updateDoc(doc(b.db, 'users', aUid), { notificationsSeenAt: serverTimestamp() }),
   );
-  await allowed('owner can create internal profile projection', () =>
+  // The Heimweg group is the default audience for a live location, so every uid
+  // in it has to be re-checked against a confirmed friendship — which only the
+  // `setHeimwegGroup` callable can do. The client used to write this directly
+  // and was refused here every single time, silently.
+  await denied('client cannot write its own Heimweg group', () =>
+    setDoc(doc(a.db, 'users', aUid), { heimwegGroupUids: [bUid] }, { merge: true }),
+  );
+  await denied('client cannot write its own close friends', () =>
+    setDoc(doc(a.db, 'users', aUid), { closeFriendUids: [bUid] }, { merge: true }),
+  );
+  // Creation is callable-only. Nothing in the rules can check that a handle is
+  // actually claimed in `usernames/{name}`, and `updateOwnProfile` reads the
+  // handle back out of THIS document to build the people-search entry — so a
+  // client-written profile could have put an impostor into search under a real
+  // person's @name.
+  await denied('client cannot create its own public profile', () =>
     setDoc(doc(a.db, 'publicProfiles', aUid), {
       displayName: 'Alice',
       username: 'alice',
       initials: 'AL',
+      createdAt: Timestamp.now(),
+    }),
+  );
+  await denied('client cannot claim a handle it does not own', () =>
+    setDoc(doc(b.db, 'publicProfiles', bUid), {
+      displayName: 'Not Alice',
+      username: 'alice',
+      initials: 'NA',
       createdAt: Timestamp.now(),
     }),
   );
@@ -161,7 +184,7 @@ async function main() {
     sourceWindows: [],
     revision: 1,
     status: 'collecting',
-    audienceUids: [aUid],
+    audienceCount: 2,
     memberUids: [aUid],
     createdAt: admin.firestore.Timestamp.now(),
     updatedAt: admin.firestore.Timestamp.now(),
@@ -177,11 +200,15 @@ async function main() {
     updatedAt: admin.firestore.Timestamp.now(),
     expireAt: adminFuture,
   });
-  await allowed('joined host can read their time plan', () => getDoc(doc(a.db, 'timePlans', 'private-plan')));
+  await allowed('joined host can read their time plan', () =>
+    getDoc(doc(a.db, 'timePlans', 'private-plan')),
+  );
   await allowed('joined host can list time-plan members', () =>
     getDocs(query(collection(a.db, 'timePlans', 'private-plan', 'timePlanMembers'), limit(50))),
   );
-  await denied('unjoined user cannot read a private time plan', () => getDoc(doc(b.db, 'timePlans', 'private-plan')));
+  await denied('unjoined user cannot read a private time plan', () =>
+    getDoc(doc(b.db, 'timePlans', 'private-plan')),
+  );
   await denied('unjoined user cannot list private time-plan members', () =>
     getDocs(query(collection(b.db, 'timePlans', 'private-plan', 'timePlanMembers'), limit(50))),
   );
@@ -197,14 +224,48 @@ async function main() {
       expireAt: future,
     }),
   );
-  // The answer surface has to open BEFORE anyone is a member, so an invitee
-  // gets a narrower tier: the round itself, never anyone's availability. The
-  // audience is denormalised onto the plan because a rule that reads another
-  // document cannot back a QUERY — and listing your own rounds is what puts
-  // them on the map.
-  await adminDb.doc('timePlans/private-plan').update({ audienceUids: [aUid, bUid] });
-  await allowed('invited user can read the round they were asked to answer', () =>
+  // Invitees see only their own projection. The full plan still contains the
+  // member list and therefore stays closed until joining.
+  await adminDb.doc(`timePlanAudience/private-plan_${bUid}`).set({
+    planId: 'private-plan',
+    audienceUid: bUid,
+    joined: false,
+    memberCount: 1,
+    audienceCount: 2,
+    hostId: aUid,
+    hostName: 'Alice',
+    hostInitials: 'AL',
+    title: 'Termin finden',
+    sourceWindows: [],
+    revision: 1,
+    status: 'collecting',
+    createdAt: admin.firestore.Timestamp.now(),
+    updatedAt: admin.firestore.Timestamp.now(),
+    expireAt: adminFuture,
+  });
+  await denied('invited user cannot read the member-bearing plan document', () =>
     getDoc(doc(b.db, 'timePlans', 'private-plan')),
+  );
+  await allowed('invited user can read their safe planning projection', () =>
+    getDoc(doc(b.db, 'timePlanAudience', `private-plan_${bUid}`)),
+  );
+  await allowed('invited user can query only their safe planning projections', () =>
+    getDocs(
+      query(
+        collection(b.db, 'timePlanAudience'),
+        where('audienceUid', '==', bUid),
+        where('status', '==', 'collecting'),
+        where('expireAt', '>', Timestamp.fromMillis(Date.now())),
+        limit(20),
+      ),
+    ),
+  );
+  await adminDb.doc(`timePlanAudience/expired-plan_${bUid}`).set({
+    audienceUid: bUid,
+    expireAt: admin.firestore.Timestamp.fromMillis(Date.now() - 60_000),
+  });
+  await denied('an expired planning projection is sealed before TTL deletion', () =>
+    getDoc(doc(b.db, 'timePlanAudience', `expired-plan_${bUid}`)),
   );
   await denied("invited user still cannot read anyone else's availability", () =>
     getDocs(query(collection(b.db, 'timePlans', 'private-plan', 'timePlanMembers'), limit(50))),
@@ -214,12 +275,17 @@ async function main() {
   );
   const stranger = client('rules-stranger');
   await signInAnonymously(stranger.auth);
+  await denied("a stranger cannot read another person's planning projection", () =>
+    getDoc(doc(stranger.db, 'timePlanAudience', `private-plan_${bUid}`)),
+  );
   await denied("someone else's invitation grants nothing", () =>
     getDoc(doc(stranger.db, 'timePlans', 'private-plan')),
   );
 
   await adminDb.doc('timePlans/private-plan').update({ memberUids: [aUid, bUid] });
-  await allowed('server-joined member can read the time plan', () => getDoc(doc(b.db, 'timePlans', 'private-plan')));
+  await allowed('server-joined member can read the time plan', () =>
+    getDoc(doc(b.db, 'timePlans', 'private-plan')),
+  );
 
   await denied('client cannot create a private circle directly', () =>
     setDoc(doc(a.db, 'users', aUid, 'privateCircles', 'circle-a'), {
@@ -375,7 +441,7 @@ async function main() {
     createdAt: admin.firestore.Timestamp.now(),
     expireAt: admin.firestore.Timestamp.fromMillis(Date.now() + 60 * 60 * 1000),
   });
-  await allowed('owner can read own immutable notification', () =>
+  await allowed('owner can read own notification', () =>
     getDoc(doc(a.db, 'notifications', 'server-owned')),
   );
   await denied('other user cannot read notification', () =>
@@ -403,7 +469,22 @@ async function main() {
       ),
     ),
   );
-  await denied('notification documents are client-immutable', () =>
+  await allowed('owner can mark own notification seen with server time', () =>
+    updateDoc(doc(a.db, 'notifications', 'server-owned'), { seenAt: serverTimestamp() }),
+  );
+  await denied('owner cannot forge notification seen time', () =>
+    updateDoc(doc(a.db, 'notifications', 'server-owned'), { seenAt: Timestamp.now() }),
+  );
+  await denied('owner cannot change notification content while marking it seen', () =>
+    updateDoc(doc(a.db, 'notifications', 'server-owned'), {
+      body: 'Manipuliert',
+      seenAt: serverTimestamp(),
+    }),
+  );
+  await denied('other user cannot mark notification seen', () =>
+    updateDoc(doc(b.db, 'notifications', 'server-owned'), { seenAt: serverTimestamp() }),
+  );
+  await denied('notification content remains client-immutable', () =>
     updateDoc(doc(a.db, 'notifications', 'server-owned'), { readAt: serverTimestamp() }),
   );
   await denied('notification documents cannot be client-deleted', () =>
@@ -419,6 +500,11 @@ async function main() {
   });
   await denied('expired notification is sealed before TTL deletion', () =>
     getDoc(doc(a.db, 'notifications', 'expired-server-owned')),
+  );
+  await denied('expired notification cannot be marked seen', () =>
+    updateDoc(doc(a.db, 'notifications', 'expired-server-owned'), {
+      seenAt: serverTimestamp(),
+    }),
   );
   await adminDb.doc('presence/current-rule-presence').set({
     uid: bUid,
@@ -440,6 +526,16 @@ async function main() {
   });
   await allowed('audience can read current presence', () =>
     getDoc(doc(a.db, 'presence', 'current-rule-presence')),
+  );
+  await allowed('audience can run the bounded current-presence query', () =>
+    getDocs(
+      query(
+        collection(a.db, 'presence'),
+        where('audienceUids', 'array-contains', aUid),
+        where('expireAt', '>', Timestamp.fromMillis(Date.now())),
+        limit(50),
+      ),
+    ),
   );
   await denied('expired presence is sealed before TTL deletion', () =>
     getDoc(doc(a.db, 'presence', 'expired-rule-presence')),

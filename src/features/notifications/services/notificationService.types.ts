@@ -38,12 +38,8 @@ export interface NotificationDoc {
   safetyAlertAt?: number;
   createdAt: number;
   expireAt: number;
-  // No per-item read flag, on purpose. `firestore.rules` denies every client
-  // write to notifications (create/update/delete: if false) and no Cloud
-  // Function writes one, so such a field could never be set — it only promised
-  // a capability the app does not have, and `isUnread` was gating on a value
-  // that is always undefined. Read state is the single monotonic
-  // users/{uid}.notificationsSeenAt cursor.
+  /** Set only after this card was actually visible in the Postfach. */
+  seenAt?: number;
 }
 
 export type Unsubscribe = () => void;
@@ -54,8 +50,18 @@ export interface NotificationService {
     cb: (notifications: NotificationDoc[]) => void,
     onError?: (error: Error) => void,
   ): Unsubscribe;
-  markSeen(actor: NotificationActor): Promise<void>;
+  markSeen(actor: NotificationActor, notificationIds: string[]): Promise<void>;
+  resolveJourneyReminder(
+    actor: NotificationActor,
+    input: { activityId: string; notificationId?: string },
+  ): Promise<void>;
+  /** Asks for permission if it is not granted yet. Only for a deliberate opt-in. */
   registerDevice(actor: NotificationActor): Promise<boolean>;
+  /**
+   * Registers only if the OS already allows notifications, and never prompts.
+   * For boot, where a prompt would be the cold ask the product forbids.
+   */
+  registerDeviceIfPermitted(actor: NotificationActor): Promise<boolean>;
   unregisterDevice(actor: NotificationActor): Promise<void>;
   showJourneyStatus(input: {
     activityId: string;

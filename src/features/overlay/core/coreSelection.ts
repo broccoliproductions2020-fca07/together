@@ -2,7 +2,7 @@
  * Pure selection math for the Together Core.
  *
  * Deliberately free of React, Reanimated and gesture types: this is the part
- * that decides whether letting go publishes an open status, navigates, or does
+ * that decides whether letting go starts an activity, navigates, or does
  * nothing at all. Keeping it as plain functions means the dead-zone and
  * hysteresis rules can be read and reasoned about without mounting a map.
  *
@@ -76,7 +76,9 @@ export function isCoreReturnLane(x: number, y: number): boolean {
 
 /** The deeper part of the lower third, aligned with the home-bar affordance. */
 export function isCoreCloseLane(x: number, y: number): boolean {
-  return y >= CORE_RETURN_GESTURE.closeZoneTop && Math.hypot(x, y) <= CORE_RETURN_GESTURE.coreRadius;
+  return (
+    y >= CORE_RETURN_GESTURE.closeZoneTop && Math.hypot(x, y) <= CORE_RETURN_GESTURE.coreRadius
+  );
 }
 
 export function isCoreReturnGesture(x: number, y: number): boolean {
@@ -182,6 +184,8 @@ export interface GestureTrackArmedInput {
   previous: number | null;
   path: CoreGesturePathState;
   geometry?: CoreGeometry;
+  /** Optional neutral interval in continuous target coordinates. */
+  neutralZone?: { center: number; halfWidth: number };
 }
 
 export interface GestureTrackArmedResult {
@@ -234,6 +238,10 @@ function slotPositionFromAngle(
  * itself stays adaptive, so a natural stroke may change between a sideways
  * scrub and a curved mark without being captured by its first few pixels.
  */
+export function isCoreDownwardCancellation(dx: number, dy: number): boolean {
+  return dy > Math.max(18, Math.abs(dx) * 0.62);
+}
+
 function nextGesturePathState(
   path: CoreGesturePathState,
   dx: number,
@@ -255,8 +263,7 @@ function nextGesturePathState(
 
   // Preserve the map's natural "drag down = get out" affordance. A small
   // downward wobble during a deliberate side scrub is still allowed.
-  const downward = dy > Math.max(18, Math.abs(dx) * 0.62);
-  if (downward) return { track: 'cancelled', latch };
+  if (isCoreDownwardCancellation(dx, dy)) return { track: 'cancelled', latch };
 
   return { track: 'adaptive', latch };
 }
@@ -277,7 +284,8 @@ function slotIndexWithHysteresis(
   }
 
   const boundary = candidate > previous ? previous + 0.5 : previous - 0.5;
-  const cleared = candidate > previous ? position > boundary + hysteresis : position < boundary - hysteresis;
+  const cleared =
+    candidate > previous ? position > boundary + hysteresis : position < boundary - hysteresis;
   return cleared ? candidate : previous;
 }
 
@@ -296,6 +304,7 @@ export function resolveGestureTrackArmedIndex({
   previous,
   path,
   geometry = CORE_GEOMETRY,
+  neutralZone,
 }: GestureTrackArmedInput): GestureTrackArmedResult {
   const nextPath = nextGesturePathState(path, dx, dy, geometry);
   const held = (index: number | null): GestureTrackArmedResult => ({
@@ -304,11 +313,7 @@ export function resolveGestureTrackArmedIndex({
     position: null,
     latched: nextPath.latch != null,
     reArmProgress: nextPath.latch
-      ? clamp(
-          Math.hypot(dx - nextPath.latch.x, dy - nextPath.latch.y) / geometry.reArmRadius,
-          0,
-          1,
-        )
+      ? clamp(Math.hypot(dx - nextPath.latch.x, dy - nextPath.latch.y) / geometry.reArmRadius, 0, 1)
       : clamp(Math.hypot(dx, dy) / geometry.deadZoneRadius, 0, 1),
   });
 
@@ -329,8 +334,7 @@ export function resolveGestureTrackArmedIndex({
   if (previous == null && radius < geometry.deadZoneRadius) return held(previous);
 
   const lastIndex = angles.length - 1;
-  const railPosition =
-    ((clamp(dx / Math.max(1, horizontalReach), -1, 1) + 1) * lastIndex) / 2;
+  const railPosition = ((clamp(dx / Math.max(1, horizontalReach), -1, 1) + 1) * lastIndex) / 2;
   // A real thumb does not stay loyal to a mathematical path: it may begin as
   // a sideways scrub, then climb into an arc (or the other way around). The
   // old locked grammar picked one coordinate system from the first sample and
@@ -346,6 +350,19 @@ export function resolveGestureTrackArmedIndex({
   const upward = Math.max(0, -dy);
   const radialWeight = clamp((upward - 4) / (Math.abs(dx) * 0.85 + 20), 0, 1);
   const position = railPosition + (radialPosition - railPosition) * radialWeight;
+
+  if (
+    neutralZone &&
+    Math.abs(position - neutralZone.center) <= Math.max(0, neutralZone.halfWidth)
+  ) {
+    return {
+      index: null,
+      path: nextPath,
+      position,
+      latched: false,
+      reArmProgress: 1,
+    };
+  }
 
   return {
     index: slotIndexWithHysteresis(position, angles.length, previous, geometry.slotHysteresis),

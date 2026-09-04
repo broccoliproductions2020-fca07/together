@@ -47,11 +47,11 @@ export interface TimePlan {
   lockedWindowId?: string;
   lockedStartsAt?: string;
   lockedEndsAt?: string;
-  memberUids: string[];
-  /** Everyone the round was addressed to. Server-written and readable by the
-   * whole audience, which is what lets an invitee see "3 von 5" before they
-   * have answered — the member docs themselves stay closed to them. */
-  audienceUids: string[];
+  /** Counts are enough for progress; identities stay in member documents. */
+  memberCount: number;
+  audienceCount: number;
+  /** Viewer-relative flag from the private audience projection. */
+  joined: boolean;
   createdAt: number;
   updatedAt: number;
   expireAt: number;

@@ -19,7 +19,7 @@ export interface NotificationGroup {
 /**
  * How long a `journey_reminder` can possibly still mean something.
  *
- * It is an OFFER ("Anreise teilen? Zum Aktivieren tippen"), sent up to
+ * It is an OFFER ("Möchtest du deine Anreise teilen?"), sent up to
  * `JOURNEY_REMINDER_LEAD_MS` (1 h) before the activity starts, and it dies with
  * the activity. The longest an activity can run is the composer's 12 h maximum,
  * plus `JOURNEY_BUFFER_MS` (30 min) of grace — so 14 h after the reminder was

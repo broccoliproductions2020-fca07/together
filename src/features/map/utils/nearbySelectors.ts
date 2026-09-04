@@ -100,3 +100,13 @@ export function selectFriendsWithoutLocation(
 export function selectNearbyCount(friends: NearbyFriend[], radiusKm: number): number {
   return selectNearbyFriends(friends, radiusKm).length;
 }
+
+/** Open friends who share a pin but currently sit beyond the selected radius. */
+export function selectOutsideRadiusCount(friends: NearbyFriend[], radiusKm: number): number {
+  return friends.filter(
+    (friend) =>
+      friend.locationVisibility === 'pin' &&
+      typeof friend.distanceKm === 'number' &&
+      friend.distanceKm > radiusKm,
+  ).length;
+}

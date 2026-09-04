@@ -4,7 +4,17 @@ import { Pressable, Text, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 
+import { shadow } from '@/shared/theme';
+
 import { formatDurationLabel } from '../utils/datetime';
+
+const THUMB_SHADOW = shadow({
+  color: '#000000',
+  offsetY: 2,
+  radius: 5,
+  opacity: 0.2,
+  elevation: 4,
+});
 
 const MIN_DURATION_MINUTES = 15;
 const MAX_DURATION_MINUTES = 12 * 60;
@@ -18,33 +28,44 @@ const SLIDER_HEIGHT = 36;
  * Short, spontaneous activities get most of the track. The visual distance is
  * deliberately non-linear, while every position still snaps to a clear value.
  */
-function durationToFraction(minutes: number): number {
+function durationToFullFraction(minutes: number): number {
   const safe = Math.max(MIN_DURATION_MINUTES, Math.min(MAX_DURATION_MINUTES, minutes));
   if (safe <= 240) return ((safe - MIN_DURATION_MINUTES) / 225) * 0.8;
   return 0.8 + ((safe - 240) / 480) * 0.2;
 }
 
-function fractionToDurationRaw(fraction: number): number {
+function fullFractionToDuration(fraction: number): number {
   const safe = Math.max(0, Math.min(1, fraction));
   if (safe <= 0.8) return MIN_DURATION_MINUTES + (safe / 0.8) * 225;
   return 240 + ((safe - 0.8) / 0.2) * 480;
 }
 
-function snapDuration(minutes: number): number {
+function durationToFraction(minutes: number, maxMinutes: number): number {
+  const maxFraction = Math.max(0.001, durationToFullFraction(maxMinutes));
+  return Math.min(1, durationToFullFraction(minutes) / maxFraction);
+}
+
+function fractionToDurationRaw(fraction: number, maxMinutes: number): number {
+  const maxFraction = durationToFullFraction(maxMinutes);
+  return fullFractionToDuration(Math.max(0, Math.min(1, fraction)) * maxFraction);
+}
+
+function snapDuration(minutes: number, maxMinutes: number): number {
   const step = minutes <= 240 ? 15 : 120;
   return Math.max(
     MIN_DURATION_MINUTES,
-    Math.min(MAX_DURATION_MINUTES, Math.round(minutes / step) * step),
+    Math.min(maxMinutes, Math.round(minutes / step) * step),
   );
 }
 
-function normaliseDuration(minutes: number): number {
-  return snapDuration(Math.max(MIN_DURATION_MINUTES, minutes));
+function normaliseDuration(minutes: number, maxMinutes: number): number {
+  return snapDuration(Math.max(MIN_DURATION_MINUTES, minutes), maxMinutes);
 }
 
 export interface DurationPickerProps {
   minutes: number;
   accent: string;
+  maxMinutes?: number;
   onChange: (minutes: number) => void;
 }
 
@@ -52,28 +73,47 @@ export interface DurationPickerProps {
  * Keeps the normal start/end fields untouched. The duration pill is an
  * optional shortcut: on tap a compact slider grows to its right.
  */
-export function DurationPicker({ minutes, accent, onChange }: DurationPickerProps) {
+export function DurationPicker({
+  minutes,
+  accent,
+  maxMinutes = MAX_DURATION_MINUTES,
+  onChange,
+}: DurationPickerProps) {
+  const boundedMaxMinutes = Math.max(
+    MIN_DURATION_MINUTES,
+    Math.min(MAX_DURATION_MINUTES, maxMinutes),
+  );
   const [expanded, setExpanded] = useState(false);
-  const [liveMinutes, setLiveMinutes] = useState(() => normaliseDuration(minutes));
+  const [liveMinutes, setLiveMinutes] = useState(() =>
+    normaliseDuration(minutes, boundedMaxMinutes),
+  );
   const [trackWidth, setTrackWidth] = useState(0);
   const dragStart = useRef(0);
   const thumbX = useSharedValue(0);
 
   const maxX = useCallback(() => Math.max(0, trackWidth - THUMB_TOUCH_SIZE), [trackWidth]);
   const minutesToX = useCallback(
-    (nextMinutes: number) => durationToFraction(normaliseDuration(nextMinutes)) * maxX(),
-    [maxX],
+    (nextMinutes: number) =>
+      durationToFraction(
+        normaliseDuration(nextMinutes, boundedMaxMinutes),
+        boundedMaxMinutes,
+      ) * maxX(),
+    [boundedMaxMinutes, maxX],
   );
   const xToMinutes = useCallback(
-    (x: number) => normaliseDuration(fractionToDurationRaw(maxX() > 0 ? x / maxX() : 0)),
-    [maxX],
+    (x: number) =>
+      normaliseDuration(
+        fractionToDurationRaw(maxX() > 0 ? x / maxX() : 0, boundedMaxMinutes),
+        boundedMaxMinutes,
+      ),
+    [boundedMaxMinutes, maxX],
   );
 
   useEffect(() => {
-    const nextMinutes = normaliseDuration(minutes);
+    const nextMinutes = normaliseDuration(minutes, boundedMaxMinutes);
     setLiveMinutes(nextMinutes);
     if (trackWidth > 0) thumbX.value = minutesToX(nextMinutes);
-  }, [minutes, minutesToX, thumbX, trackWidth]);
+  }, [boundedMaxMinutes, minutes, minutesToX, thumbX, trackWidth]);
 
   const updateFromX = useCallback(
     (x: number, commit = false) => {
@@ -106,7 +146,7 @@ export function DurationPicker({ minutes, accent, onChange }: DurationPickerProp
 
   function adjustBy(direction: 1 | -1) {
     const step = direction > 0 ? (liveMinutes < 240 ? 15 : 120) : liveMinutes <= 240 ? 15 : 120;
-    const next = normaliseDuration(liveMinutes + direction * step);
+    const next = normaliseDuration(liveMinutes + direction * step, boundedMaxMinutes);
     if (next === liveMinutes) return;
     setLiveMinutes(next);
     thumbX.value = withSpring(minutesToX(next), { damping: 24, stiffness: 340 });
@@ -150,7 +190,7 @@ export function DurationPicker({ minutes, accent, onChange }: DurationPickerProp
           accessibilityLabel="Dauer"
           accessibilityValue={{
             min: MIN_DURATION_MINUTES,
-            max: MAX_DURATION_MINUTES,
+            max: boundedMaxMinutes,
             now: liveMinutes,
             text: formatDurationLabel(liveMinutes),
           }}
@@ -217,11 +257,7 @@ export function DurationPicker({ minutes, accent, onChange }: DurationPickerProp
                   backgroundColor: '#F7F8FA',
                   borderWidth: 2,
                   borderColor: accent,
-                  shadowColor: '#000000',
-                  shadowOffset: { width: 0, height: 2 },
-                  shadowOpacity: 0.2,
-                  shadowRadius: 5,
-                  elevation: 4,
+                  ...THUMB_SHADOW,
                 }}
               />
             </Animated.View>

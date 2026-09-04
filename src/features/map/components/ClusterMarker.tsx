@@ -17,6 +17,7 @@ export interface ClusterMarkerProps {
   label?: string;
   progress: SharedValue<number>;
   titlePriority?: boolean;
+  unreadCount?: number;
   maxParticipants?: number;
   category?: ActivityCategory;
   remainingFraction?: number;
@@ -33,6 +34,7 @@ export function ClusterMarker({
   label,
   progress,
   titlePriority = false,
+  unreadCount = 0,
   category,
   remainingFraction,
   journeyUnderwayCount = 0,
@@ -47,10 +49,11 @@ export function ClusterMarker({
       count={count}
       progress={progress}
       category={category}
+      unreadCount={unreadCount}
       remainingFraction={remainingFraction}
       selected={selected}
       title={label}
-      titlePriority={titlePriority || selected}
+      titlePriority={titlePriority}
       journeyUnderwayCount={journeyUnderwayCount}
     />
   );

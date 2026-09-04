@@ -141,6 +141,8 @@ export function placeSelectionToComposerPlace(place: PlaceSelection): SelectedPl
 export function coordinateFromSelection(selection: MapSelection | null) {
   if (!selection) return undefined;
   if (selection.type === 'Place') return selection.coordinate;
+  if (selection.type === 'Planning') return selection.coordinate;
+  if (selection.type === 'ActivityStack') return selection.coordinate;
   if (selection.type === 'Avatar' || selection.type === 'Cluster') {
     return selection.targetCoordinate;
   }
@@ -161,6 +163,8 @@ export function infoToActivityPreview(info: ActivityInfo): ActivitySelectionPrev
     placeLabel: info.placeLabel,
     startsAt: info.startsAt,
     endsAt: info.endsAt,
+    hostId: info.hostId,
+    guestInvitesEnabled: info.guestInvitesEnabled,
   };
 }
 

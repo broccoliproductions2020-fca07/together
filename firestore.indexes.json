@@ -272,6 +272,20 @@
         },
         {
           "fieldPath": "expireAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "notifications",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "recipientUid",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "expireAt",
           "order": "ASCENDING"
         },
         {
@@ -299,12 +313,12 @@
       ]
     },
     {
-      "collectionGroup": "timePlans",
+      "collectionGroup": "timePlanAudience",
       "queryScope": "COLLECTION",
       "fields": [
         {
-          "fieldPath": "audienceUids",
-          "arrayConfig": "CONTAINS"
+          "fieldPath": "audienceUid",
+          "order": "ASCENDING"
         },
         {
           "fieldPath": "status",
@@ -338,6 +352,12 @@
     },
     {
       "collectionGroup": "timePlanInvites",
+      "fieldPath": "expireAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "timePlanAudience",
       "fieldPath": "expireAt",
       "ttl": true,
       "indexes": []
@@ -683,6 +703,11 @@
     {
       "collectionGroup": "friendSearch",
       "fieldPath": "nameTokens",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "friendSearch",
+      "fieldPath": "searchPrefixes",
       "indexes": []
     },
     {

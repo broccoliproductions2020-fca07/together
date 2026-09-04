@@ -111,24 +111,24 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Server-owned in both directions: no client may read this collection and
+    // no client may write it. Shape and limits are enforced by the callables
+    // that own it (`claimUsername`, `updateOwnProfile`) — a validator here
+    // would only look like a second authority while checking nothing, since
+    // every write already arrives through the Admin SDK.
     match /publicProfiles/{uid} {
-      function validPublicProfile(data) {
-        return data.keys().hasOnly([
-            'displayName', 'username', 'initials', 'avatarUrl', 'createdAt'
-          ])
-          && data.displayName is string && data.displayName.size() <= 50
-          && data.username is string && data.username.size() <= 30
-          && data.initials is string && data.initials.size() <= 8
-          && (!('avatarUrl' in data) || validAvatarUrl(data.avatarUrl, uid))
-          && data.createdAt is timestamp;
-      }
-
       // The client never gets a globally readable profile directory. Contextual
       // contact cards are resolved through trusted callables instead.
       allow read: if false;
-      allow create: if signedIn()
-        && request.auth.uid == uid
-        && validPublicProfile(request.resource.data);
+      // Creation is callable-only, and the field that forces it is `username`.
+      // Nothing here can check that the handle is actually CLAIMED
+      // (`usernames/{name}`), so a client-written profile could carry somebody
+      // else's — and `updateOwnProfile` reads the handle back out of this very
+      // document to build the search entry, which would have put an impostor
+      // into people search under a real person's @name. `claimUsername` writes
+      // both documents in one transaction and is the only thing that can prove
+      // the pair belongs together. The app never wrote this document itself.
+      allow create: if false;
       // Unlike displayName/initials/avatarUrl, username and createdAt must
       // stay fixed after creation — username has its own claim transaction,
       // and createdAt is an identity fact, not an editable profile field.
@@ -296,22 +296,12 @@ service cloud.firestore {
     // A time plan is deliberately not an Activity: it has no marker, no chat
     // and no fixed date until the host later locks one.
     //
-    // TWO tiers, because joining IS answering and the answer surface has to
-    // open BEFORE anyone is a member. An invitee may read the ROUND — title,
-    // place and the proposed windows, i.e. exactly what they need in order to
-    // answer, and what puts the round on their map — and nothing else.
-    // Availability stays members-only: someone who has not shared their own
-    // times does not get to read everyone else's.
-    //
-    // `audienceUids` rather than a lookup in `timePlanInvites`: a rule that
-    // reads another document cannot back a QUERY without one extra read per
-    // result, so listing your own rounds would have been impossible. Same
-    // denormalisation an Activity's audience already uses. The invitations
-    // themselves stay unreadable, so nobody can enumerate who else was asked.
+    // Full plans and member answers are members-only. Invitees read their own
+    // safe projection below, so the plan document never leaks the identities
+    // of other invitees or participants before they join.
     match /timePlans/{planId} {
       allow read: if signedIn()
-        && (request.auth.uid in resource.data.memberUids
-            || request.auth.uid in resource.data.audienceUids);
+        && request.auth.uid in resource.data.memberUids;
       allow create, update, delete: if false;
 
       match /timePlanMembers/{uid} {
@@ -319,6 +309,15 @@ service cloud.firestore {
           && request.auth.uid in get(/databases/$(database)/documents/timePlans/$(planId)).data.memberUids;
         allow create, update, delete: if false;
       }
+    }
+
+    // One projection per audience member supports one bounded inbox query
+    // without putting the complete audience list into a client-readable doc.
+    match /timePlanAudience/{audienceId} {
+      allow read: if signedIn()
+        && resource.data.audienceUid == request.auth.uid
+        && resource.data.expireAt > request.time;
+      allow create, update, delete: if false;
     }
 
     // Private server authorization for a notification invitation. A client
@@ -362,7 +361,8 @@ service cloud.firestore {
       }
 
       allow read: if signedIn()
-        && request.auth.uid in resource.data.audienceUids;
+        && request.auth.uid in resource.data.audienceUids
+        && resource.data.expireAt > request.time;
       // Presence is published through a callable so the server derives the
       // audience from accepted direct friendships. Clients may only clear their
       // own presence immediately.
@@ -406,14 +406,19 @@ service cloud.firestore {
     }
 
     // ---------- notifications/{notificationId} ----------
-    // Notification documents are immutable server projections. The account's
-    // monotonic users/{uid}.notificationsSeenAt cursor records what was seen.
+    // Notification content is a server projection. Its recipient may only add
+    // the server-timestamped seen marker after the card was visible locally.
     match /notifications/{notificationId} {
       // Provable-for-lists (see activities read rule).
       allow read: if signedIn()
         && resource.data.recipientUid == request.auth.uid
         && resource.data.expireAt > request.time;
-      allow create, update, delete: if false;
+      allow update: if signedIn()
+        && resource.data.recipientUid == request.auth.uid
+        && resource.data.expireAt > request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['seenAt'])
+        && request.resource.data.seenAt == request.time;
+      allow create, delete: if false;
     }
 
     // ---------- chats/{roomId} ----------

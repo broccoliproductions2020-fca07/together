@@ -5,7 +5,6 @@ import {
   type NativeSyntheticEvent,
   Pressable,
   Text,
-  useWindowDimensions,
   View,
 } from 'react-native';
 
@@ -25,6 +24,15 @@ const VISIBLE = 7;
 const INITIAL_DAY_INDEX = WEEKS_BEFORE * VISIBLE;
 
 export interface WeekStripProps {
+  /**
+   * The width of ONE week page — passed in, never read off the window.
+   *
+   * The strip lives inside a floating card that is narrower than the screen,
+   * and it snaps by the page: taking the window width put the seventh day of
+   * every week past the card's right edge. The host owns the geometry; this
+   * component only has to divide it by seven.
+   */
+  width: number;
   /** The day the agenda is currently scrolled to — highlighted, and the strip
    * auto-scrolls to its week (so it "jumps" as the agenda crosses weeks). */
   activeKey: string | null;
@@ -38,8 +46,7 @@ export interface WeekStripProps {
  * `activeKey` moves into another week, the wheel scrolls to that week. Manual
  * swiping is pure browsing (it doesn't move the agenda) so the two never fight.
  */
-export function WeekStrip({ activeKey, onSelect }: WeekStripProps) {
-  const { width } = useWindowDimensions();
+export function WeekStrip({ width, activeKey, onSelect }: WeekStripProps) {
   const cellWidth = width / VISIBLE;
   const todayKey = dateKey(new Date());
 

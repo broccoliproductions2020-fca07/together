@@ -1,4 +1,5 @@
-import { FONT } from '@/shared/theme';
+import { FONT } from '../../theme';
+import { withAlpha } from '@/shared/utils/colorAlpha';
 
 /**
  * Every visual value the picker owns, and nothing the interaction depends on.
@@ -199,37 +200,6 @@ export function handleHeightPx(handle: HandleTheme, trackHeight: number): number
   return handle.height === 'fill' ? trackHeight : handle.height;
 }
 
-/**
- * Multiplies an opacity into a colour.
- *
- * React Native has no `border-opacity`, and putting the opacity on the VIEW
- * would fade everything inside it — for the range that means its own duration
- * label. Folding the alpha into the colour keeps the two tokens independent,
- * which is what the styling contract promises. Unparseable colours are returned
- * untouched rather than silently turned transparent.
- */
-export function withAlpha(color: string, alpha: number): string {
-  if (alpha >= 1) return color;
-  const clamped = Math.max(0, Math.min(1, alpha));
-
-  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim());
-  if (hex) {
-    const raw = hex[1];
-    const full = raw.length === 3 ? raw.replace(/./g, (c) => c + c) : raw;
-    const r = parseInt(full.slice(0, 2), 16);
-    const g = parseInt(full.slice(2, 4), 16);
-    const b = parseInt(full.slice(4, 6), 16);
-    return `rgba(${r}, ${g}, ${b}, ${clamped})`;
-  }
-
-  const rgb = /^rgba?\(([^)]+)\)$/i.exec(color.trim());
-  if (rgb) {
-    const parts = rgb[1].split(',').map((part) => part.trim());
-    if (parts.length >= 3) {
-      const existing = parts.length >= 4 ? Number(parts[3]) : 1;
-      const merged = (Number.isFinite(existing) ? existing : 1) * clamped;
-      return `rgba(${parts[0]}, ${parts[1]}, ${parts[2]}, ${merged})`;
-    }
-  }
-  return color;
-}
+// One implementation for the whole app — see the util for why an
+// `#RRGGBBAA` suffix is not a safe substitute.
+export { withAlpha };

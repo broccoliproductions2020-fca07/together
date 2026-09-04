@@ -37,20 +37,23 @@ export interface MarkerFace {
 export function buildMarkerFaces(avatars: MarkerAvatar[], count: number): MarkerFace[] {
   const maxFaces = MARKER_MAX_FACES;
   const total = Math.max(count, avatars.length, 1);
-  if (total <= maxFaces) {
-    return avatars.slice(0, total).map((avatar) => ({
+  const visibleAvatarLimit = total > maxFaces ? maxFaces - 1 : maxFaces;
+  const shown: MarkerFace[] = avatars
+    .slice(0, Math.min(total, visibleAvatarLimit))
+    .map((avatar) => ({
       key: avatar.userId,
       avatarUrl: avatar.avatarUrl,
       initials: avatar.initials,
     }));
+  const hiddenCount = Math.max(0, total - shown.length);
+  if (hiddenCount > 0 && shown.length < maxFaces) {
+    shown.push({ key: '__overflow__', overflowLabel: `+${hiddenCount}` });
   }
-  const shown: MarkerFace[] = avatars.slice(0, maxFaces - 1).map((avatar) => ({
-    key: avatar.userId,
-    avatarUrl: avatar.avatarUrl,
-    initials: avatar.initials,
-  }));
-  shown.push({ key: '__overflow__', overflowLabel: `+${total - (maxFaces - 1)}` });
   return shown;
+}
+
+export function visibleMarkerFaceCount(avatars: MarkerAvatar[], count: number) {
+  return Math.max(1, buildMarkerFaces(avatars, count).length);
 }
 
 export interface FacePoint {
@@ -63,13 +66,20 @@ export interface FacePoint {
  * horizontal row (street), in the marker's 112×… capture space. Same face index
  * maps grid→row, so the morph is a stable slide, never a reshuffle.
  */
-export function quadCenters(faceCount: number, cx: number, cy: number): FacePoint[] {
+export function quadCenters(
+  faceCount: number,
+  cx: number,
+  cy: number,
+  spread: number,
+): FacePoint[] {
   const visibleCount = Math.max(1, Math.min(faceCount, MARKER_MAX_FACES));
-  // The compact stage deliberately leaves breathing room to the mode ring.
-  // With 16–18 px avatar squircles, ±8.5 keeps even four faces fully inside
-  // the 48 px marker throughout the entire 2×2 zoom band.
-  const hx = 8.5;
-  const vy = 8.5;
+  // `spread` is owned by the marker layout, NOT by this file: how far the quad
+  // may open depends on the shell it sits in, and that shell has changed size
+  // twice. A constant here went stale silently — it was tuned for a 48 px
+  // shell and left four avatars poking 1.3 px out of the 38 px one, which no
+  // test could see and only a device screenshot showed.
+  const hx = spread;
+  const vy = spread;
   switch (visibleCount) {
     case 1:
       return [{ x: cx, y: cy }];

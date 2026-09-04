@@ -11,12 +11,17 @@ const compiled = ts.transpileModule(source, {
   fileName: sourcePath.pathname,
 });
 const module = { exports: {} };
-vm.runInNewContext(compiled.outputText, { Math, Number, exports: module.exports, module }, { filename: sourcePath.pathname });
+vm.runInNewContext(
+  compiled.outputText,
+  { Math, Number, exports: module.exports, module },
+  { filename: sourcePath.pathname },
+);
 
 const {
   arcAngles,
   createCoreGesturePathState,
   isCoreCloseLane,
+  isCoreDownwardCancellation,
   isCoreReturnGesture,
   isCoreReturnLane,
   obliqueSectorWeights,
@@ -25,11 +30,13 @@ const {
   sectorBoundaries,
 } = module.exports;
 
-const rootAngles = arcAngles(4, (132 * Math.PI) / 180);
+const rootAngles = arcAngles(5, (148 * Math.PI) / 180);
 const rootWeights = obliqueSectorWeights(rootAngles, 0.3);
 const activityAngles = arcAngles(2, (52 * Math.PI) / 180);
-const rootRailReach = 60;
-assert.equal(rootAngles.length, 4, 'the root orbit contains the four requested actions');
+const activityNeutralZone = { center: 0.5, halfWidth: 0.08 };
+const rootRailReach = 70;
+assert.equal(rootAngles.length, 5, 'the root orbit contains the five requested actions');
+assert.equal(activityAngles.length, 2, 'Starten contains only Jetzt and Soon');
 // These coordinates are measured from the CORE CENTRE, not from the touch.
 // The home-bar-like arc is only a visual hint: the lower third of the circular
 // thumb pad is the target, so no one has to hit the drawn marker precisely.
@@ -40,11 +47,18 @@ assert.equal(isCoreReturnLane(0, 57), true, 'the upper part of the lower third i
 assert.equal(isCoreReturnLane(0, 58), false, 'the home-bar depth is not also return');
 assert.equal(isCoreCloseLane(0, 57), false, 'close starts below the return band');
 assert.equal(isCoreCloseLane(0, 58), true, 'the deepest lower zone is immediate close');
-assert.equal(isCoreReturnGesture(58, 35), true, 'the whole lower area, not only its centre, is reserved');
+assert.equal(
+  isCoreReturnGesture(58, 35),
+  true,
+  'the whole lower area, not only its centre, is reserved',
+);
 assert.equal(isCoreReturnGesture(80, 35), false, 'the return area never escapes the circular Core');
 assert.equal(isCoreCloseLane(80, 64), false, 'close never escapes the circular Core');
 
-function trace(points, { angles, weights, horizontalReach, latch = null, previous = null }) {
+function trace(
+  points,
+  { angles, weights, horizontalReach, latch = null, previous = null, neutralZone },
+) {
   let path = createCoreGesturePathState(latch);
   let index = previous;
   let result = null;
@@ -58,6 +72,7 @@ function trace(points, { angles, weights, horizontalReach, latch = null, previou
       horizontalReach,
       previous: index,
       path,
+      neutralZone,
     });
     index = result.index;
     path = result.path;
@@ -75,12 +90,17 @@ const direct = trace([[Math.sin(directAngle) * 110, -Math.cos(directAngle) * 110
 assert.equal(direct.index, 2, 'a direct radial mark selects its visible target');
 assert.equal(direct.path.track, 'adaptive', 'a diagonal mark uses the adaptive coordinate');
 
-const outerRadial = trace(
-  [[Math.sin(rootAngles[3]) * 110, -Math.cos(rootAngles[3]) * 110]],
-  { angles: rootAngles, weights: rootWeights, horizontalReach: rootRailReach },
+const outerRadial = trace([[Math.sin(rootAngles[4]) * 110, -Math.cos(rootAngles[4]) * 110]], {
+  angles: rootAngles,
+  weights: rootWeights,
+  horizontalReach: rootRailReach,
+});
+assert.equal(outerRadial.index, 4, 'the outer root action remains reachable by a radial mark');
+assert.equal(
+  outerRadial.path.track,
+  'adaptive',
+  'an outer radial mark stays continuously reachable',
 );
-assert.equal(outerRadial.index, 3, 'the outer root action remains reachable by a radial mark');
-assert.equal(outerRadial.path.track, 'adaptive', 'an outer radial mark stays continuously reachable');
 
 const mixedCurve = trace(
   [
@@ -91,26 +111,26 @@ const mixedCurve = trace(
   ],
   { angles: rootAngles, weights: rootWeights, horizontalReach: rootRailReach },
 );
-assert.equal(mixedCurve.index, 2, 'a loose, mixed curve selects the same target as a clean mark');
+assert.equal(mixedCurve.index, 3, 'a loose, mixed curve selects the matching visible target');
 assert.equal(mixedCurve.path.track, 'adaptive', 'a loose curve stays continuously interpretable');
 
 const sidewaysRail = trace(
   [
     [0, 0],
-    [24, 0],
-    [48, 0],
+    [35, 0],
+    [70, 0],
   ],
   { angles: rootAngles, weights: rootWeights, horizontalReach: rootRailReach },
 );
-assert.equal(sidewaysRail.index, 3, 'a side scrub from the core reaches the rightmost root target');
+assert.equal(sidewaysRail.index, 4, 'a side scrub from the core reaches the rightmost root target');
 assert.equal(sidewaysRail.path.track, 'adaptive', 'a side scrub uses the adaptive coordinate');
 
-const leftRail = trace([[-48, 0]], {
+const leftRail = trace([[-70, 0]], {
   angles: rootAngles,
   weights: rootWeights,
   horizontalReach: rootRailReach,
 });
-assert.equal(leftRail.index, 0, 'the leftmost root target is reachable within 48 px of travel');
+assert.equal(leftRail.index, 0, 'the leftmost root target is reachable within 70 px of travel');
 
 const railReturnedHome = trace(
   [
@@ -119,33 +139,41 @@ const railReturnedHome = trace(
   ],
   { angles: rootAngles, weights: rootWeights, horizontalReach: rootRailReach },
 );
-assert.equal(railReturnedHome.index, 2, 'returning through the centre preserves the armed scrub target');
-assert.equal(railReturnedHome.path.track, 'adaptive', 'returning home keeps the adaptive coordinate');
+assert.equal(
+  railReturnedHome.index,
+  2,
+  'returning through the centre preserves the armed scrub target',
+);
+assert.equal(
+  railReturnedHome.path.track,
+  'adaptive',
+  'returning home keeps the adaptive coordinate',
+);
 
 const throughCentreRail = trace(
   [
-    [-60, 0],
-    [-18, 0],
+    [-70, 0],
+    [-35, 0],
     [0, 0],
-    [18, 0],
-    [60, 0],
+    [35, 0],
+    [70, 0],
   ],
   { angles: rootAngles, weights: rootWeights, horizontalReach: rootRailReach },
 );
 assert.deepEqual(
   throughCentreRail.indices,
-  [0, 1, 1, 2, 3],
-  'a horizontal pass crosses both central root targets instead of jumping over them',
+  [0, 1, 2, 3, 4],
+  'a horizontal pass reaches all five root targets without jumping over one',
 );
 
 const railMixed = trace(
   [
-    [32, -4],
-    [58, -40],
+    [40, -4],
+    [70, -40],
   ],
   { angles: rootAngles, weights: rootWeights, horizontalReach: rootRailReach },
 );
-assert.equal(railMixed.index, 3, 'a line that later curves keeps its initial scrub meaning');
+assert.equal(railMixed.index, 4, 'a line that later curves keeps its initial scrub meaning');
 assert.equal(railMixed.path.track, 'adaptive', 'a scrub can smoothly become a curve mid-gesture');
 
 const activityLine = trace(
@@ -153,10 +181,14 @@ const activityLine = trace(
     [0, 0],
     [50, 0],
   ],
-  { angles: activityAngles, horizontalReach: 66 },
+  { angles: activityAngles, horizontalReach: 66, neutralZone: activityNeutralZone },
 );
 assert.equal(activityLine.index, 1, 'a horizontal thumb line selects Soon without tracing the arc');
-assert.equal(activityLine.path.track, 'adaptive', 'Jetzt/Soon uses the same adaptive coordinate');
+assert.equal(
+  activityLine.path.track,
+  'adaptive',
+  'the Starten level uses the same adaptive coordinate',
+);
 
 const returnedHome = trace(
   [
@@ -164,9 +196,27 @@ const returnedHome = trace(
     [46, -56],
     [0, 0],
   ],
-  { angles: activityAngles, horizontalReach: 66 },
+  { angles: activityAngles, horizontalReach: 66, neutralZone: activityNeutralZone },
 );
-assert.equal(returnedHome.index, 1, 'returning through the core preserves the pending activity selection');
+assert.equal(returnedHome.index, null, 'the visual gap between Jetzt and Soon is neutral');
+
+const activityStraightUp = trace([[0, -80]], {
+  angles: activityAngles,
+  horizontalReach: 66,
+  neutralZone: activityNeutralZone,
+});
+assert.equal(
+  activityStraightUp.index,
+  null,
+  'straight up never silently favours Jetzt between the two visible cards',
+);
+
+const activityLeft = trace([[-24, 0]], {
+  angles: activityAngles,
+  horizontalReach: 66,
+  neutralZone: activityNeutralZone,
+});
+assert.equal(activityLeft.index, 0, 'a deliberate left mark selects Jetzt');
 
 const downDrag = trace([[0, 72]], {
   angles: rootAngles,
@@ -175,15 +225,25 @@ const downDrag = trace([[0, 72]], {
 });
 assert.equal(downDrag.index, null, 'a drag down the map remains a cancel, never a command');
 assert.equal(downDrag.path.track, 'cancelled', 'a downward start stays a cancellation');
+assert.equal(
+  isCoreDownwardCancellation(0, 24),
+  true,
+  'the opening hold and the open orbit share the same downward cancellation',
+);
+assert.equal(
+  isCoreDownwardCancellation(36, 18),
+  false,
+  'an early sideways mark remains eligible to open the orbit',
+);
 
 const armedThenDown = trace(
   [
-    [48, 0],
+    [70, 0],
     [0, 72],
   ],
   { angles: rootAngles, weights: rootWeights, horizontalReach: rootRailReach },
 );
-assert.equal(armedThenDown.index, 3, 'only the dedicated return lane can clear an armed action');
+assert.equal(armedThenDown.index, 4, 'only the dedicated return lane can clear an armed action');
 
 const cancelledThenSideways = trace(
   [
@@ -212,18 +272,17 @@ const cancelledThenHome = trace(
 assert.equal(cancelledThenHome.path.track, 'adaptive', 'moving up clears a cancelled track');
 assert.equal(cancelledThenHome.index, 1, 'the same hold can still choose after a cancelled dip');
 
-// The level-change latch. "Aktivität" sits at -22 deg and "Jetzt" at -26 deg, so
-// a thumb that dwelled on the former lands squarely on the latter the moment the
-// sub-level opens under it. Holding to SEE the two options must never create one.
+// The level-change latch prevents a stationary thumb from selecting the child
+// that appears under it when Starten unfolds.
 const dwellPoint = {
-  x: Math.sin(rootAngles[1]) * 80,
-  y: -Math.cos(rootAngles[1]) * 80,
+  x: Math.sin(rootAngles[2]) * 80,
+  y: -Math.cos(rootAngles[2]) * 80,
 };
 const unlatched = trace([[dwellPoint.x, dwellPoint.y]], {
   angles: activityAngles,
   horizontalReach: 66,
 });
-assert.equal(unlatched.index, 0, 'without a latch the unchanged thumb position arms Jetzt');
+assert.notEqual(unlatched.index, null, 'without a latch the unchanged thumb position arms a child');
 
 const latched = trace([[dwellPoint.x, dwellPoint.y]], {
   angles: activityAngles,
@@ -232,7 +291,11 @@ const latched = trace([[dwellPoint.x, dwellPoint.y]], {
 });
 assert.equal(latched.index, null, 'a level change arms nothing until the thumb moves');
 assert.equal(latched.latched, true, 'the latch reports itself so the indicator can show it');
-assert.equal(latched.path.track, 'adaptive', 'a latched path never commits a movement mode on jitter');
+assert.equal(
+  latched.path.track,
+  'adaptive',
+  'a latched path never commits a movement mode on jitter',
+);
 
 const latchJitter = trace(
   [
@@ -260,15 +323,19 @@ assert.equal(latchReleased.latched, false, 'the latch clears once, and stays cle
 
 // The weighted radial bounds remain ordered inside the adaptive coordinate;
 // blending must never make a rightward sweep reverse or skip an action.
-const adaptiveBounds = sectorBoundaries(rootAngles, rootWeights).map((angle) =>
-  trace([[Math.sin(angle) * 80, -Math.cos(angle) * 80]], {
-    angles: rootAngles,
-    weights: rootWeights,
-    horizontalReach: rootRailReach,
-  }).position,
+const adaptiveBounds = sectorBoundaries(rootAngles, rootWeights).map(
+  (angle) =>
+    trace([[Math.sin(angle) * 80, -Math.cos(angle) * 80]], {
+      angles: rootAngles,
+      weights: rootWeights,
+      horizontalReach: rootRailReach,
+    }).position,
 );
 adaptiveBounds.slice(1).forEach((position, index) => {
-  assert.ok(position > (adaptiveBounds[index] ?? -Infinity), 'adaptive boundaries stay in visual order');
+  assert.ok(
+    position > (adaptiveBounds[index] ?? -Infinity),
+    'adaptive boundaries stay in visual order',
+  );
 });
 
 const lineIntoCurve = trace(
@@ -281,10 +348,17 @@ const lineIntoCurve = trace(
   ],
   { angles: rootAngles, weights: rootWeights, horizontalReach: rootRailReach },
 );
-assert.equal(lineIntoCurve.indices.at(-1), 3, 'a line can become a curve without losing the intended outer action');
-lineIntoCurve.indices.filter((index) => index != null).slice(1).forEach((index, step, armed) => {
-  assert.ok(Math.abs(index - armed[step]) <= 1, 'line-to-curve never skips an armed target');
-});
+assert.equal(
+  lineIntoCurve.indices.at(-1),
+  3,
+  'a line can become a curve without losing the intended outer action',
+);
+lineIntoCurve.indices
+  .filter((index) => index != null)
+  .slice(1)
+  .forEach((index, step, armed) => {
+    assert.ok(Math.abs(index - armed[step]) <= 1, 'line-to-curve never skips an armed target');
+  });
 
 const curveIntoLine = trace(
   [
@@ -297,10 +371,17 @@ const curveIntoLine = trace(
   ],
   { angles: rootAngles, weights: rootWeights, horizontalReach: rootRailReach },
 );
-assert.equal(curveIntoLine.indices.at(-1), 3, 'a curve can become a line and still reach its final action');
-curveIntoLine.indices.filter((index) => index != null).slice(1).forEach((index, step, armed) => {
-  assert.ok(Math.abs(index - armed[step]) <= 1, 'curve-to-line never skips an armed target');
-});
+assert.equal(
+  curveIntoLine.indices.at(-1),
+  3,
+  'a curve can become a line and still reach its final action',
+);
+curveIntoLine.indices
+  .filter((index) => index != null)
+  .slice(1)
+  .forEach((index, step, armed) => {
+    assert.ok(Math.abs(index - armed[step]) <= 1, 'curve-to-line never skips an armed target');
+  });
 
 const repeatedHybrid = trace(
   [
@@ -316,7 +397,7 @@ const repeatedHybrid = trace(
 );
 assert.deepEqual(
   repeatedHybrid.indices,
-  [null, 2, 2, 2, 2, 2, 2],
+  [null, 3, 3, 3, 3, 3, 3],
   'alternating between a line and a curve keeps the same visible target stable',
 );
 
@@ -330,13 +411,9 @@ assert.ok(
 );
 assert.equal(
   previewTrackAngle(200, 0, rootAngles),
-  rootAngles[3],
+  rootAngles[4],
   'a direction past the fan clamps to its end instead of promising more',
 );
-assert.equal(
-  previewTrackAngle(-200, 0, rootAngles),
-  rootAngles[0],
-  'the same on the other end',
-);
+assert.equal(previewTrackAngle(-200, 0, rootAngles), rootAngles[0], 'the same on the other end');
 
 console.log('OK adaptive Core gesture selection');

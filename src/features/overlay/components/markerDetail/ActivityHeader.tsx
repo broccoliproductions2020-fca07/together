@@ -34,10 +34,15 @@ export function ActivityHeader({
 
   return (
     <>
-      {/* 1. Activity name */}
-      <Text className="pr-10 text-2xl font-bold leading-tight text-foreground">
-        {selection.title}
-      </Text>
+      {/* 1. Activity name — the row is held to the sheet's close button height
+          so that button sits centred on the title line and cannot reach down
+          into the mode row, where the host's "Bearbeiten" pill shares the
+          same right edge. */}
+      <View className="min-h-10 justify-center pr-12">
+        <Text className="text-2xl font-bold leading-tight text-foreground">
+          {selection.title}
+        </Text>
+      </View>
 
       {/* 2. Mode + count (+ edit, host-only) */}
       <View className="mt-3 flex-row items-center gap-2">

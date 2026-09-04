@@ -15,8 +15,10 @@ import Svg, { Path } from 'react-native-svg';
 import { TOGETHER_BRAND } from './brandTokens';
 import {
   MICA_FIGURE_ASPECT_RATIO,
+  MICA_FIGURE_COLORS,
   MICA_FIGURE_PARTS,
   MICA_FIGURE_VIEW_BOX,
+  type MicaFigureTone,
 } from './micaLogo';
 
 const DIM = 0.28;
@@ -24,6 +26,20 @@ const UP = 420;
 const DOWN = 560;
 const STAGGER = 180;
 const EASE = Easing.inOut(Easing.ease);
+
+/** Share of `size` the mark occupies when the loader is not tiled. */
+export const LOADER_MARK_SHARE = 0.86;
+
+/**
+ * Container size whose mark stands exactly as tall as an icon of `iconSize`.
+ *
+ * Almost every loader in the app sits in a slot that otherwise holds an icon,
+ * and the slot's height is what the surrounding row was laid out against. A
+ * fixed loader size would push those rows around by a few dp each — which is
+ * exactly what `ActivityIndicator` did, since its 20 dp was the same next to a
+ * 14 px caption icon as next to a 22 px map control.
+ */
+export const loaderSizeForIcon = (iconSize: number) => Math.round(iconSize / LOADER_MARK_SHARE);
 
 export type TogetherLoaderProps = {
   size?: number;
@@ -33,6 +49,8 @@ export type TogetherLoaderProps = {
    * default stays light. Pass a colour for any surface that is not.
    */
   color?: string;
+  tone?: MicaFigureTone;
+  loop?: boolean;
   accessibilityLabel?: string;
 };
 
@@ -49,10 +67,12 @@ export function TogetherLoader({
   size = 36,
   tile = false,
   color = TOGETHER_BRAND.paper,
+  tone = 'inherit',
+  loop = true,
   accessibilityLabel = 'Wird geladen',
 }: TogetherLoaderProps) {
   const reducedMotion = useReducedMotion();
-  const markHeight = tile ? size * 0.6 : size * 0.86;
+  const markHeight = tile ? size * 0.6 : size * LOADER_MARK_SHARE;
   const markWidth = markHeight * MICA_FIGURE_ASPECT_RATIO;
 
   const a = useSharedValue(1);
@@ -66,8 +86,17 @@ export function TogetherLoader({
       c.value = 1;
       return;
     }
-    const beat = (delay: number) =>
-      withDelay(
+    const beat = (delay: number) => {
+      if (!loop) {
+        return withDelay(
+          delay,
+          withSequence(
+            withTiming(DIM, { duration: UP, easing: EASE }),
+            withTiming(1, { duration: DOWN, easing: EASE }),
+          ),
+        );
+      }
+      return withDelay(
         delay,
         withRepeat(
           withSequence(
@@ -78,6 +107,7 @@ export function TogetherLoader({
           false,
         ),
       );
+    };
     a.value = beat(0);
     b.value = beat(STAGGER);
     c.value = beat(STAGGER * 2);
@@ -86,7 +116,7 @@ export function TogetherLoader({
       b.value = 1;
       c.value = 1;
     };
-  }, [a, b, c, reducedMotion]);
+  }, [a, b, c, loop, reducedMotion]);
 
   const armStyle = useAnimatedStyle(() => ({ opacity: a.value }));
   const headStyle = useAnimatedStyle(() => ({ opacity: b.value }));
@@ -124,7 +154,7 @@ export function TogetherLoader({
               viewBox={MICA_FIGURE_VIEW_BOX}
               width="100%"
             >
-              <Path d={part.d} fill={color} />
+              <Path d={part.d} fill={tone === 'brand' ? MICA_FIGURE_COLORS[part.key] : color} />
             </Svg>
           </Animated.View>
         ))}

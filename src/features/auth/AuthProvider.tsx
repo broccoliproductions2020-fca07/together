@@ -1,6 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createContext, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 
+import { stopJourneyBeforeAccountExit } from '@/features/journey/journeyBackground';
+
 import { authService } from './services/authService';
 import type {
   AuthProviderValue,
@@ -131,6 +133,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const deleteAccount = useCallback(async () => {
     setError(null);
+    await stopJourneyBeforeAccountExit();
     await authService.deleteAccount();
     setSession(null);
     setStatus('unauthenticated');
@@ -139,6 +142,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signOut = useCallback(async () => {
     setError(null);
     try {
+      await stopJourneyBeforeAccountExit();
       await authService.signOut();
       setSession(null);
       setStatus('unauthenticated');

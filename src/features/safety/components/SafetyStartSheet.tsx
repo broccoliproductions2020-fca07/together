@@ -458,6 +458,7 @@ export function SafetyStartSheet({ visible, onClose, onStartRequested }: SafetyS
                   </View>
                   <ScrollView
                     className="mt-1 max-h-[290px]"
+                    style={{ flexShrink: 1 }}
                     contentContainerStyle={{ paddingBottom: 8 }}
                     keyboardShouldPersistTaps="handled"
                     showsVerticalScrollIndicator={false}

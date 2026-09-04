@@ -1,6 +1,6 @@
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect, useState, type ReactNode } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, {
   Easing,
   FadeIn,
@@ -168,6 +168,7 @@ export function ScheduleBench({
   planner,
 }: ScheduleBenchProps) {
   const reducedMotion = useReducedMotion();
+  const nativeMotion = Platform.OS !== 'web' && !reducedMotion;
   const isNow = draft.mode === 'now';
   const start = draft.startsAt ? parseISO(draft.startsAt) : new Date();
   const end = draft.endsAt
@@ -244,8 +245,8 @@ export function ScheduleBench({
     return (
       <Animated.View
         key="planning"
-        entering={reducedMotion ? undefined : FadeIn.duration(220)}
-        layout={reducedMotion ? undefined : LinearTransition.duration(260).easing(EASE)}
+        entering={nativeMotion ? FadeIn.duration(220) : undefined}
+        layout={nativeMotion ? LinearTransition.duration(260).easing(EASE) : undefined}
         style={styles.root}
       >
         {planner}
@@ -264,8 +265,8 @@ export function ScheduleBench({
     return (
       <Animated.View
         key="proposed"
-        entering={reducedMotion ? undefined : FadeIn.duration(220)}
-        layout={reducedMotion ? undefined : LinearTransition.duration(260).easing(EASE)}
+        entering={nativeMotion ? FadeIn.duration(220) : undefined}
+        layout={nativeMotion ? LinearTransition.duration(260).easing(EASE) : undefined}
         style={styles.root}
       >
         <Pressable
@@ -326,8 +327,8 @@ export function ScheduleBench({
   return (
     <Animated.View
       key="single"
-      entering={reducedMotion ? undefined : FadeIn.duration(220)}
-      layout={reducedMotion ? undefined : LinearTransition.duration(260).easing(EASE)}
+      entering={nativeMotion ? FadeIn.duration(220) : undefined}
+      layout={nativeMotion ? LinearTransition.duration(260).easing(EASE) : undefined}
       style={styles.root}
     >
       {/* The span in words, on ONE line above the band: which day, from when to
@@ -401,8 +402,8 @@ export function ScheduleBench({
         <View style={styles.footerSlot}>
           {isNow ? (
             <Animated.View
-              entering={reducedMotion ? undefined : FadeIn.duration(200)}
-              exiting={reducedMotion ? undefined : FadeOut.duration(140)}
+              entering={nativeMotion ? FadeIn.duration(200) : undefined}
+              exiting={nativeMotion ? FadeOut.duration(140) : undefined}
               style={styles.footerFill}
             >
               <Text style={styles.hint} {...TEXT_FLEXIBLE}>
@@ -412,8 +413,8 @@ export function ScheduleBench({
             </Animated.View>
           ) : onPlanningChange ? (
             <Animated.View
-              entering={reducedMotion ? undefined : FadeIn.duration(200)}
-              exiting={reducedMotion ? undefined : FadeOut.duration(140)}
+              entering={nativeMotion ? FadeIn.duration(200) : undefined}
+              exiting={nativeMotion ? FadeOut.duration(140) : undefined}
               style={styles.footerFill}
             >
               <Pressable

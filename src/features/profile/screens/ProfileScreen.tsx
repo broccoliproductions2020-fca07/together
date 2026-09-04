@@ -12,7 +12,7 @@ import { useNotifications } from '@/features/notifications';
 import { PrivacyInfoSheet } from '@/features/settings';
 import { useThemeColors, useThemePreference, type ColorSchemePreference } from '@/features/theme';
 import { AppScreen, ScreenHeader } from '@/shared/components';
-import { FONT, TEXT_CAPPED, TEXT_FLEXIBLE, TYPE } from '@/shared/theme';
+import { FONT, shadow, TEXT_CAPPED, TEXT_FLEXIBLE, TYPE } from '@/shared/theme';
 import { DIAGNOSTICS_VISIBLE, getBuildInfo } from '@/shared/utils/buildInfo';
 import { SEMANTIC_COLOR } from '@/shared/utils/semanticColors';
 
@@ -28,6 +28,15 @@ const ACCENT = SEMANTIC_COLOR.action;
 const SUCCESS = SEMANTIC_COLOR.social;
 const WARNING = SEMANTIC_COLOR.safetyAttention;
 const DANGER = SEMANTIC_COLOR.danger;
+
+/** Lifts the selected segment off the track it sits in. */
+const SEGMENT_SHADOW = shadow({
+  color: '#000000',
+  offsetY: 1,
+  radius: 3,
+  opacity: 0.14,
+  elevation: 2,
+});
 
 const THEME_OPTIONS: {
   value: ColorSchemePreference;
@@ -247,18 +256,7 @@ function Segmented<T extends string>({
               accessibilityState={{ selected: active }}
               accessibilityLabel={`${title} ${option.label}`}
               className="min-h-11 flex-1 flex-row items-center justify-center gap-1.5 rounded-[12px] active:opacity-75"
-              style={
-                active
-                  ? {
-                      backgroundColor: colors.card,
-                      shadowColor: '#000',
-                      shadowOffset: { width: 0, height: 1 },
-                      shadowOpacity: 0.14,
-                      shadowRadius: 3,
-                      elevation: 2,
-                    }
-                  : undefined
-              }
+              style={active ? { backgroundColor: colors.card, ...SEGMENT_SHADOW } : undefined}
               onPress={() => onChange(option.value)}
             >
               <Ionicons
@@ -315,13 +313,15 @@ export function ProfileScreen() {
   const [privacyInfoVisible, setPrivacyInfoVisible] = useState(false);
   const [requestPolicyOpen, setRequestPolicyOpen] = useState(false);
   const [codeVisible, setCodeVisible] = useState(false);
-  const [pushBusy, setPushBusy] = useState(false);
+  /** The value the user just asked for, shown until the real one catches up. */
+  const [pushPending, setPushPending] = useState<boolean | null>(null);
   const [journeyBusy, setJourneyBusy] = useState(false);
   const pushToggleInFlightRef = useRef(false);
   const colors = useThemeColors();
   const { preference: themePreference, setPreference: setThemePreference } = useThemePreference();
   const { preference: mapStyle, setPreference: setMapStyle } = useMapStyle();
   const { pushEnabled, enablePush, disablePush } = useNotifications();
+  const pushShown = pushPending ?? pushEnabled;
   const {
     friends,
     friendRequestPolicy,
@@ -346,12 +346,23 @@ export function ProfileScreen() {
     }
   }
 
+  /**
+   * The switch answers on the tap, not on the round trip.
+   *
+   * Turning push on means a system permission dialog, a token request to Expo
+   * and a callable — seconds, and more on a cold function start. The switch sat
+   * on the OLD value and greyed out for all of it, which reads as a control
+   * that ignored you, so people press it again. `pushPending` shows what was
+   * asked for; a refusal or a failure simply lets the real value back through,
+   * and that snap-back IS the answer.
+   */
   async function handlePushToggle() {
     if (pushToggleInFlightRef.current) return;
     pushToggleInFlightRef.current = true;
-    setPushBusy(true);
+    const target = !pushEnabled;
+    setPushPending(target);
     try {
-      if (pushEnabled) {
+      if (!target) {
         await disablePush();
         return;
       }
@@ -369,7 +380,9 @@ export function ProfileScreen() {
       );
     } finally {
       pushToggleInFlightRef.current = false;
-      setPushBusy(false);
+      // Safe here: the provider sets its own state before enablePush/disablePush
+      // resolve, so the real value and this reset land in the same render.
+      setPushPending(null);
     }
   }
 
@@ -820,19 +833,21 @@ export function ProfileScreen() {
         <GroupCard>
           <SettingRow
             first
-            icon={pushEnabled ? 'notifications' : 'notifications-off-outline'}
+            icon={pushShown ? 'notifications' : 'notifications-off-outline'}
             title="Push-Benachrichtigungen"
+            /* Never the word "Updates": people read that as app versions, which
+               is the one thing this setting has nothing to do with. Name the
+               events instead, and say what the off state actually costs. */
             subtitle={
-              pushEnabled
-                ? 'Wichtige Updates zu Activities und Sicherheit sind aktiv.'
-                : 'Aktiviere Hinweise für relevante Updates.'
+              pushShown
+                ? 'Aktiv für Anfragen, Einladungen, Nachrichten und Heimweg.'
+                : 'Ohne sie siehst du Anfragen und Nachrichten erst beim nächsten Öffnen.'
             }
-            onPress={pushBusy ? undefined : () => void handlePushToggle()}
+            onPress={() => void handlePushToggle()}
             trailing={
               <View pointerEvents="none">
                 <Switch
-                  value={pushEnabled}
-                  disabled={pushBusy}
+                  value={pushShown}
                   trackColor={{ false: colors.border, true: ACCENT }}
                   thumbColor="#ffffff"
                 />

@@ -39,7 +39,7 @@ export function PlanningContent({
           repeating it here would put the same words on screen twice. */}
       {view === 'summary' ? (
         <>
-          <Text className="text-2xl font-bold text-foreground">{selection.title}</Text>
+          <Text className="pr-12 text-2xl font-bold text-foreground">{selection.title}</Text>
 
           <View className="gap-2">
             <InfoRow

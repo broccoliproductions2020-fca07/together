@@ -3,10 +3,18 @@ import Animated, { FadeInRight, FadeOutRight, LinearTransition, useReducedMotion
 
 import type { SpontaneousRound } from '@/features/chat';
 import { useThemeColors } from '@/features/theme';
-import { TEXT_CAPPED } from '@/shared/theme';
+import { shadow, TEXT_CAPPED } from '@/shared/theme';
 
 const OPEN_COLOR = '#3B82F6';
 const MAX_VISIBLE_MEMBERS = 4;
+
+const CONTROL_SHADOW = shadow({
+  color: '#000000',
+  offsetY: 6,
+  radius: 12,
+  opacity: 0.16,
+  elevation: 5,
+});
 
 function Face({
   initials,
@@ -70,11 +78,7 @@ export function SpontaneousRoundControl({
           minWidth: 54,
           backgroundColor: colors.card,
           borderColor: `${OPEN_COLOR}88`,
-          shadowColor: '#000',
-          shadowOpacity: 0.16,
-          shadowRadius: 12,
-          shadowOffset: { width: 0, height: 6 },
-          elevation: 5,
+          ...CONTROL_SHADOW,
         }}
       >
         <View className="items-center">

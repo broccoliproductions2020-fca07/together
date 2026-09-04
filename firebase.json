@@ -10,6 +10,17 @@
   "storage": {
     "rules": "storage.rules"
   },
+  "hosting": {
+    "public": "hosting/public",
+    "ignore": ["firebase.json", "**/node_modules/**"],
+    "rewrites": [{ "source": "/f/**", "destination": "/f/index.html" }],
+    "headers": [
+      {
+        "source": "/.well-known/apple-app-site-association",
+        "headers": [{ "key": "Content-Type", "value": "application/json" }]
+      }
+    ]
+  },
   "database": {
     "rules": "database.rules.json"
   },

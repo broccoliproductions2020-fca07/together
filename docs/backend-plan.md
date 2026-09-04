@@ -63,20 +63,28 @@ active Anreise and Heimweg sessions; it stores a last point, not a trail.
 Time planning is a **pre-Activity**, never an Activity with missing timestamps:
 `timePlans/{planId}` holds host-owned source windows, while
 `timePlanMembers/{uid}` holds one member's submitted interval array. A host
-choice may contain several windows; a member may keep zero or many disjoint
-intervals inside each source window. The backend validates 5-minute snapping,
-ordering and containment, so a client cannot write availability outside an
-offer.
+choice may contain several windows; a member keeps either no interval (rejected)
+or one continuous interval inside each source window. The backend validates the
+5-minute grid, 15-minute minimum, ordering and containment, so a client cannot
+write availability outside an offer or silently reintroduce split ranges.
 
-The plan document is readable only after `joinTimePlan`; pending invitations
-live in the private, server-only `timePlanInvites` collection and arrive through
-an actionable `time_plan_invite` notification. This deliberately prevents
-someone from probing invitees or another member's schedule before joining.
+The full plan document is readable only after `joinTimePlan`. Each addressed
+person receives one private `timePlanAudience/{planId}_{uid}` projection with
+the safe plan fields and counts, but no audience or member identity array. That
+projection powers one bounded inbox/map listener and flips to `joined` in the
+same transaction as the submitted answer; the client then switches to the full
+member plan. Server-only `timePlanInvites` remain the authorization source for
+joining. This prevents an invitee from learning who else was invited before
+sharing their own answer.
 
-The planning sheet owns one plan-document subscription and one bounded (50)
-member subscription only while open. Dragging changes local draft state; one
-`respondToTimePlan` callable publishes the whole response. `expireAt` is set
-on the plan, member and invitation documents so abandoned planning data is
+Legacy collecting rounds must be projected before the stricter Rules ship:
+`npm run migrate:time-plan-audience -- --project <project> --apply` (production
+also requires `--allow-prod`). The command is dry-run by default and idempotent.
+
+The planning sheet owns one viewer-projection/full-plan subscription and one
+bounded (50) member subscription only after joining. Dragging changes local
+draft state; one `respondToTimePlan` callable publishes the whole response. `expireAt` is set
+on the plan, member, invitation and audience-projection documents so abandoned planning data is
 removed by Firestore TTL. A time plan has no map marker or chat until a future,
 host-authorized lock operation creates a normal fixed-time Activity.
 
@@ -153,6 +161,20 @@ never reused as geographic data.
 Anreise and Heimweg are explicit opt-ins. Background location is allowed only
 inside an active, visible session and stops automatically according to the
 feature's lifecycle rules.
+
+Anreise is available for every upcoming or running `now`/`soon` Activity with
+a real map pin. Scheduled reminders go only to non-host participants one hour
+before start; someone joining a near-term or already-running Activity gets the
+single in-app offer instead. The server re-reads the current destination when a
+device arms and again when movement begins, so push payloads are never location
+authority. Each device uses a server-authorized session id and publishes one
+last point with a two-minute freshness TTL. Participants may read only the
+server-owned list of active session ids and then each still-fresh point directly;
+the location collection and expired points cannot be read wholesale. The client
+also removes expired points locally on a timer. Sharing ends at the earliest of
+manual stop, confirmed arrival, two hours after departure, or 30 minutes after
+Activity end; leaving, cancellation, blocking, account deletion and account
+changes revoke the session too.
 
 ## Local verification
 

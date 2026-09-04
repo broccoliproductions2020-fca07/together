@@ -79,3 +79,14 @@ hs_err_pid*.log
 replay_pid*.log
 # Metro bundler log
 metro.log
+.rollback/
+
+# Debug-Screenshots aus Emulator-Sitzungen (Wegwerfmaterial, ~52 MB)
+.artifacts/
+
+# Firebase-Hosting-Deploy-Cache
+.firebase/
+
+# Next.js-Build-Ausgabe der Landingpage (~150 MB)
+landing/.next/
+landing/out/

@@ -1,6 +1,6 @@
 {
   "cli": {
-    "version": "21.4.0",
+    "version": "22.2.0",
     "appVersionSource": "remote"
   },
   "build": {
@@ -25,7 +25,9 @@
         "EXPO_PUBLIC_FIREBASE_EMULATORS": "false",
         "EXPO_PUBLIC_FIREBASE_APP_CHECK_ENABLED": "true",
         "EXPO_PUBLIC_CRASH_REPORTING_ENABLED": "true",
-        "EXPO_PUBLIC_STAGING_DIAGNOSTICS": "true"
+        "EXPO_PUBLIC_STAGING_DIAGNOSTICS": "true",
+        "EXPO_PUBLIC_APPLE_SIGN_IN_ENABLED": "false",
+        "EXPO_PUBLIC_GOOGLE_SIGN_IN_ENABLED": "false"
       }
     },
     "production": {
@@ -37,7 +39,9 @@
         "APP_VARIANT": "production",
         "EXPO_PUBLIC_FIREBASE_EMULATORS": "false",
         "EXPO_PUBLIC_FIREBASE_APP_CHECK_ENABLED": "true",
-        "EXPO_PUBLIC_CRASH_REPORTING_ENABLED": "true"
+        "EXPO_PUBLIC_CRASH_REPORTING_ENABLED": "true",
+        "EXPO_PUBLIC_APPLE_SIGN_IN_ENABLED": "false",
+        "EXPO_PUBLIC_GOOGLE_SIGN_IN_ENABLED": "false"
       }
     }
   },

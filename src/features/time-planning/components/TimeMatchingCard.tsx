@@ -1,4 +1,5 @@
-import { memo, useCallback, useMemo, useRef, useState } from 'react';
+import { Ionicons } from '@expo/vector-icons';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LayoutChangeEvent, Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, {
   Easing,
@@ -13,8 +14,14 @@ import Animated, {
 } from 'react-native-reanimated';
 import type { SharedValue } from 'react-native-reanimated';
 
-import { defaultTimeRangePickerTheme } from '@/shared/components/time-range-picker';
+import {
+  defaultTimeRangePickerTheme,
+  TimeRangePicker,
+  type TimeRangeValue,
+} from '@/shared/components/time-range-picker';
 import { withAlpha } from '@/shared/components/time-range-picker/theme';
+import { TimeMatchingHighlight } from '@/shared/product-ui/TimeMatchingHighlight';
+import { NATIVE_FONTS } from '@/shared/product-ui/nativeFonts';
 import Svg, { ClipPath, Defs, G, Path, Rect } from 'react-native-svg';
 
 import { FONT, TEXT_CAPPED, TEXT_FLEXIBLE, TYPE } from '@/shared/theme';
@@ -64,8 +71,9 @@ import {
 const PICKER_RANGE = defaultTimeRangePickerTheme('default', FRAME_COLOR).range;
 const AMBER = PICKER_RANGE.color;
 /** Shared compact-picker material for availability steps. */
+const GRAPH_EDGE_INSET = Math.max(1, PICKER_RANGE.borderWidth) / 2;
 
-const LABEL_W = 58;
+const LABEL_W = 64;
 const AXIS_LABEL_H = 15;
 /**
  * Person rows follow the same idea as the day rows: comfortable while there
@@ -74,16 +82,31 @@ const AXIS_LABEL_H = 15;
  * however many there are, so a large round is a long list by design.
  */
 function personRowHeight(count: number): number {
-  return count <= 6 ? 16 : 14;
+  return count <= 6 ? 20 : 18;
 }
 
-const PERSON_H = 12;
+const PERSON_H = 14;
 const PERSON_GAP = 3;
 /** Rows can drop to 32 dp; the touch target must not. */
 const MIN_TAP = 44;
 const SOURCE_RIBBON_HEIGHT = 3;
 /** Just enough to take the sharpness off a tread without softening the data. */
 const STEP_RADIUS = 3;
+const DEFAULT_ACTIVITY_MINUTES = 120;
+const MIN_ACTIVITY_MINUTES = 15;
+
+function initialActivityRange(highlight: {
+  slot: { startMs: number; endMs: number };
+}): TimeRangeValue {
+  const durationMs = Math.min(
+    highlight.slot.endMs - highlight.slot.startMs,
+    DEFAULT_ACTIVITY_MINUTES * 60_000,
+  );
+  return {
+    start: new Date(highlight.slot.startMs),
+    end: new Date(highlight.slot.startMs + durationMs),
+  };
+}
 
 function pickerFill(inPeak: boolean): string {
   return withAlpha(PICKER_RANGE.color, PICKER_RANGE.fillOpacity * (inPeak ? 1 : 0.82));
@@ -95,6 +118,20 @@ function pickerBorder(inPeak: boolean): string {
 
 function percent(value: number): `${number}%` {
   return `${Math.max(0, Math.min(100, value * 100))}%`;
+}
+
+/**
+ * Keep stroked SVG shapes inside their viewport. A path ending at exactly 0 or
+ * `width` loses half of its outline to clipping on Android.
+ */
+function graphX(fraction: number, width: number): number {
+  const inset = Math.min(GRAPH_EDGE_INSET, width / 2);
+  const clamped = Math.max(0, Math.min(1, fraction));
+  return inset + clamped * Math.max(0, width - inset * 2);
+}
+
+function highlightKey(highlight: { windowId: string; slot: { startMs: number; endMs: number } }): string {
+  return `${highlight.windowId}:${highlight.slot.startMs}:${highlight.slot.endMs}`;
 }
 
 interface PersonAnswer {
@@ -150,8 +187,8 @@ function Staircase({
     highlighted.some((slot) => startMs >= slot.startMs && endMs <= slot.endMs);
 
   const steps: StaircaseStep[] = availability.segments.map((segment) => ({
-    startPx: axisFraction(segment.startMs, dayStart, axis) * width,
-    endPx: axisFraction(segment.endMs, dayStart, axis) * width,
+    startPx: graphX(axisFraction(segment.startMs, dayStart, axis), width),
+    endPx: graphX(axisFraction(segment.endMs, dayStart, axis), width),
     height: segment.count > 0 ? Math.max(3, (segment.count / total) * stepArea) : 0,
   }));
   const paths = staircasePaths(steps, baseY, STEP_RADIUS);
@@ -163,8 +200,8 @@ function Staircase({
   // the shape it is supposed to trace.
   const peakRect = (() => {
     if (!peak || peak.count <= 0) return null;
-    const x = axisFraction(peak.startMs, dayStart, axis) * width;
-    const right = axisFraction(peak.endMs, dayStart, axis) * width;
+    const x = graphX(axisFraction(peak.startMs, dayStart, axis), width);
+    const right = graphX(axisFraction(peak.endMs, dayStart, axis), width);
     const w = right - x;
     if (w < 1) return null;
     const h = Math.max(3, (peak.count / total) * stepArea);
@@ -329,6 +366,7 @@ const PersonRow = memo(function PersonRow({
 export const TimeMatchingCard = memo(function TimeMatchingCard({
   windows,
   members,
+  expectedCount,
   currentUid,
   isHost,
   onLock,
@@ -336,6 +374,7 @@ export const TimeMatchingCard = memo(function TimeMatchingCard({
 }: {
   windows: TimePlanWindow[];
   members: TimePlanMember[];
+  expectedCount?: number;
   currentUid?: string;
   isHost: boolean;
   onLock?: (window: TimePlanWindow, startsAt: string, endsAt: string) => void;
@@ -345,6 +384,8 @@ export const TimeMatchingCard = memo(function TimeMatchingCard({
   const reducedMotion = useReducedMotion();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [detailId, setDetailId] = useState<string | null>(null);
+  const [selectedHighlightKey, setSelectedHighlightKey] = useState<string | null>(null);
+  const [finalRange, setFinalRange] = useState<TimeRangeValue | null>(null);
   const [plotWidth, setPlotWidth] = useState(0);
   const expandedRef = useRef<string | null>(null);
   const progress = useSharedValue(0);
@@ -373,6 +414,22 @@ export const TimeMatchingCard = memo(function TimeMatchingCard({
     [availabilityByWindow, ordered],
   );
   const summaries = useMemo(() => summariseHighlights(highlights), [highlights]);
+  const selectedHighlight = useMemo(
+    () =>
+      highlights.find((highlight) => highlightKey(highlight) === selectedHighlightKey) ??
+      highlights[0],
+    [highlights, selectedHighlightKey],
+  );
+
+  useEffect(() => {
+    setSelectedHighlightKey((current) =>
+      current && highlights.some((highlight) => highlightKey(highlight) === current) ? current : null,
+    );
+  }, [highlights]);
+
+  useEffect(() => {
+    setFinalRange(selectedHighlight ? initialActivityRange(selectedHighlight) : null);
+  }, [selectedHighlight]);
   const highlightsByWindow = useMemo(() => {
     const map = new Map<string, Array<(typeof highlights)[number]['slot']>>();
     highlights.forEach(({ windowId, slot }) => {
@@ -443,26 +500,86 @@ export const TimeMatchingCard = memo(function TimeMatchingCard({
     return rows.sort((left, right) => Number(right.isSelf) - Number(left.isSelf));
   }
 
+  const selectedWindow = selectedHighlight
+    ? ordered.find((entry) => entry.id === selectedHighlight.windowId)
+    : undefined;
+  const selectedSlotMinutes = selectedHighlight
+    ? Math.max(
+        MIN_ACTIVITY_MINUTES,
+        Math.floor((selectedHighlight.slot.endMs - selectedHighlight.slot.startMs) / 60_000),
+      )
+    : MIN_ACTIVITY_MINUTES;
+
   return (
     <View style={[styles.card, { backgroundColor: t.card, borderColor: t.cardBorder }]}>
-      <Text
-        {...TEXT_FLEXIBLE}
-        style={[styles.cardTitle, { color: t.text }]}
-      >
-        Zeitmatching
-      </Text>
-      {summaries.length > 0 ? (
-        <View style={styles.summary}>
+      <Text {...TEXT_FLEXIBLE} style={[styles.cardTitle, { color: t.text }]}>Zeitmatching</Text>
+      {selectedHighlight ? (
+        <TimeMatchingHighlight
+          label="Bester gemeinsamer Zeitraum"
+          time={`${selectedHighlight.dayLabel} · ${clockLabel(selectedHighlight.slot.startMs)}–${clockLabel(selectedHighlight.slot.endMs)}`}
+          availability={`${selectedHighlight.slot.count} von ${Math.max(1, members.length)} können`}
+          responses={`${members.length} von ${Math.max(members.length, expectedCount ?? members.length)} geantwortet`}
+          leading={<Ionicons name="people" size={15} color={AMBER} />}
+          theme={{
+            background: t.faint,
+            border: t.cardBorder,
+            text: t.text,
+            muted: t.muted,
+            accent: AMBER,
+            accentSoft: withAlpha(AMBER, 0.18),
+            fonts: NATIVE_FONTS,
+          }}
+        />
+      ) : (
+        <Text {...TEXT_FLEXIBLE} style={[styles.emptyMatch, { color: t.muted }]}>
+          Noch kein gemeinsamer Zeitraum
+        </Text>
+      )}
+
+      {summaries.length > 1 ? (
+        <View
+          style={styles.summary}
+          accessibilityRole={isHost ? 'radiogroup' : undefined}
+        >
           <Text {...TEXT_FLEXIBLE} style={[styles.summaryLabel, { color: t.muted }]}>
-            {summaries.length > 1 ? 'Beste Zeiten' : 'Beste Zeit'}
+            Gleich gute Alternativen
           </Text>
-          {summaries.map((line) => (
-            <Text key={line} {...TEXT_FLEXIBLE} style={[styles.summaryValue, { color: t.text }]}>
-              · {line}
-            </Text>
-          ))}
+          {summaries.map((line, index) => {
+            const highlight = highlights[index];
+            const selectable = isHost && Boolean(onLock);
+            const selected = selectedHighlight === highlight;
+            return selectable ? (
+              <Pressable
+                key={highlightKey(highlight)}
+                accessibilityRole="radio"
+                accessibilityLabel={line}
+                accessibilityState={{ selected }}
+                onPress={() => setSelectedHighlightKey(highlightKey(highlight))}
+                style={[
+                  styles.summaryOption,
+                  { borderColor: t.cardBorder },
+                  selected ? { backgroundColor: t.faint, borderColor: AMBER } : null,
+                ]}
+              >
+                <Text {...TEXT_FLEXIBLE} style={[styles.summaryValue, { color: t.text }]}>
+                  {line}
+                </Text>
+              </Pressable>
+            ) : (
+              <Text key={highlightKey(highlight)} {...TEXT_FLEXIBLE} style={[styles.summaryValue, { color: t.text }]}>
+                · {line}
+              </Text>
+            );
+          })}
         </View>
       ) : null}
+
+      <View style={styles.legend}>
+        <Ionicons name="stats-chart" size={15} color={AMBER} />
+        <Text {...TEXT_FLEXIBLE} style={[styles.legendText, { color: t.muted }]}>
+          Je höher die Stufe, desto mehr Personen können. Tippe auf einen Tag für Details.
+        </Text>
+      </View>
 
       <View style={styles.axisRow}>
         <View style={{ width: LABEL_W }} />
@@ -470,20 +587,30 @@ export const TimeMatchingCard = memo(function TimeMatchingCard({
           style={styles.plot}
           onLayout={(event: LayoutChangeEvent) => setPlotWidth(event.nativeEvent.layout.width)}
         >
-          {marks.map((minutes) => (
-            <Text
-              key={minutes}
-              numberOfLines={1}
-              maxFontSizeMultiplier={TEXT_CAPPED.maxFontSizeMultiplier}
-              allowFontScaling={TEXT_CAPPED.allowFontScaling}
-              style={[
-                styles.axisLabel,
-                { color: t.muted, left: percent((minutes - axis.startMinutes) / axis.spanMinutes) },
-              ]}
-            >
-              {formatAxisMinutes(minutes)}
-            </Text>
-          ))}
+          {marks.map((minutes) => {
+            const fraction = (minutes - axis.startMinutes) / axis.spanMinutes;
+            const atStart = fraction <= 0;
+            const atEnd = fraction >= 1;
+            return (
+              <Text
+                key={minutes}
+                numberOfLines={1}
+                maxFontSizeMultiplier={TEXT_CAPPED.maxFontSizeMultiplier}
+                allowFontScaling={TEXT_CAPPED.allowFontScaling}
+                style={[
+                  styles.axisLabel,
+                  {
+                    color: t.muted,
+                    left: percent(fraction),
+                    marginLeft: atStart ? 0 : atEnd ? -32 : -16,
+                    textAlign: atStart ? 'left' : atEnd ? 'right' : 'center',
+                  },
+                ]}
+              >
+                {formatAxisMinutes(minutes)}
+              </Text>
+            );
+          })}
         </View>
       </View>
 
@@ -544,14 +671,21 @@ export const TimeMatchingCard = memo(function TimeMatchingCard({
                 style={[styles.dayRow, { height: rowHeight }]}
               >
                 <View style={[styles.dayLabelColumn, { width: LABEL_W }]}>
-                  <Text
-                    numberOfLines={1}
-                    maxFontSizeMultiplier={TEXT_CAPPED.maxFontSizeMultiplier}
-                    allowFontScaling={TEXT_CAPPED.allowFontScaling}
-                    style={[styles.dayLabel, { color: t.text }]}
-                  >
-                    {dayLabelFor(Date.parse(window.startsAt))}
-                  </Text>
+                  <View style={styles.dayLabelLine}>
+                    <Text
+                      numberOfLines={1}
+                      maxFontSizeMultiplier={TEXT_CAPPED.maxFontSizeMultiplier}
+                      allowFontScaling={TEXT_CAPPED.allowFontScaling}
+                      style={[styles.dayLabel, { color: t.text }]}
+                    >
+                      {dayLabelFor(Date.parse(window.startsAt))}
+                    </Text>
+                    <Ionicons
+                      name={expanded ? 'chevron-down' : 'chevron-forward'}
+                      size={13}
+                      color={t.muted}
+                    />
+                  </View>
                 </View>
 
                 <Animated.View style={[styles.plot, detailVisible ? ghostStyle : null]}>
@@ -610,31 +744,64 @@ export const TimeMatchingCard = memo(function TimeMatchingCard({
         })}
       </Animated.View>
 
-      {isHost && highlights[0] && onLock ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={{ disabled: Boolean(locking) }}
-          disabled={locking}
-          onPress={() => {
-            const target = ordered.find((entry) => entry.id === highlights[0].windowId);
-            if (!target) return;
-            onLock(
-              target,
-              new Date(highlights[0].slot.startMs).toISOString(),
-              new Date(highlights[0].slot.endMs).toISOString(),
-            );
-          }}
-          style={[styles.lock, { backgroundColor: AMBER }, locking ? styles.lockBusy : null]}
-        >
-          <Text
-            numberOfLines={1}
-            maxFontSizeMultiplier={TEXT_CAPPED.maxFontSizeMultiplier}
-            allowFontScaling={TEXT_CAPPED.allowFontScaling}
-            style={styles.lockLabel}
-          >
-            {locking ? 'Termin wird festgelegt …' : `Auf ${summaries[0]} festlegen`}
+      {isHost && selectedHighlight && selectedWindow && finalRange && onLock ? (
+        <View style={[styles.finalPanel, { backgroundColor: t.faint, borderColor: t.cardBorder }]}>
+          <Text {...TEXT_FLEXIBLE} style={[styles.finalTitle, { color: t.text }]}>
+            Activity-Zeit festlegen
           </Text>
-        </Pressable>
+          <Text {...TEXT_FLEXIBLE} style={[styles.finalHint, { color: t.muted }]}>
+            Wähle innerhalb des besten Zeitraums die tatsächliche Dauer.
+          </Text>
+          <TimeRangePicker
+            value={finalRange}
+            min={new Date(selectedHighlight.slot.startMs)}
+            max={new Date(selectedHighlight.slot.endMs)}
+            viewportRange={{
+              start: new Date(selectedHighlight.slot.startMs),
+              end: new Date(selectedHighlight.slot.endMs),
+            }}
+            stepMinutes={5}
+            minDurationMinutes={MIN_ACTIVITY_MINUTES}
+            maxDurationMinutes={selectedSlotMinutes}
+            rezoomOnRelease={false}
+            accent={AMBER}
+            theme={{
+              container: { height: 56, background: t.track, radius: 14 },
+              labels: { color: t.muted, fontSize: TYPE.micro.fontSize },
+              ticks: { color: t.cardBorder },
+              startHandle: { color: t.handle },
+              endHandle: { color: t.handle },
+            }}
+            renderRangeLabel={(range) => (
+              <Text style={[styles.finalRangeLabel, { color: t.text }]}>
+                {clockLabel(range.start.getTime())}–{clockLabel(range.end.getTime())}
+              </Text>
+            )}
+            onChange={setFinalRange}
+            accessibilityLabelStart="Beginn der Activity"
+            accessibilityLabelEnd="Ende der Activity"
+          />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ disabled: Boolean(locking) }}
+            disabled={locking}
+            onPress={() =>
+              onLock(selectedWindow, finalRange.start.toISOString(), finalRange.end.toISOString())
+            }
+            style={[styles.lock, { backgroundColor: AMBER }, locking ? styles.lockBusy : null]}
+          >
+            <Text
+              numberOfLines={1}
+              maxFontSizeMultiplier={TEXT_CAPPED.maxFontSizeMultiplier}
+              allowFontScaling={TEXT_CAPPED.allowFontScaling}
+              style={styles.lockLabel}
+            >
+              {locking
+                ? 'Termin wird festgelegt …'
+                : `${clockLabel(finalRange.start.getTime())}–${clockLabel(finalRange.end.getTime())} festlegen`}
+            </Text>
+          </Pressable>
+        </View>
       ) : null}
     </View>
   );
@@ -690,15 +857,39 @@ function PeakCount({
 const styles = StyleSheet.create({
   card: { borderRadius: 20, borderWidth: 1, padding: 14 },
   cardTitle: { fontFamily: FONT.semibold, fontSize: TYPE.label.fontSize },
-  summary: { alignItems: 'baseline', flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 2 },
+  hero: { borderRadius: 16, borderWidth: 1, marginTop: 10, padding: 12 },
+  heroEyebrow: { fontFamily: FONT.medium, fontSize: TYPE.caption.fontSize },
+  heroTime: { fontFamily: FONT.semibold, fontSize: TYPE.body.fontSize, marginTop: 3 },
+  heroMeta: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 },
+  coverBadge: {
+    alignItems: 'center',
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 6,
+    minHeight: 32,
+    paddingHorizontal: 10,
+  },
+  coverBadgeText: { fontFamily: FONT.semibold, fontSize: TYPE.caption.fontSize },
+  responseProgress: { fontFamily: FONT.medium, fontSize: TYPE.caption.fontSize },
+  emptyMatch: { fontFamily: FONT.medium, fontSize: TYPE.caption.fontSize, marginTop: 8 },
+  summary: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 },
   summaryLabel: { fontFamily: FONT.medium, fontSize: TYPE.caption.fontSize },
   summaryValue: { fontFamily: FONT.semibold, fontSize: TYPE.caption.fontSize },
+  summaryOption: {
+    borderRadius: 10,
+    borderWidth: 1,
+    justifyContent: 'center',
+    minHeight: 40,
+    paddingHorizontal: 10,
+  },
+  legend: { alignItems: 'flex-start', flexDirection: 'row', gap: 7, marginTop: 12 },
+  legendText: { flex: 1, fontFamily: FONT.medium, fontSize: TYPE.caption.fontSize, lineHeight: 17 },
 
-  axisRow: { flexDirection: 'row', height: AXIS_LABEL_H, marginTop: 12 },
+  axisRow: { flexDirection: 'row', height: AXIS_LABEL_H, marginTop: 10 },
   plot: { flex: 1, minWidth: 0, position: 'relative' },
   axisLabel: {
     fontFamily: FONT.medium,
-    fontSize: TYPE.micro.fontSize - 2,
+    fontSize: TYPE.micro.fontSize,
     marginLeft: -16,
     position: 'absolute',
     textAlign: 'center',
@@ -707,16 +898,17 @@ const styles = StyleSheet.create({
   },
 
   rows: { position: 'relative' },
-  grid: { ...StyleSheet.absoluteFillObject, flexDirection: 'row' },
+  grid: { ...StyleSheet.absoluteFill, flexDirection: 'row' },
   gridLine: { bottom: 0, position: 'absolute', top: 0, width: StyleSheet.hairlineWidth },
   hairline: { height: StyleSheet.hairlineWidth, marginLeft: LABEL_W },
 
   dayRow: { alignItems: 'stretch', flexDirection: 'row' },
   dayLabelColumn: { justifyContent: 'center' },
+  dayLabelLine: { alignItems: 'center', flexDirection: 'row', gap: 2 },
   dayLabel: { fontFamily: FONT.semibold, fontSize: TYPE.caption.fontSize },
   peakCount: {
     fontFamily: FONT.semibold,
-    fontSize: TYPE.micro.fontSize - 2,
+    fontSize: TYPE.micro.fontSize,
     position: 'absolute',
     textAlign: 'center',
     zIndex: 2,
@@ -724,7 +916,7 @@ const styles = StyleSheet.create({
 
   personRow: { alignItems: 'stretch', flexDirection: 'row', height: PERSON_H, marginTop: PERSON_GAP },
   personLabel: { justifyContent: 'center', width: LABEL_W },
-  personName: { fontFamily: FONT.medium, fontSize: TYPE.micro.fontSize - 2 },
+  personName: { fontFamily: FONT.medium, fontSize: TYPE.micro.fontSize },
   personNameSelf: { fontFamily: FONT.semibold },
   personBar: {
     bottom: 0,
@@ -732,14 +924,19 @@ const styles = StyleSheet.create({
     top: 0,
     zIndex: 3,
   },
-  personEmpty: { alignSelf: 'center', fontFamily: FONT.medium, fontSize: TYPE.micro.fontSize - 2, left: 0, position: 'absolute' },
+  personEmpty: { alignSelf: 'center', fontFamily: FONT.medium, fontSize: TYPE.micro.fontSize, left: 0, position: 'absolute' },
+
+  finalPanel: { borderRadius: 16, borderWidth: 1, marginTop: 14, padding: 12 },
+  finalTitle: { fontFamily: FONT.semibold, fontSize: TYPE.label.fontSize },
+  finalHint: { fontFamily: FONT.medium, fontSize: TYPE.caption.fontSize, marginBottom: 10, marginTop: 2 },
+  finalRangeLabel: { fontFamily: FONT.semibold, fontSize: TYPE.micro.fontSize },
 
   lock: {
     alignItems: 'center',
     borderRadius: 14,
     justifyContent: 'center',
-    marginTop: 14,
-    minHeight: 46,
+    marginTop: 12,
+    minHeight: 52,
     paddingHorizontal: 16,
   },
   lockBusy: { opacity: 0.6 },

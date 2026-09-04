@@ -2,8 +2,7 @@ import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import { router } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Keyboard, Modal, Platform, useWindowDimensions, View } from 'react-native';
-import { useSharedValue } from 'react-native-reanimated';
+import { Alert, Keyboard, Linking, Modal, Platform, useWindowDimensions, View } from 'react-native';
 
 import {
   ActivityComposerSheet,
@@ -26,12 +25,13 @@ import {
   type SpontaneousRoundInvitePreview,
 } from '@/features/chat';
 import {
-  isJourneyAutoShareResponse,
+  isJourneyDecisionResponse,
   useJourney,
   type JourneyActivityContext,
   type JourneyParticipant,
 } from '@/features/journey';
 import { useFriends } from '@/features/friends';
+import { CalendarSheet } from '@/features/calendar';
 import { PostfachSheet, type PostfachChatTarget } from '@/features/mailbox';
 import { usePushNudge } from '@/features/notifications';
 import { claimNotificationResponse } from '@/features/notifications/notificationResponse';
@@ -40,9 +40,11 @@ import {
   timePlansToMapMarkers,
   timePlanningService,
   useInvitedTimePlans,
+  type TimePlan,
   type TimePlanCreation,
   type TimePlanOfferGroup,
 } from '@/features/time-planning';
+import { type SheetOriginResolver } from '@/features/overlay/components/FloatingSheet';
 import {
   MapOverlay,
   MarkerDetailSheet,
@@ -52,7 +54,7 @@ import {
   SpontaneousRoundSheet,
   type CoreJourneyIndicator,
 } from '@/features/overlay';
-import { presenceToMapMarkers, presenceToNearby, useOpenStatus } from '@/features/presence';
+import { presenceToNearby, useOpenStatus } from '@/features/presence';
 import {
   deriveCompanionSignal,
   getSafetySplitPanelHeight,
@@ -68,6 +70,10 @@ import {
   showLocationPermissionAlert,
 } from '@/shared/utils/locationPermission';
 
+import {
+  ACTIVITY_MARKER_VISIBLE_ABOVE_ANCHOR,
+  ACTIVITY_MARKER_VISIBLE_BELOW_ANCHOR,
+} from '../components/activityMarkerLayout';
 import type { MapCanvasHandle } from '../components/PreviewMapCanvas';
 import { MapCanvas } from '../components/MapCanvas';
 import { MapLocationPickerOverlay } from '../components/MapLocationPickerOverlay';
@@ -78,8 +84,10 @@ import {
 } from '../hooks/useMapLocationPicker';
 import type {
   ActivityMode,
+  ActivityStackItem,
   ActivitySelectionPreview,
   MapCoordinate,
+  MapMarker,
   MapSelection,
 } from '../types/map.types';
 import {
@@ -93,10 +101,36 @@ import {
   placeToSelection,
   previewToJourneyContext,
 } from '../utils/mapSelection';
-import { selectFriendsWithoutLocation, selectNearbyFriends } from '../utils/nearbySelectors';
+import { focusPinShift, type FocusFrame } from '../utils/focusFraming';
+import {
+  selectFriendsWithoutLocation,
+  selectNearbyFriends,
+  selectOutsideRadiusCount,
+} from '../utils/nearbySelectors';
 
 const SERVER_ACTION_TIMEOUT_MS = 15_000;
 const BOOT_LOCATION_REVEAL_DELAY_MS = 2_500;
+const SELECTION_FOCUS_MEASUREMENT_SETTLE_MS = 32;
+const SELECTION_FOCUS_DURATION_MS = 340;
+/**
+ * How far the selected pin must have drifted, in screen pixels, before a sheet
+ * that grew after its first measurement earns a second camera move.
+ *
+ * A sheet reports its height as soon as it has one, and for anything that loads
+ * asynchronously that first number describes a placeholder: a Terminfindung
+ * reports its spinner (~130px of padding) and then grows past 1400px once the
+ * windows arrive. Framing stayed calibrated for the spinner, so the pin the
+ * sheet was opened for ended up under it — "often not even the centre".
+ *
+ * 24px because that is roughly a fingertip: below it the correction is smaller
+ * than the thing being corrected, and a camera that twitches after every list
+ * row settles is worse than one that is slightly off.
+ */
+const SELECTION_FOCUS_REFOCUS_SHIFT = 24;
+
+function formatClock(timestamp: number) {
+  return new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' }).format(timestamp);
+}
 
 function waitForServerAction<T>(promise: Promise<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -118,18 +152,9 @@ function waitForServerAction<T>(promise: Promise<T>): Promise<T> {
 }
 
 export interface MapScreenProps {
-  /** MainSurface keeps map layers mounted for transitions; this tells the
-   * presence seam whether the map is actually visible to the user. */
+  /** False only behind the boot curtain; the map is otherwise always the
+   * visible surface. Tells the presence seam whether anyone can see it. */
   active?: boolean;
-  editActivityRequest?: { requestId: number; activityId: string };
-  onEditActivityRequestHandled?: (requestId: number) => void;
-  onLocationPickerActiveChange?: (active: boolean) => void;
-  /** The activity/place detail is rendered inline over the map so marker taps
-   * can switch directly. Let the parent retract its global mode switch while
-   * that sheet owns the lower edge. */
-  onDetailSheetVisibleChange?: (visible: boolean) => void;
-  /** Opens the calendar surface (top-bar calendar button; calendar is not in the mode pill). */
-  onOpenCalendar?: () => void;
 }
 
 interface AcquireOwnLocationOptions {
@@ -158,6 +183,44 @@ const POI_RESULT_FOCUS = { latitudeDelta: 0.0025, longitudeDelta: 0.0022 };
 
 const JOURNEY_IMMEDIATE_PROMPT_LEAD_MS = 60 * 60 * 1000;
 
+function markerToStackItem(marker: MapMarker): ActivityStackItem {
+  const participants = marker.avatars?.length
+    ? marker.avatars
+    : [
+        {
+          userId: marker.userId,
+          displayName: marker.displayName,
+          initials: marker.initials,
+          avatarUrl: marker.avatarUrl,
+        },
+      ];
+  return {
+    id: marker.id,
+    title: marker.title ?? marker.label ?? marker.displayName,
+    mode: marker.mode,
+    planning: marker.planning,
+    timeLabel: marker.timeLabel,
+    placeLabel: marker.placeLabel,
+    participantCount: Math.max(marker.participantCount ?? 0, participants.length, 1),
+    maxParticipants: marker.maxParticipants,
+    participants,
+  };
+}
+
+function timePlanSelection(planId: string, plans: TimePlan[]): MapSelection {
+  const plan = plans.find((entry) => entry.id === planId);
+  return {
+    type: 'Planning',
+    planId,
+    title: plan?.title ?? 'Terminfindung',
+    hostName: plan?.hostName ?? 'Jemand',
+    ...(plan?.place?.label ? { placeLabel: plan.place.label } : {}),
+    ...(plan?.place?.visibility === 'pin'
+      ? { coordinate: { latitude: plan.place.latitude, longitude: plan.place.longitude } }
+      : {}),
+  };
+}
+
 function journeyCanStartNow(activity: JourneyActivityContext, now = Date.now()) {
   const startsAt = activity.startsAt ? Date.parse(activity.startsAt) : NaN;
   const target = activity.targetCoordinate;
@@ -176,7 +239,7 @@ function journeyPromptBody(activity: JourneyActivityContext) {
     : 0;
   const timing =
     minutesUntilStart <= 1 ? 'beginnt jetzt' : `beginnt in ${minutesUntilStart} Minuten`;
-  return `${activity.title} ${timing}. Dein Standort wird erst bei echter Bewegung für die Teilnehmer sichtbar und am Ziel automatisch beendet.`;
+  return `${activity.title} ${timing}. Dein Standort wird erst nach bestätigter Bewegung für die Teilnehmer sichtbar und am Ziel automatisch beendet.`;
 }
 
 /**
@@ -184,14 +247,7 @@ function journeyPromptBody(activity: JourneyActivityContext) {
  * absolutely above it via `MapOverlay`; there is no bottom bar, panel or dark
  * container below the map.
  */
-export function MapScreen({
-  active = true,
-  editActivityRequest,
-  onEditActivityRequestHandled,
-  onLocationPickerActiveChange,
-  onDetailSheetVisibleChange,
-  onOpenCalendar,
-}: MapScreenProps) {
+export function MapScreen({ active = true }: MapScreenProps) {
   const {
     initialLocationAttemptFinished,
     registerLocationPermissionRequest,
@@ -231,11 +287,13 @@ export function MapScreen({
     mapMarkers,
     markerClusters,
     ownCoreActivity,
+    nextOwnActivity,
   } = useActivityEntities();
   const {
     activeJourney,
     armJourney,
     getActivityJourneys,
+    getActivityJourneyError,
     getJourneySummary,
     stopJourney,
     watchActivityJourney,
@@ -260,9 +318,7 @@ export function MapScreen({
     setConsoleMinimized,
     startingHeimweg,
   } = useSafety();
-  const mapLocationPicker = useMapLocationPicker({
-    onActiveChange: onLocationPickerActiveChange,
-  });
+  const mapLocationPicker = useMapLocationPicker({});
   const safetySplitPanelHeight =
     ownSafetySession && friendSessions.length > 0 && !consoleMinimized && !startingHeimweg
       ? getSafetySplitPanelHeight(viewportHeight)
@@ -271,6 +327,11 @@ export function MapScreen({
   const [selectedSafetyUid, setSelectedSafetyUid] = useState<string>();
   const [safetyStartVisible, setSafetyStartVisible] = useState(false);
   const [selection, setSelection] = useState<MapSelection | null>(null);
+  // A first location fix may arrive while a marker is being opened. Selection
+  // wins that race: the person's deliberate tap must never be replaced by an
+  // automatic focus on their own position.
+  const selectionRef = useRef<MapSelection | null>(selection);
+  selectionRef.current = selection;
   const [joiningActivityId, setJoiningActivityId] = useState<string | null>(null);
   const activityJoinRevisionRef = useRef(0);
   const activityJoinInFlightRef = useRef<string | null>(null);
@@ -280,14 +341,22 @@ export function MapScreen({
     participantId?: string;
   } | null>(null);
   const [nearbySheetVisible, setNearbySheetVisible] = useState(false);
+  /** Your plans, as a card over the map — not a mode that replaces it. */
+  const [calendarVisible, setCalendarVisible] = useState(false);
+  /**
+   * How to find the control the plans card was opened from. A REF, not state:
+   * it is read inside an async resolver during the open and the close, and a
+   * re-render in between must not hand the exit a different answer than the
+   * entry got. The overlay stores a way to measure, never a measurement — the
+   * card asks again when it leaves.
+   */
+  const calendarOriginRef = useRef<SheetOriginResolver | null>(null);
   /**
    * The pill the Nearby sheet morphs out of, and the single value both sides
    * of that morph run on: the sheet grows on it, the pill fades on its
    * inverse. Shared rather than signalled, so neither can be on screen without
    * the other having made room for it.
    */
-  const nearbyPillRef = useRef<View | null>(null);
-  const nearbyMorph = useSharedValue(0);
   /** The core's own personal status sheet — your open window, not the friends list. */
   const [openStatusSheetVisible, setOpenStatusSheetVisible] = useState(false);
   const nearbyActionRevisionRef = useRef(0);
@@ -322,7 +391,10 @@ export function MapScreen({
   // The list comes from the signed-in user's live presence subscription.
   const {
     isOpen,
+    expiresAt: openExpiresAt,
     goOpen,
+    setExpiresAt: setOpenExpiresAt,
+    openBlockedByActivity,
     shareLocation,
     openFriends,
     setFriendPresenceListening,
@@ -359,11 +431,6 @@ export function MapScreen({
     [openFriends, myLocation],
   );
   /** Which open friend the Offen-Fenster should open on, set by a marker tap. */
-  const [openPresenceFocusId, setOpenPresenceFocusId] = useState<string>();
-  // Only friends who deliberately share their location — `presenceToMapMarkers`
-  // owns that filter, so sharing off (or the window ending) removes the marker
-  // with nothing else to keep in sync.
-  const openPresenceMarkers = useMemo(() => presenceToMapMarkers(openFriends), [openFriends]);
   // Both go through nearbySelectors — the filtering AND ordering rules must
   // never be re-implemented here (see nearbySelectors.ts). The ranking context
   // is on-device only: who you have actually done things with, and who you
@@ -374,6 +441,7 @@ export function MapScreen({
   );
   const nearbyFriends = selectNearbyFriends(realNearby, radiusKm, rankingContext);
   const friendsWithoutLocation = selectFriendsWithoutLocation(realNearby, rankingContext);
+  const outsideRadiusCount = selectOutsideRadiusCount(realNearby, radiusKm);
   // An empty "In deiner Nähe" section has three different causes with three
   // different fixes — the sheet must never give radius advice to someone whose
   // real problem is an empty friend list (or that simply nobody is open).
@@ -420,9 +488,16 @@ export function MapScreen({
   const [launchMarkerId, setLaunchMarkerId] = useState<string>();
   const launchMarkerIdRef = useRef<string | undefined>(undefined);
   const launchTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  // Live height of the open detail sheet. Only the camera uses it: a selection
-  // has to land in the middle of the map you can still see, not behind a sheet.
-  const [detailSheetHeight, setDetailSheetHeight] = useState(0);
+  const [detailSheetMeasurement, setDetailSheetMeasurement] = useState<{
+    height: number;
+    revision: number;
+    selection: MapSelection | null;
+  }>({ height: 0, revision: 0, selection: null });
+  const detailSheetHeight =
+    detailSheetMeasurement.selection === selection ? detailSheetMeasurement.height : 0;
+  const [primaryTopOverlayHeight, setPrimaryTopOverlayHeight] = useState(0);
+  const [safetyTopOverlayHeight, setSafetyTopOverlayHeight] = useState(0);
+  const topOverlayHeight = Math.max(primaryTopOverlayHeight, safetyTopOverlayHeight);
   // Id of a just-cancelled marker playing its pop-off. Mirrors the launch id.
   const [dismissMarkerId, setDismissMarkerId] = useState<string>();
   const [dismissDetailImmediately, setDismissDetailImmediately] = useState(false);
@@ -439,7 +514,12 @@ export function MapScreen({
   }, [selection]);
   const [selectionFocus, setSelectionFocus] = useState<{
     id: number;
+    selection: MapSelection;
     coordinate: MapCoordinate;
+    topCoveredHeight?: number;
+    coveredHeight?: number;
+    targetInsets?: { above: number; below: number };
+    duration?: number;
     latitudeDelta?: number;
     longitudeDelta?: number;
   }>();
@@ -461,6 +541,16 @@ export function MapScreen({
   const bootLocationRevealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const nativeOwnLocationReceivedRef = useRef(false);
   const selectionFocusSequenceRef = useRef(0);
+  const selectionFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const focusedSelectionRef = useRef<MapSelection | null>(null);
+  /** Visible map frame the last selection focus was calculated for. */
+  const focusedFrameRef = useRef<FocusFrame>({});
+  /**
+   * True once the user has moved the camera themselves since the last focus.
+   * A re-focus corrects OUR framing; it must never pull someone back from a
+   * place they panned to on purpose.
+   */
+  const userMovedMapSinceFocusRef = useRef(false);
   const safetyMarkerFocusSequenceRef = useRef(0);
   const wasHeimwegFocusActiveRef = useRef(false);
   const [safetyNow, setSafetyNow] = useState(() => Date.now());
@@ -495,6 +585,10 @@ export function MapScreen({
     (coordinate: MapCoordinate) => {
       setMyLocation(coordinate);
       if (!bootLocationAttemptRunningRef.current || didCenterOnOwnLocationRef.current) return;
+      if (selectionRef.current) {
+        finishInitialLocationBoot('camera-ready');
+        return;
+      }
       pendingBootFocusCoordinateRef.current = coordinate;
       if (!mapRendererReady) return;
       pendingBootFocusCoordinateRef.current = null;
@@ -502,7 +596,7 @@ export function MapScreen({
       didCenterOnOwnLocationRef.current = true;
       focusMapOn(coordinate, { duration: 600 });
     },
-    [focusMapOn, mapRendererReady],
+    [finishInitialLocationBoot, focusMapOn, mapRendererReady],
   );
 
   const handleNativeOwnLocation = useCallback(
@@ -559,41 +653,119 @@ export function MapScreen({
     [getEditableDraft],
   );
 
-  useEffect(() => {
-    if (!active || !editActivityRequest) return;
-    const opened = openActivityEditor(editActivityRequest.activityId);
-    onEditActivityRequestHandled?.(editActivityRequest.requestId);
-    if (!opened) {
-      Alert.alert(
-        'Bearbeiten nicht möglich',
-        'Die Aktivität ist nicht mehr aktiv oder du bist nicht ihr Host.',
-      );
-    }
-  }, [active, editActivityRequest, onEditActivityRequestHandled, openActivityEditor]);
-
-  useEffect(() => {
-    onDetailSheetVisibleChange?.(Boolean(selection));
-  }, [onDetailSheetVisibleChange, selection]);
-
-  useEffect(
-    () => () => {
-      onDetailSheetVisibleChange?.(false);
+  const openComposer = useCallback(
+    (mode: ActivityMode, place?: SelectedPlace, title?: string, activityId?: string) => {
+      Keyboard.dismiss();
+      setComposerMode(mode);
+      setComposerPlace(place);
+      setComposerTitle(title);
+      setComposerActivityId(activityId);
+      setComposerVisible(true);
     },
-    [onDetailSheetVisibleChange],
+    [],
   );
 
+  /**
+   * Heimweg-Fokus owns the whole map. The calendar is a card ON that map, so it
+   * has to step aside — it used to be a separate mode and the surface simply
+   * rotated to the map instead.
+   */
   useEffect(() => {
-    if (mapLocationPicker.active || heimwegFocusActive) return;
+    if (heimwegFocusActive) setCalendarVisible(false);
+  }, [heimwegFocusActive]);
+
+  useEffect(() => {
+    // Wait for the current sheet's resting height, then frame this selection.
+    if (selectionFocusTimerRef.current) {
+      clearTimeout(selectionFocusTimerRef.current);
+      selectionFocusTimerRef.current = null;
+    }
+    if (!selection) {
+      setSelectionFocus(undefined);
+      focusedSelectionRef.current = null;
+      focusedFrameRef.current = {};
+      userMovedMapSinceFocusRef.current = false;
+      return;
+    }
+    if (
+      mapLocationPicker.active ||
+      heimwegFocusActive ||
+      detailSheetMeasurement.selection !== selection ||
+      detailSheetMeasurement.height <= 0
+    ) {
+      return;
+    }
     const coordinate = coordinateFromSelection(selection);
     if (!coordinate) return;
-    const isPoiSelection = selection?.type === 'Place' && selection.source === 'poi';
-    selectionFocusSequenceRef.current += 1;
-    setSelectionFocus({
-      id: selectionFocusSequenceRef.current,
-      coordinate,
-      ...(isPoiSelection ? POI_RESULT_FOCUS : {}),
-    });
-  }, [heimwegFocusActive, mapLocationPicker.active, selection]);
+    const coveredHeight = detailSheetMeasurement.height;
+    const firstFocus = focusedSelectionRef.current !== selection;
+    const targetInsets =
+      selection.type === 'Place'
+        ? undefined
+        : {
+            above: ACTIVITY_MARKER_VISIBLE_ABOVE_ANCHOR,
+            below: ACTIVITY_MARKER_VISIBLE_BELOW_ANCHOR,
+          };
+    const focusFrame: FocusFrame = {
+      topCoveredHeight: topOverlayHeight,
+      bottomCoveredHeight: coveredHeight,
+      targetInsets,
+    };
+    /*
+     * A selection is framed once when it opens — and framed AGAIN if the sheet
+     * later turns out to cover something quite different from what it reported
+     * first. The sheet keeps reporting (`onHeightChange` fires on every content
+     * measurement); this used to drop every report after the first, which is
+     * why an asynchronously-loading sheet left its own pin underneath itself.
+     *
+     * Two guards keep the second move from becoming a nuisance: it has to be
+     * worth seeing (`SELECTION_FOCUS_REFOCUS_SHIFT`), and the camera has to
+     * still be ours — one pan or pinch and the user owns it until they pick
+     * something else.
+     */
+    if (!firstFocus) {
+      if (userMovedMapSinceFocusRef.current) return;
+      const shift = focusPinShift(focusedFrameRef.current, focusFrame, viewportHeight);
+      if (shift < SELECTION_FOCUS_REFOCUS_SHIFT) return;
+    }
+    /*
+     * The legibility floor is part of ARRIVING at a tapped POI, not of keeping
+     * it framed: re-applying it would pull a camera the user has since zoomed
+     * back out to a level they left on purpose.
+     */
+    const isPoiSelection = firstFocus && selection?.type === 'Place' && selection.source === 'poi';
+    const measuredSelection = selection;
+    selectionFocusTimerRef.current = setTimeout(() => {
+      selectionFocusTimerRef.current = null;
+      focusedSelectionRef.current = measuredSelection;
+      focusedFrameRef.current = focusFrame;
+      // The move about to happen is not the user's, so it must not count as one.
+      userMovedMapSinceFocusRef.current = false;
+      selectionFocusSequenceRef.current += 1;
+      setSelectionFocus({
+        id: selectionFocusSequenceRef.current,
+        selection: measuredSelection,
+        coordinate,
+        topCoveredHeight: topOverlayHeight,
+        coveredHeight,
+        targetInsets,
+        duration: SELECTION_FOCUS_DURATION_MS,
+        ...(isPoiSelection ? POI_RESULT_FOCUS : {}),
+      });
+    }, SELECTION_FOCUS_MEASUREMENT_SETTLE_MS);
+    return () => {
+      if (!selectionFocusTimerRef.current) return;
+      clearTimeout(selectionFocusTimerRef.current);
+      selectionFocusTimerRef.current = null;
+    };
+  }, [
+    detailSheetMeasurement,
+    heimwegFocusActive,
+    mapLocationPicker.active,
+    selection,
+    topOverlayHeight,
+    viewportHeight,
+  ]);
 
   useEffect(() => {
     // Staleness only matters while the dedicated Heimweg focus is visible.
@@ -686,8 +858,45 @@ export function MapScreen({
     clearMapFocusRequest();
   }, [focusMapOn, mapFocusRequest, clearMapFocusRequest]);
   const selectedPlace = selection?.type === 'Place' ? selection : null;
-  const selectedActivity =
+  const selectedActivitySnapshot =
     selection?.type === 'Avatar' || selection?.type === 'Cluster' ? selection : null;
+  const selectedActivityInfo = selectedActivitySnapshot
+    ? findActivityById(selectedActivitySnapshot.id)
+    : null;
+  const selectedActivity = useMemo(() => {
+    if (!selectedActivitySnapshot || !selectedActivityInfo) return selectedActivitySnapshot;
+    const preview = infoToActivityPreview(selectedActivityInfo);
+    return selectedActivitySnapshot.type === 'Avatar'
+      ? {
+          type: 'Avatar' as const,
+          hostName: preview.participants[0]?.displayName ?? selectedActivitySnapshot.hostName,
+          ...preview,
+        }
+      : { type: 'Cluster' as const, ...preview };
+  }, [selectedActivityInfo, selectedActivitySnapshot]);
+  const selectedActivitySeenRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!selectedActivitySnapshot) {
+      selectedActivitySeenRef.current = undefined;
+      return;
+    }
+    if (selectedActivityInfo) {
+      selectedActivitySeenRef.current = selectedActivitySnapshot.id;
+      return;
+    }
+    if (selectedActivitySeenRef.current !== selectedActivitySnapshot.id) return;
+    selectedActivitySeenRef.current = undefined;
+    setSelection(null);
+    const ended =
+      selectedActivitySnapshot.endsAt != null &&
+      Date.parse(selectedActivitySnapshot.endsAt) <= Date.now();
+    Alert.alert(
+      ended ? 'Activity beendet' : 'Activity nicht mehr verfügbar',
+      ended
+        ? 'Die Activity ist inzwischen zu Ende.'
+        : 'Die Activity wurde abgesagt oder ist für dich nicht mehr sichtbar.',
+    );
+  }, [selectedActivityInfo, selectedActivitySnapshot]);
   selectedActivityIdRef.current = selectedActivity?.id;
   const selectedActivityJoined = selectedActivity ? isJoined(selectedActivity.id) : false;
   // "Wie komme ich da hin?" is the same question for a place and for an
@@ -713,22 +922,70 @@ export function MapScreen({
     ? selectedActivity?.participants.find((participant) => participant.userId !== currentUid)
     : undefined;
 
-  // Once joined, show the current user in the detail sheet immediately while
-  // the live document catches up. If it already lists them, leave it unchanged.
-  const displayedSelection = useMemo(() => {
-    if (
-      !selection ||
-      (selection.type !== 'Avatar' && selection.type !== 'Cluster') ||
-      !selectedActivityJoined ||
-      selection.participants.some((participant) => participant.userId === currentUid)
-    ) {
-      return selection;
-    }
+  const liveStackSelection = useMemo(() => {
+    if (selection?.type !== 'ActivityStack') return null;
+    const currentById = new Map(
+      [...mapMarkers, ...planningMarkers].map((marker) => [marker.id, marker] as const),
+    );
     return {
       ...selection,
-      participantCount: selection.participantCount + 1,
+      activities: selection.activities.flatMap((activity) => {
+        const marker = currentById.get(activity.id);
+        return marker ? [markerToStackItem(marker)] : [];
+      }),
+    };
+  }, [mapMarkers, planningMarkers, selection]);
+
+  useEffect(() => {
+    if (selection?.type !== 'ActivityStack' || !liveStackSelection) return;
+    if (liveStackSelection.activities.length === 0) {
+      setSelection(null);
+      return;
+    }
+    if (liveStackSelection.activities.length > 1) return;
+    const remaining = [...mapMarkers, ...planningMarkers].find(
+      (marker) => marker.id === liveStackSelection.activities[0].id,
+    );
+    if (!remaining) {
+      setSelection(null);
+      return;
+    }
+    setSelection(
+      remaining.planning
+        ? timePlanSelection(remaining.id, invitedTimePlans)
+        : markerToSelection(remaining),
+    );
+  }, [
+    invitedTimePlans,
+    liveStackSelection,
+    mapMarkers,
+    markerToSelection,
+    planningMarkers,
+    selection,
+  ]);
+
+  // The detail is derived from the live entity. The only optimistic patch left
+  // is the current user's face while the successful join snapshot is in flight.
+  const displayedSelection = useMemo(() => {
+    const current: MapSelection | null =
+      selection?.type === 'ActivityStack'
+        ? liveStackSelection
+        : selectedActivitySnapshot
+          ? selectedActivity
+          : selection;
+    if (
+      !current ||
+      (current.type !== 'Avatar' && current.type !== 'Cluster') ||
+      !selectedActivityJoined ||
+      current.participants.some((participant) => participant.userId === currentUid)
+    ) {
+      return current;
+    }
+    return {
+      ...current,
+      participantCount: current.participantCount + 1,
       participants: [
-        ...selection.participants,
+        ...current.participants,
         {
           userId: currentUid,
           displayName: user?.displayName ?? 'Du',
@@ -736,7 +993,15 @@ export function MapScreen({
         },
       ],
     };
-  }, [selection, selectedActivityJoined, currentUid, user?.displayName]);
+  }, [
+    currentUid,
+    liveStackSelection,
+    selectedActivity,
+    selectedActivityJoined,
+    selectedActivitySnapshot,
+    selection,
+    user?.displayName,
+  ]);
   // Firebase maintains a location-free count in the existing activity feed on
   // journey start, arrival and stop. The map therefore needs no RTDB listener
   // for every marker.
@@ -764,6 +1029,7 @@ export function MapScreen({
     () => (journeyFocus ? getActivityJourneys(previewToJourneyContext(journeyFocus.activity)) : []),
     [getActivityJourneys, journeyFocus],
   );
+  const journeyFocusError = journeyFocus ? getActivityJourneyError(journeyFocus.activity.id) : null;
   useEffect(() => {
     if (!journeyFocus) return;
     return watchActivityJourney(previewToJourneyContext(journeyFocus.activity));
@@ -809,11 +1075,31 @@ export function MapScreen({
     [findActivityById],
   );
 
+  /**
+   * Opening an activity that the feed may not know yet. Bounded retry — a
+   * push can outrun the listener, and giving up silently after one lookup is
+   * how a tapped notification does nothing at all.
+   */
+  const openActivityByIdRef = useRef<(id: string, onGiveUp: () => void) => void>(() => {});
+  openActivityByIdRef.current = (activityId, onGiveUp) => {
+    let attempt = 0;
+    const tryOpen = () => {
+      if (openActivityById(activityId)) return;
+      attempt += 1;
+      if (attempt >= 12) {
+        onGiveUp();
+        return;
+      }
+      setTimeout(tryOpen, 400);
+    };
+    tryOpen();
+  };
+
   const routeNotificationResponse = useCallback(
     (response: Notifications.NotificationResponse | null) => {
       if (
         !response ||
-        isJourneyAutoShareResponse(response) ||
+        isJourneyDecisionResponse(response) ||
         !claimNotificationResponse('map', response)
       ) {
         return;
@@ -874,21 +1160,39 @@ export function MapScreen({
         return;
       }
 
-      if (activityId && openActivityById(activityId)) return;
+      if (activityId) {
+        /**
+         * A tap can arrive before the feed listener has answered — on a cold
+         * start it usually does. Retry briefly instead of falling through.
+         *
+         * The Postfach fallback is only honest for a push that HAS an entry
+         * there, and `activity_created` deliberately has none: it is push-only
+         * so a large audience does not cost one durable write per person. Left
+         * unhandled, tapping it would open an inbox that never mentions the
+         * activity you tapped. Goes through the ref so a retry cannot fire a
+         * stale `openActivityById` captured when this callback was created.
+         */
+        openActivityByIdRef.current(activityId, () => setPostfachVisible(true));
+        return;
+      }
       setPostfachVisible(true);
     },
-    [findActivityById, friendSessions, openActivityById, ownSafetySession, setConsoleMinimized],
+    [findActivityById, friendSessions, getGroup, ownSafetySession, setConsoleMinimized],
   );
   const notificationResponseRouterRef = useRef(routeNotificationResponse);
   notificationResponseRouterRef.current = routeNotificationResponse;
 
   useEffect(() => {
     if (Platform.OS === 'web') return;
-    const subscription = Notifications.addNotificationResponseReceivedListener((response) =>
-      notificationResponseRouterRef.current(response),
-    );
+    const handleResponse = (response: Notifications.NotificationResponse | null) => {
+      notificationResponseRouterRef.current(response);
+      if (response && !isJourneyDecisionResponse(response)) {
+        void Notifications.clearLastNotificationResponseAsync().catch(() => {});
+      }
+    };
+    const subscription = Notifications.addNotificationResponseReceivedListener(handleResponse);
     void Notifications.getLastNotificationResponseAsync()
-      .then((response) => notificationResponseRouterRef.current(response))
+      .then(handleResponse)
       .catch(() => {});
     return () => subscription.remove();
   }, []);
@@ -1064,8 +1368,7 @@ export function MapScreen({
     shareLocation,
   ]);
 
-  // Opens the friends list from the dedicated Nearby pill or the row inside the
-  // own-status sheet.
+  // Opens the friends list from the Core or the row inside the own-status sheet.
   const handleOpenPresencePress = useCallback(() => {
     setNearbySheetVisible(true);
   }, []);
@@ -1088,23 +1391,35 @@ export function MapScreen({
    * only the explicit toggle in the sheet asks the OS for a position.
    */
   const handleCoreStatusTap = useCallback(() => {
-    if (!isOpen) goOpen();
+    if (!isOpen && !goOpen()) {
+      const activityTitle = openBlockedByActivity?.title ?? 'Deine Activity';
+      Alert.alert(
+        'Offen gerade nicht möglich',
+        `${activityTitle} läuft bereits oder beginnt gleich. Öffne den Plan, um ihn anzusehen.`,
+      );
+      return;
+    }
     setOpenStatusSheetVisible(true);
-  }, [goOpen, isOpen]);
+  }, [goOpen, isOpen, openBlockedByActivity]);
 
-  function openComposer(
-    mode: ActivityMode,
-    place?: SelectedPlace,
-    title?: string,
-    activityId?: string,
-  ) {
-    Keyboard.dismiss();
-    setComposerMode(mode);
-    setComposerPlace(place);
-    setComposerTitle(title);
-    setComposerActivityId(activityId);
-    setComposerVisible(true);
-  }
+  const constrainOpenForActivity = useCallback(
+    (startsAt: string | undefined, title: string) => {
+      if (!isOpen || !openExpiresAt || !startsAt) return;
+      const start = Date.parse(startsAt);
+      if (!Number.isFinite(start) || start >= openExpiresAt) return;
+      if (start <= Date.now()) {
+        closeOpenStatus();
+        Alert.alert('Offen beendet', `„${title}“ läuft jetzt. Dein Offen-Status wurde beendet.`);
+        return;
+      }
+      setOpenExpiresAt(start);
+      Alert.alert(
+        'Offen angepasst',
+        `Du bist bis ${formatClock(start)} offen. Dann beginnt „${title}“.`,
+      );
+    },
+    [closeOpenStatus, isOpen, openExpiresAt, setOpenExpiresAt],
+  );
 
   function startTimePlan(draft: ActivityDraft, offers: TimePlanOfferGroup[]): TimePlanCreation {
     return timePlanningService.createTimePlan(
@@ -1135,24 +1450,13 @@ export function MapScreen({
    * header and place row — only the time part differs.
    */
   function openTimePlan(planId: string) {
-    const plan = invitedTimePlans.find((entry) => entry.id === planId);
     setPostfachVisible(false);
-    setSelection({
-      type: 'Planning',
-      planId,
-      title: plan?.title ?? 'Terminfindung',
-      hostName: plan?.hostName ?? 'Jemand',
-      ...(plan?.place?.label ? { placeLabel: plan.place.label } : {}),
-      ...(plan?.place?.visibility === 'pin'
-        ? { coordinate: { latitude: plan.place.latitude, longitude: plan.place.longitude } }
-        : {}),
-    });
+    setSelection(timePlanSelection(planId, invitedTimePlans));
   }
 
   function closeNearbySheet() {
     nearbyActionRevisionRef.current += 1;
     setNearbySheetVisible(false);
-    setOpenPresenceFocusId(undefined);
   }
 
   async function handleStartSpontaneousRound(members: GroupMember[]): Promise<boolean> {
@@ -1384,8 +1688,22 @@ export function MapScreen({
               ? 'Automatische Anreise ist auf diesem Gerät nicht verfügbar.'
               : result.reason === 'destination-required'
                 ? 'Diese Activity braucht einen Ort auf der Karte.'
-                : 'Dein Standort ist gerade nicht verfügbar. Gleich nochmal versuchen.';
-        Alert.alert('Anreise konnte nicht gestartet werden', message);
+                : result.reason === 'activity-unavailable'
+                  ? 'Die Activity oder ihre Anreise ist nicht mehr verfügbar.'
+                  : 'Dein Standort ist gerade nicht verfügbar. Gleich nochmal versuchen.';
+        Alert.alert(
+          'Anreise konnte nicht gestartet werden',
+          message,
+          result.reason === 'location-permission'
+            ? [
+                { text: 'Abbrechen', style: 'cancel' },
+                {
+                  text: 'Einstellungen öffnen',
+                  onPress: () => void Linking.openSettings(),
+                },
+              ]
+            : undefined,
+        );
       } catch {
         Alert.alert(
           'Anreise konnte nicht gestartet werden',
@@ -1399,9 +1717,9 @@ export function MapScreen({
   const offerJourneyShareNow = useCallback(
     (activity: JourneyActivityContext) => {
       Alert.alert('Anreise teilen?', journeyPromptBody(activity), [
-        { text: 'Nicht jetzt', style: 'cancel' },
+        { text: 'Nein', style: 'cancel' },
         {
-          text: 'Anreise teilen',
+          text: 'Ja, teilen',
           onPress: () => void startJourneyFromPrompt(activity),
         },
       ]);
@@ -1450,7 +1768,12 @@ export function MapScreen({
 
   async function submitComposer(draft: ActivityDraft) {
     if (editingActivityId) {
-      await updateActivityFromDraft(editingActivityId, draft);
+      // Same resolver as a fresh publish. An edit used to skip it, so a draft
+      // whose place was still the unresolved "Aktueller Standort" saved with
+      // `visibility: 'none'` — the activity lost its pin by being edited.
+      const resolvedEdit = await resolveCurrentLocationDraft(draft);
+      await updateActivityFromDraft(editingActivityId, resolvedEdit);
+      constrainOpenForActivity(resolvedEdit.startsAt, resolvedEdit.title?.trim() || 'Activity');
       haptics.success();
       setComposerVisible(false);
       setEditingActivityId(undefined);
@@ -1508,6 +1831,7 @@ export function MapScreen({
     // The offer belongs to JOINING someone else's activity.
     void activity.ready
       .then((result) => {
+        constrainOpenForActivity(resolvedDraft.startsAt, resolvedDraft.title?.trim() || 'Activity');
         // The local marker remains visible while an offline create is queued,
         // but chat setup is deliberately server-confirmed.
         if (result === 'queued') return;
@@ -1573,20 +1897,22 @@ export function MapScreen({
         Alert.alert('Activity voll', 'Leider ist in dieser Activity kein Platz mehr frei.');
         return;
       }
+      constrainOpenForActivity(activity.startsAt, activity.title);
       joinActivity(activity.id, {
         title: activity.title,
         startsAt: activity.startsAt,
         endsAt: activity.endsAt,
       });
       haptics.success();
-      void maybeAskForPush();
       const journey = previewToJourneyContext(activity);
-      if (
-        activitySupportsJourney(activity.plannedMode) &&
+      const shouldOfferJourney =
+        activitySupportsJourney(activity.plannedMode, activity.targetCoordinate) &&
         journeyRemindersEnabled &&
-        journeyCanStartNow(journey)
-      ) {
+        journeyCanStartNow(journey);
+      if (shouldOfferJourney) {
         offerJourneyShareNow(journey);
+      } else {
+        void maybeAskForPush();
       }
     } catch (error) {
       if (
@@ -1618,7 +1944,7 @@ export function MapScreen({
     Alert.alert(
       'Activity verlassen?',
       successor
-        ? `${successor.displayName} übernimmt als Host. Die Activity bleibt für alle bestehen.`
+        ? `Du gibst die Activity ab — ${successor.displayName} übernimmt als Host und sie läuft ohne dich weiter.`
         : 'Du kannst später erneut beitreten, solange noch Plätze frei sind.',
       [
         { text: 'Abbrechen', style: 'cancel' },
@@ -1628,15 +1954,19 @@ export function MapScreen({
           onPress: () => {
             haptics.medium();
             setSelection(null);
-            void leaveActivityEntity(activityId)
-              .then(() => leaveRoom(activityId))
-              .catch((error: unknown) => {
-                haptics.warning();
-                Alert.alert(
-                  'Verlassen fehlgeschlagen',
-                  writeFailureMessage(error, 'Du bist weiterhin dabei.'),
-                );
-              });
+            void (async () => {
+              if (activeJourney?.activityId === activityId) {
+                await stopJourney(activityId).catch(() => {});
+              }
+              await leaveActivityEntity(activityId);
+              await leaveRoom(activityId);
+            })().catch((error: unknown) => {
+              haptics.warning();
+              Alert.alert(
+                'Verlassen fehlgeschlagen',
+                writeFailureMessage(error, 'Du bist weiterhin dabei.'),
+              );
+            });
           },
         },
       ],
@@ -1649,7 +1979,7 @@ export function MapScreen({
     const coordinate = selectedActivity.targetCoordinate;
     Alert.alert(
       'Activity absagen?',
-      'Die Activity verschwindet aus der Karte und kann nicht wieder aktiviert werden.',
+      'Die Activity endet für alle — sie verschwindet aus der Karte und kann nicht wieder aktiviert werden.',
       [
         { text: 'Weiter bearbeiten', style: 'cancel' },
         {
@@ -1672,7 +2002,12 @@ export function MapScreen({
             // One frame later: the canvas has captured the marker it must pop,
             // and only then may the entity disappear underneath it.
             requestAnimationFrame(() => {
-              void cancelActivityEntity(activityId).catch((error: unknown) => {
+              void (async () => {
+                if (activeJourney?.activityId === activityId) {
+                  await stopJourney(activityId).catch(() => {});
+                }
+                await cancelActivityEntity(activityId);
+              })().catch((error: unknown) => {
                 // The entity is already back (the provider rolled it back) —
                 // bring it back on screen too, so the alert has a subject.
                 setDismissMarkerId(undefined);
@@ -1908,9 +2243,14 @@ export function MapScreen({
           setDismissMarkerId(undefined);
         }}
         selectionFocus={
-          heimwegFocusActive ? safetyMarkerFocus : selection ? selectionFocus : undefined
+          heimwegFocusActive
+            ? safetyMarkerFocus
+            : selectionFocus?.selection === selection
+              ? selectionFocus
+              : undefined
         }
         fitRequest={heimwegFocusActive ? safetyFitRequest : undefined}
+        topOverlayHeight={topOverlayHeight}
         bottomOverlayHeight={safetySplitPanelHeight}
         bottomSheetHeight={selection ? detailSheetHeight : 0}
         journeyFocus={
@@ -1939,7 +2279,13 @@ export function MapScreen({
         hideActivities={heimwegFocusActive}
         journeyUnderwayCounts={journeyUnderwayCounts}
         selectedActivityId={
-          selection?.type === 'Avatar' || selection?.type === 'Cluster' ? selection.id : undefined
+          selection?.type === 'Avatar' ||
+          selection?.type === 'Cluster' ||
+          selection?.type === 'ActivityStack'
+            ? selection.id
+            : selection?.type === 'Planning'
+              ? selection.planId
+              : undefined
         }
         pickingLocation={mapLocationPicker.active}
         onJourneyParticipantPress={focusJourneyMarker}
@@ -1952,6 +2298,9 @@ export function MapScreen({
           setSelection(null);
         }}
         onUserMapGesture={() => {
+          // From here the camera belongs to the user: a sheet that grows later
+          // may no longer drag the view back to its own idea of centred.
+          userMovedMapSinceFocusRef.current = true;
           if (bootLocationAttemptRunningRef.current && !didCenterOnOwnLocationRef.current) {
             didCenterOnOwnLocationRef.current = true;
             pendingBootFocusCoordinateRef.current = null;
@@ -1977,7 +2326,17 @@ export function MapScreen({
           placeSelectionRequestRef.current += 1;
           setSelection(clusterToSelection(cluster));
         }}
-        openPresenceMarkers={openPresenceMarkers}
+        onActivityStackPress={(markers, coordinate, id) => {
+          if (mapLocationPicker.active || heimwegFocusActive) return;
+          placeSelectionRequestRef.current += 1;
+          setSelection({
+            type: 'ActivityStack',
+            id,
+            title: `${markers.length} Activities`,
+            coordinate,
+            activities: markers.map(markerToStackItem),
+          });
+        }}
         planningMarkers={planningMarkers}
         onMarkerPress={(marker) => {
           // A round is not an activity: it has no participants and no time, so
@@ -1988,15 +2347,6 @@ export function MapScreen({
           }
           if (mapLocationPicker.active || heimwegFocusActive) return;
           placeSelectionRequestRef.current += 1;
-          // Open presence is a STATUS, not a plan: it opens the Offen-Fenster on
-          // that person ("… ist offen", plus the unchanged Winken flow), never
-          // the activity detail sheet, which would imply a plan that does not
-          // exist. `markerToSelection` would build exactly that wrong sheet.
-          if (marker.mode === 'open' && marker.friendId) {
-            setOpenPresenceFocusId(marker.friendId);
-            setNearbySheetVisible(true);
-            return;
-          }
           setSelection(markerToSelection(marker));
         }}
         onPlacePress={async (place) => {
@@ -2042,9 +2392,12 @@ export function MapScreen({
       ) : (
         <>
           <MapOverlay
+            onTopOcclusionHeightChange={setPrimaryTopOverlayHeight}
             isOpen={isOpen}
             coreActivity={ownCoreActivity}
+            nextActivity={nextOwnActivity}
             journeyFocusLabel={journeyFocusLabel}
+            journeyFocusError={journeyFocusError}
             journeyParticipants={journeyFocusParticipants}
             activeJourney={coreJourney}
             onCreateActivity={(mode) => openComposer(mode)}
@@ -2054,21 +2407,16 @@ export function MapScreen({
             onOpenStatusPress={handleCoreStatusTap}
             onCoreActivityPress={openActivityById}
             nearbyCount={nearbyFriends.length}
-            nearbyPillRef={nearbyPillRef}
-            nearbyPillProgress={nearbyMorph}
-            nearbyPillInert={nearbySheetVisible}
             onNearbyPress={handleOpenPresencePress}
             onPostfachPress={() => setPostfachVisible(true)}
-            onCalendarPress={() => onOpenCalendar?.()}
+            onCalendarPress={(origin) => {
+              calendarOriginRef.current = origin;
+              setCalendarVisible(true);
+            }}
             spontaneousRound={spontaneousRound}
             spontaneousRoundUnreadCount={spontaneousRound ? getUnreadCount(spontaneousRound.id) : 0}
             onSpontaneousRoundPress={() => setRoundSheetVisible(true)}
             onClearJourneyFocus={() => {
-              // Das X beendet die ANREISE, nicht nur ihren Kartenfokus. Vorher
-              // wurde bloss der Fokus geraeumt: das Teilen lief unsichtbar
-              // weiter, obwohl die Geste eindeutig "Schluss damit" heisst.
-              // Wieder aktivieren geht ueber das Activity-Sheet (armJourney).
-              if (journeyFocus) stopJourney(journeyFocus.activity.id);
               setJourneyFocus(null);
             }}
             onJourneyParticipantPress={(participantId) => {
@@ -2082,7 +2430,7 @@ export function MapScreen({
             onActiveJourneyPress={focusActiveJourney}
           />
 
-          <SafetyStatusPill />
+          <SafetyStatusPill onTopOcclusionHeightChange={setSafetyTopOverlayHeight} />
 
           {/* Your own open window. Deliberately a separate surface from the
               NearbySheet below: one is about you, the other about your
@@ -2099,18 +2447,20 @@ export function MapScreen({
 
           <NearbySheet
             visible={nearbySheetVisible}
-            focusFriendId={openPresenceFocusId}
             friends={nearbyFriends}
             friendsWithoutLocation={friendsWithoutLocation}
+            outsideRadiusCount={outsideRadiusCount}
             emptyReason={nearbyEmptyReason}
             locationDenied={locationDenied}
             onAddFriends={() => {
               closeNearbySheet();
               router.push('/friends');
             }}
+            onOpenStatus={() => {
+              closeNearbySheet();
+              handleCoreStatusTap();
+            }}
             onClose={closeNearbySheet}
-            originRef={nearbyPillRef}
-            morphProgress={nearbyMorph}
             onStartSpontaneousRound={handleStartSpontaneousRound}
             onJoinOpening={handleJoinOpening}
           />
@@ -2166,6 +2516,7 @@ export function MapScreen({
             visible={postfachVisible}
             covered={chatActivity !== null}
             onClose={() => setPostfachVisible(false)}
+            onBrowseActivities={() => setPostfachVisible(false)}
             onEditActivity={(activity) => {
               if (!openActivityEditor(activity.id)) {
                 Alert.alert(
@@ -2196,9 +2547,37 @@ export function MapScreen({
             onOpenTimePlan={(planId) => openTimePlan(planId)}
           />
 
+          {/* Your plans. A card like the activity overview, opened from the
+              Core's "Pläne" target and closed by its own header button — there
+              is no calendar mode and no return control at the bottom edge. */}
+          <CalendarSheet
+            visible={calendarVisible}
+            resolveOrigin={() => calendarOriginRef.current?.() ?? Promise.resolve(null)}
+            onClose={() => setCalendarVisible(false)}
+            onEditActivity={(activityId) => {
+              if (!openActivityEditor(activityId)) {
+                Alert.alert(
+                  'Bearbeiten nicht möglich',
+                  'Die Aktivität ist nicht mehr aktiv oder du bist nicht ihr Host.',
+                );
+                return;
+              }
+              // The composer can send you to the map to pick a place, so the
+              // calendar has to be out of the way before it opens — a card
+              // covering the map while the picker owns it is a dead end.
+              setCalendarVisible(false);
+            }}
+            onOpenChat={setChatActivity}
+          />
+
           <MarkerDetailSheet
             projectCoordinate={projectCoordinate}
+            topMapOcclusionHeight={topOverlayHeight}
             onOpenPlannedActivity={(activityId: string) => openActivityWhenKnown(activityId)}
+            onOpenStackItem={(id, planning) => {
+              if (planning) openTimePlan(id);
+              else openActivityById(id);
+            }}
             selection={displayedSelection}
             visible={Boolean(selection)}
             joined={selectedActivityJoined}
@@ -2226,7 +2605,13 @@ export function MapScreen({
                 : undefined
             }
             onCreateActivity={createActivityFromProposal}
-            onHeightChange={setDetailSheetHeight}
+            onHeightChange={(height) => {
+              setDetailSheetMeasurement((current) => ({
+                height,
+                revision: current.revision + 1,
+                selection,
+              }));
+            }}
             onClose={() => {
               activityJoinRevisionRef.current += 1;
               activityJoinInFlightRef.current = null;

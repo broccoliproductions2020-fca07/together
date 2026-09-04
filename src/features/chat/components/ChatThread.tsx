@@ -1,7 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   FlatList,
   Keyboard,
   Platform,
@@ -13,7 +12,8 @@ import {
 } from 'react-native';
 
 import { useThemeColors } from '@/features/theme';
-import { FONT, TEXT_CAPPED, TEXT_FLEXIBLE, TYPE } from '@/shared/theme';
+import { loaderSizeForIcon, TogetherLoader } from '@/shared/components';
+import { FONT, shadow, TEXT_CAPPED, TEXT_FLEXIBLE, TYPE } from '@/shared/theme';
 
 import { useActivityChat } from '../useActivityChat';
 import type { ProposalData } from '../types';
@@ -23,6 +23,14 @@ import { ProposalCard } from './ProposalCard';
 
 /** Distance from the bottom that still counts as "reading the newest". */
 const AT_BOTTOM_THRESHOLD = 80;
+
+const JUMP_BUTTON_SHADOW = shadow({
+  color: '#000000',
+  offsetY: 4,
+  radius: 10,
+  opacity: 0.28,
+  elevation: 5,
+});
 
 function DaySeparator({ label }: { label: string }) {
   const colors = useThemeColors();
@@ -146,8 +154,7 @@ export function ChatThread({
 
   function onScroll(event: NativeSyntheticEvent<NativeScrollEvent>) {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-    const distanceFromBottom =
-      contentSize.height - (contentOffset.y + layoutMeasurement.height);
+    const distanceFromBottom = contentSize.height - (contentOffset.y + layoutMeasurement.height);
     atBottomRef.current = distanceFromBottom <= AT_BOTTOM_THRESHOLD;
     if (atBottomRef.current && showNewMessages) setShowNewMessages(false);
   }
@@ -201,7 +208,7 @@ export function ChatThread({
               className="mb-2 flex-row items-center justify-center gap-2 self-center rounded-full bg-secondary px-4 py-2 active:opacity-70"
             >
               {loadingOlder ? (
-                <ActivityIndicator size="small" color={accent} />
+                <TogetherLoader accessibilityLabel="" color={accent} size={loaderSizeForIcon(14)} />
               ) : (
                 <Ionicons name="arrow-up" size={14} color={accent} />
               )}
@@ -276,14 +283,7 @@ export function ChatThread({
             accessibilityLabel="Zu den neuen Nachrichten springen"
             onPress={() => scrollToEnd(true)}
             className="flex-row items-center gap-1.5 rounded-full px-3.5 py-2 active:opacity-80"
-            style={{
-              backgroundColor: accent,
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: 4 },
-              shadowOpacity: 0.28,
-              shadowRadius: 10,
-              elevation: 5,
-            }}
+            style={{ backgroundColor: accent, ...JUMP_BUTTON_SHADOW }}
           >
             <Text
               {...TEXT_CAPPED}

@@ -9,17 +9,19 @@ import {
   type ReactNode,
 } from 'react';
 import * as Notifications from 'expo-notifications';
-import { AppState } from 'react-native';
+import { Alert, AppState, Linking } from 'react-native';
 
 import { useAuth } from '@/features/auth';
 import type { GeoCoordinate } from '@/domain/geo';
 import { claimNotificationResponse } from '@/features/notifications/notificationResponse';
+import { notificationService } from '@/features/notifications/services/notificationService';
 
 import {
   armBackgroundJourney,
   ensureBackgroundWatcherArmed,
   getBackgroundJourneyRecord,
-  isJourneyAutoShareResponse,
+  isJourneyDecisionResponse,
+  journeyDecisionFromNotification,
   journeyContextFromNotification,
   markBackgroundJourneyArrived,
   prepareJourneyAutomation,
@@ -42,6 +44,7 @@ interface JourneyContextValue {
     underwayCount: number;
     arrivedCount: number;
   };
+  getActivityJourneyError: (activityId: string) => string | null;
   watchActivityJourney: (activity: JourneyActivityContext) => () => void;
   /** Opts in locally. A point is published only after actual movement. */
   armJourney: (
@@ -89,12 +92,20 @@ export function JourneyProvider({ children }: { children: ReactNode }) {
   );
   const [records, setRecords] = useState<Record<string, UserJourneyRecord>>({});
   const [remoteLocations, setRemoteLocations] = useState<Record<string, JourneyLocationDoc[]>>({});
+  const [viewerErrors, setViewerErrors] = useState<Record<string, string>>({});
   const activeAccountUidRef = useRef(actor.uid);
   activeAccountUidRef.current = actor.uid;
   const journeyViewerAccessRef = useRef<{
     uid: string;
     requests: Map<string, Promise<void>>;
   }>({ uid: '', requests: new Map() });
+
+  useEffect(() => {
+    setRecords({});
+    setRemoteLocations({});
+    setViewerErrors({});
+    journeyViewerAccessRef.current = { uid: actor.uid, requests: new Map() };
+  }, [actor.uid]);
 
   const activeJourney = useMemo(
     () =>
@@ -132,6 +143,14 @@ export function JourneyProvider({ children }: { children: ReactNode }) {
     });
   }, [actor.uid]);
 
+  const syncBackgroundWatcher = useCallback(() => {
+    void ensureBackgroundWatcherArmed()
+      .catch((error) =>
+        console.warn('[journey] Vorbereitung konnte nicht abgeglichen werden:', error),
+      )
+      .finally(() => void refreshBackgroundRecord());
+  }, [refreshBackgroundRecord]);
+
   useEffect(() => {
     void prepareJourneyAutomation().catch((error) => {
       console.warn('[journey] Benachrichtigungsaktion nicht verfügbar:', error);
@@ -139,19 +158,38 @@ export function JourneyProvider({ children }: { children: ReactNode }) {
     // Reliable T-30 backstop: the background arm trigger (journeyBackground.ts
     // → scheduleArmTrigger) is best-effort, so every foreground tick catches
     // up an already-consented journey whose window has arrived.
-    const tick = () => {
-      void ensureBackgroundWatcherArmed().finally(() => void refreshBackgroundRecord());
-    };
-    tick();
-    const timer = setInterval(tick, 15_000);
+    syncBackgroundWatcher();
     const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active') tick();
+      if (state === 'active') syncBackgroundWatcher();
     });
-    return () => {
-      clearInterval(timer);
-      subscription.remove();
-    };
-  }, [refreshBackgroundRecord]);
+    return () => subscription.remove();
+  }, [syncBackgroundWatcher]);
+
+  useEffect(() => {
+    if (!activeJourney) return;
+    const timer = setInterval(syncBackgroundWatcher, 15_000);
+    return () => clearInterval(timer);
+  }, [activeJourney, syncBackgroundWatcher]);
+
+  const hasRemoteLocations = Object.values(remoteLocations).some((items) => items.length > 0);
+  useEffect(() => {
+    if (!hasRemoteLocations) return;
+    const timer = setInterval(() => {
+      const now = Date.now();
+      setRemoteLocations((current) => {
+        let changed = false;
+        const next = Object.fromEntries(
+          Object.entries(current).map(([activityId, items]) => {
+            const fresh = items.filter((item) => item.expiresAt > now);
+            if (fresh.length !== items.length) changed = true;
+            return [activityId, fresh];
+          }),
+        );
+        return changed ? next : current;
+      });
+    }, 15_000);
+    return () => clearInterval(timer);
+  }, [hasRemoteLocations]);
 
   const armJourney = useCallback(
     async (
@@ -189,20 +227,47 @@ export function JourneyProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const handleResponse = (response: Notifications.NotificationResponse) => {
       if (
-        !isJourneyAutoShareResponse(response) ||
+        !isJourneyDecisionResponse(response) ||
         !claimNotificationResponse('journey', response)
       ) {
         return;
       }
+      void Notifications.clearLastNotificationResponseAsync().catch(() => {});
+      const decision = journeyDecisionFromNotification(response);
+      if (!decision) return;
+      void notificationService
+        .resolveJourneyReminder(actor, decision)
+        .catch(() => {});
+      if (!decision.share) return;
       const activity = journeyContextFromNotification(response);
-      if (activity) void armJourney(activity);
+      if (!activity) return;
+      void armJourney(activity).then((result) => {
+        if (result.ok) return;
+        const message = result.conflict
+          ? `Du teilst bereits deine Anreise zu ${result.conflict.title}. Öffne die Activity, um zu wechseln.`
+          : result.reason === 'location-permission'
+            ? 'Erlaube den Standort in den Einstellungen und versuche es in der Activity erneut.'
+            : result.reason === 'destination-required'
+              ? 'Diese Activity hat keinen Kartenort.'
+              : 'Die Activity oder ihre Anreise ist nicht mehr verfügbar.';
+        Alert.alert(
+          'Anreise nicht gestartet',
+          message,
+          result.reason === 'location-permission'
+            ? [
+                { text: 'Abbrechen', style: 'cancel' },
+                { text: 'Einstellungen öffnen', onPress: () => void Linking.openSettings() },
+              ]
+            : undefined,
+        );
+      });
     };
     const subscription = Notifications.addNotificationResponseReceivedListener(handleResponse);
     void Notifications.getLastNotificationResponseAsync().then((response) => {
       if (response) handleResponse(response);
     });
     return () => subscription.remove();
-  }, [armJourney]);
+  }, [actor, armJourney]);
 
   const ensureJourneyViewerAccess = useCallback(
     (activityId: string): Promise<void> => {
@@ -214,10 +279,13 @@ export function JourneyProvider({ children }: { children: ReactNode }) {
       const existing = cache.requests.get(activityId);
       if (existing) return existing;
 
-      const request = journeyService.ensureJourneyMember(actor, activityId).catch((error) => {
-        cache.requests.delete(activityId);
-        throw error;
-      });
+      const request = journeyService
+        .ensureJourneyMember(actor, activityId)
+        .then(() => undefined)
+        .catch((error) => {
+          cache.requests.delete(activityId);
+          throw error;
+        });
       cache.requests.set(activityId, request);
       return request;
     },
@@ -233,6 +301,12 @@ export function JourneyProvider({ children }: { children: ReactNode }) {
       void ensureJourneyViewerAccess(activity.id)
         .then(() => {
           if (cancelled || activeAccountUidRef.current !== accountUid) return;
+          setViewerErrors((current) => {
+            if (!(activity.id in current)) return current;
+            const next = { ...current };
+            delete next[activity.id];
+            return next;
+          });
           unsubscribe = journeyService.subscribeActivityJourney(
             actor,
             activity,
@@ -247,6 +321,10 @@ export function JourneyProvider({ children }: { children: ReactNode }) {
             () => {
               if (activeAccountUidRef.current !== accountUid) return;
               journeyViewerAccessRef.current.requests.delete(activity.id);
+              setViewerErrors((current) => ({
+                ...current,
+                [activity.id]: 'Live-Anreisen konnten nicht geladen werden.',
+              }));
               setRemoteLocations((current) => {
                 if (!(activity.id in current)) return current;
                 const next = { ...current };
@@ -258,6 +336,10 @@ export function JourneyProvider({ children }: { children: ReactNode }) {
         })
         .catch(() => {
           if (activeAccountUidRef.current !== accountUid) return;
+          setViewerErrors((current) => ({
+            ...current,
+            [activity.id]: 'Live-Anreisen konnten nicht geladen werden.',
+          }));
           setRemoteLocations((current) => {
             if (!(activity.id in current)) return current;
             const next = { ...current };
@@ -276,10 +358,7 @@ export function JourneyProvider({ children }: { children: ReactNode }) {
 
   const stopJourney = useCallback(
     async (activityId: string) => {
-      // The remote node is the privacy boundary. Do not claim that sharing
-      // stopped until its deletion was acknowledged by RTDB.
-      await journeyService.stopJourney(actor, activityId);
-      await stopBackgroundJourney(actor, activityId, { skipRemoteStop: true });
+      await stopBackgroundJourney(actor, activityId);
       setRecords((current) => {
         const record = current[activityId];
         if (!record) return current;
@@ -363,11 +442,17 @@ export function JourneyProvider({ children }: { children: ReactNode }) {
     [getActivityJourneys],
   );
 
+  const getActivityJourneyError = useCallback(
+    (activityId: string) => viewerErrors[activityId] ?? null,
+    [viewerErrors],
+  );
+
   const value = useMemo<JourneyContextValue>(
     () => ({
       activeJourney,
       getActivityJourneys,
       getJourneySummary,
+      getActivityJourneyError,
       watchActivityJourney,
       armJourney,
       stopJourney,
@@ -377,6 +462,7 @@ export function JourneyProvider({ children }: { children: ReactNode }) {
       activeJourney,
       armJourney,
       getActivityJourneys,
+      getActivityJourneyError,
       getJourneySummary,
       markArrived,
       stopJourney,

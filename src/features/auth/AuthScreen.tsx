@@ -33,12 +33,19 @@ import { FONT, TYPE } from '@/shared/theme';
 import { haptics } from '@/shared/utils/haptics';
 
 import { AppleSignInButton } from './components/AppleSignInButton';
+import { AUTH_CONTROL_HEIGHT } from './components/authInteractionStyles';
+import { GoogleGlyph } from './components/GoogleGlyph';
 import { EmailAuthForm, type AuthFormMode } from './components/EmailAuthForm';
 import { useAuth } from './hooks/useAuth';
 import type { SignInWithEmailInput } from './types';
 
 const REVEAL_EASE = Easing.bezier(0.22, 1, 0.36, 1);
-const GOOGLE_BLUE = '#4285F4';
+// Google's published dark-button palette. It is the variant meant for dark
+// surfaces, which is what keeps this stack from stacking two white slabs over
+// the aurora — Apple's native button has no dark option on this ground.
+const GOOGLE_SURFACE = '#131314';
+const GOOGLE_STROKE = '#8E918F';
+const GOOGLE_LABEL = '#E3E3E3';
 // Matches `BrandBackdrop`'s top stop, so the very first frame — before the
 // backdrop's own gradient paints — is already the right colour.
 const AUTH_GROUND = '#080B14';
@@ -192,14 +199,14 @@ export function AuthScreen() {
     <Animated.View style={showApple ? row1Style : row0Style}>
       <PressableScale
         accessibilityRole="button"
-        accessibilityLabel="Mit Google anmelden"
+        accessibilityLabel="Mit Google fortfahren"
         disabled={socialProvider !== null || submitting}
         style={styles.providerBtn}
         onPress={() => void handleSocialSignIn('google')}
       >
-        <Ionicons name="logo-google" size={19} color={GOOGLE_BLUE} />
+        <GoogleGlyph size={20} />
         <Text style={styles.providerLabel}>
-          {socialProvider === 'google' ? 'Google wird geöffnet …' : 'Mit Google anmelden'}
+          {socialProvider === 'google' ? 'Google wird geöffnet …' : 'Mit Google fortfahren'}
         </Text>
       </PressableScale>
     </Animated.View>
@@ -207,7 +214,7 @@ export function AuthScreen() {
 
   return (
     <View style={styles.root}>
-      <StatusBar style="light" backgroundColor={AUTH_GROUND} />
+      <StatusBar style="light" />
       <BrandBackdrop />
 
       <SafeAreaView style={styles.safeArea}>
@@ -406,7 +413,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 8,
     justifyContent: 'center',
-    minHeight: 52,
+    minHeight: AUTH_CONTROL_HEIGHT,
     paddingHorizontal: 20,
   },
   emailLabel: {
@@ -452,22 +459,19 @@ const styles = StyleSheet.create({
   },
   providerBtn: {
     alignItems: 'center',
-    backgroundColor: TOGETHER_BRAND.paper,
+    backgroundColor: GOOGLE_SURFACE,
+    borderColor: GOOGLE_STROKE,
     borderRadius: 16,
-    elevation: 5,
+    borderWidth: 1,
     flexDirection: 'row',
     gap: 12,
     justifyContent: 'center',
-    minHeight: 56,
+    minHeight: AUTH_CONTROL_HEIGHT,
     paddingHorizontal: 20,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.22,
-    shadowRadius: 14,
   },
   providerLabel: {
-    color: TOGETHER_BRAND.ink,
-    fontFamily: FONT.bold,
+    color: GOOGLE_LABEL,
+    fontFamily: FONT.semibold,
     ...TYPE.body,
   },
   root: {

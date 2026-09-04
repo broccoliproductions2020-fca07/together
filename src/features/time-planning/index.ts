@@ -4,7 +4,7 @@ export { TimeMatchingCard } from './components/TimeMatchingCard';
 export { timePlanningService } from './services/timePlanningService';
 export { useInvitedTimePlans } from './useInvitedTimePlans';
 export { timePlansToMapMarkers } from './utils/planMarkers';
-export { AVAILABLE_COLOR, FRAME_COLOR, PLANNING_COLOR, availabilityColor } from './planningTheme';
+export { AVAILABLE_COLOR, FRAME_COLOR, PLANNING_COLOR } from './planningTheme';
 export { normalizeIntervals, PLANNING_SNAP_MINUTES } from './utils/intervals';
 export {
   aggregateWindow,

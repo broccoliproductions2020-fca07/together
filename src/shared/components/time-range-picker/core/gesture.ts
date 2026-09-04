@@ -460,7 +460,11 @@ export function tickSettle(state: PickerState, deltaMs: number): PickerState {
  * left it — `ensureRangeVisible` only repairs a viewport the snap made invalid,
  * which is at most half a step of movement.
  */
-export function endGesture(state: PickerState, geometry: PickerGeometry): PickerState {
+export function endGesture(
+  state: PickerState,
+  geometry: PickerGeometry,
+  rezoomOnRelease = true,
+): PickerState {
   'worklet';
   const snapshot = state.snapshot;
   if (!snapshot) return { ...state, phase: 'idle', overshootPx: 0 };
@@ -491,7 +495,7 @@ export function endGesture(state: PickerState, geometry: PickerGeometry): Picker
 
   // Only a single handle. Moving the whole range changes nothing about how
   // precisely it can be edited, so it must not move the camera either.
-  if (snapshot.kind === 'range') return idle;
+  if (snapshot.kind === 'range' || !rezoomOnRelease) return idle;
   const target = planReZoom(range, viewport, geometry);
   return target ? beginSettle(idle, target, RE_ZOOM_DURATION_MS) : idle;
 }
@@ -527,6 +531,28 @@ export function snappedRange(state: PickerState, geometry: PickerGeometry): Time
   'worklet';
   const kind: RangeEdge = state.snapshot ? state.snapshot.kind : 'range';
   return snapRange(state.range, kind, geometry.stepMs, geometry.snapOriginMs, geometry.limits);
+}
+
+export function resolveHitTarget(
+  pointerX: number,
+  startX: number,
+  endX: number,
+  startHitWidth: number,
+  endHitWidth: number,
+  interactionMode: 'range' | 'end-only',
+): RangeEdge | null {
+  'worklet';
+  const startDistance = Math.abs(pointerX - startX);
+  const endDistance = Math.abs(pointerX - endX);
+  if (interactionMode === 'end-only') {
+    return endDistance <= endHitWidth / 2 || (pointerX > startX && pointerX < endX)
+      ? 'end'
+      : null;
+  }
+  if (startDistance <= startHitWidth / 2 || endDistance <= endHitWidth / 2) {
+    return startDistance <= endDistance ? 'start' : 'end';
+  }
+  return pointerX > startX && pointerX < endX ? 'range' : null;
 }
 
 export function isEdgePhase(phase: GesturePhase): boolean {

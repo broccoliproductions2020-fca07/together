@@ -9,4 +9,13 @@ module.exports = [
   {
     ignores: ['dist/*', 'node_modules/*', '.expo/*', 'expo-env.d.ts'],
   },
+  {
+    // Reanimated worklets and controlled native surfaces intentionally use mutable handles.
+    rules: {
+      'react-hooks/immutability': 'off',
+      'react-hooks/purity': 'off',
+      'react-hooks/refs': 'off',
+      'react-hooks/set-state-in-effect': 'off',
+    },
+  },
 ];

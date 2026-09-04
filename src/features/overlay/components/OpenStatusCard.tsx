@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useState } from 'react';
-import { Pressable, Switch, Text, TextInput, View } from 'react-native';
+import { Alert, Pressable, Switch, Text, TextInput, View } from 'react-native';
 import Animated, {
   Easing,
   FadeIn,
@@ -12,38 +12,19 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 
-import { DurationPicker } from '@/features/activities';
 import { OPEN_MAX_DURATION_MS, useOpenStatus } from '@/features/presence';
 import { AnimatedToggleIcon } from '@/shared/components/AnimatedToggleIcon';
 import { openLocationSettings } from '@/shared/utils/locationPermission';
 
+import { OpenExpiryPicker } from './OpenExpiryPicker';
+
 const OPEN_COLOR = '#3B82F6';
-/** Mirrors DurationPicker's own floor. Anything shorter is not a window. */
-const MIN_OPEN_MINUTES = 15;
-const DEFAULT_OPEN_MINUTES = 180;
 
 function formatUntil(expiresAt: number): string {
   const date = new Date(expiresAt);
   const hh = date.getHours().toString().padStart(2, '0');
   const mm = date.getMinutes().toString().padStart(2, '0');
   return `${hh}:${mm}`;
-}
-
-/**
- * The card stores an absolute expiry; the shared DurationPicker speaks minutes
- * from now. Both directions are relative to "now" on purpose — while you are
- * open, the question you are actually answering is "how much longer?", not
- * "at what o'clock?". The summary line above still shows the resulting clock
- * time, so the absolute answer stays visible.
- */
-function expiryToMinutes(expiresAt: number | null): number {
-  if (!expiresAt) return DEFAULT_OPEN_MINUTES;
-  const remaining = Math.round((expiresAt - Date.now()) / 60_000);
-  return Math.max(MIN_OPEN_MINUTES, Math.min(OPEN_MAX_DURATION_MS / 60_000, remaining));
-}
-
-function minutesToExpiry(minutes: number): number {
-  return Date.now() + minutes * 60_000;
 }
 
 function SubLabel({ children }: { children: string }) {
@@ -89,9 +70,8 @@ function DisclosureChevron({ expanded }: { expanded: boolean }) {
  * line beneath. The destructive control never shares a row with the disclosure:
  * they used to sit 8 px apart, so reaching for the chevron ended your status.
  *
- * The mis-tap protection lives one level up instead: the map pill NEVER goes
- * open, it only opens this sheet. Announcing yourself still takes two deliberate
- * taps, they just sit in a different place than the refinement.
+ * Opening requires an explicit labelled Offen action in this card or the Core.
+ * The map background and the friends list never publish presence themselves.
  *
  * No vibe set displays as "Egal" (display convention — the data stays null).
  * "open" was deliberately removed from the activity composer (open = presence,
@@ -115,6 +95,8 @@ export function OpenStatusCard({
     vibe,
     expiresAt,
     goOpen,
+    openLimitAt,
+    openBlockedByActivity,
     setVibe,
     setExpiresAt,
     shareLocation,
@@ -172,7 +154,13 @@ export function OpenStatusCard({
           accessibilityRole="button"
           accessibilityLabel="Jetzt offen stellen"
           accessibilityHint="Deine Freunde sehen sofort, dass du offen bist. Vibe, Zeit und Nähe kannst du danach anpassen."
-          onPress={() => goOpen()}
+          onPress={() => {
+            if (goOpen()) return;
+            Alert.alert(
+              'Offen gerade nicht möglich',
+              `„${openBlockedByActivity?.title ?? 'Deine Activity'}“ läuft bereits oder beginnt gleich.`,
+            );
+          }}
           className="flex-row items-center gap-3 px-4 py-3.5 active:opacity-90"
         >
           <View
@@ -260,6 +248,7 @@ export function OpenStatusCard({
             }}
             expiresAt={expiresAt}
             onPickExpiry={setExpiresAt}
+            openLimitAt={openLimitAt}
             shareLocation={shareLocation}
             onShareLocationChange={setShareLocation}
             shareLocationBlocked={shareLocationBlocked}
@@ -304,6 +293,7 @@ function RefineControls({
   onVibeCommit,
   expiresAt,
   onPickExpiry,
+  openLimitAt,
   shareLocation,
   onShareLocationChange,
   shareLocationBlocked,
@@ -314,6 +304,7 @@ function RefineControls({
   onVibeCommit?: () => void;
   expiresAt: number | null;
   onPickExpiry: (ts: number) => void;
+  openLimitAt: number | null;
   shareLocation: boolean;
   onShareLocationChange: (value: boolean) => void;
   shareLocationBlocked: boolean;
@@ -342,19 +333,19 @@ function RefineControls({
         />
       </View>
 
-      {/* Duration — the SAME control the activity composer uses, in the open
-          colour. A native time wheel here meant two different widgets answered
-          the same question ("how long is this good for?") on two screens. Its
-          15 min – 12 h range is exactly the open window's own range
-          (OPEN_MAX_DURATION_MS), so nothing had to be adapted. The resulting
-          clock time stays readable as "bis HH:MM" in the summary above. */}
       <View>
         <SubLabel>Bis wann?</SubLabel>
-        <DurationPicker
-          minutes={expiryToMinutes(expiresAt)}
-          accent={OPEN_COLOR}
-          onChange={(minutes) => onPickExpiry(minutesToExpiry(minutes))}
+        <OpenExpiryPicker
+          expiresAt={expiresAt}
+          maxDurationMs={OPEN_MAX_DURATION_MS}
+          limitAt={openLimitAt}
+          onCommit={onPickExpiry}
         />
+        {openLimitAt ? (
+          <Text className="mt-1.5 text-xs text-[#E0A23E]">
+            Dein nächster Plan beginnt um {formatUntil(openLimitAt)}.
+          </Text>
+        ) : null}
       </View>
 
       {/* Optional coarse proximity — visible only inside the Offen-Fenster. */}

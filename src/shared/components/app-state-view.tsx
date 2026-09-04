@@ -1,9 +1,16 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Text, View } from 'react-native';
 
+import { FONT, TEXT_FLEXIBLE, TYPE } from '@/shared/theme';
+
 import { SEMANTIC_COLOR } from '../utils/semanticColors';
 
-import { AppButton } from './app-button';
+import { SquircleButton } from './SquircleButton';
+
+// 20 is off the scale; kept as-is so fixing the typeface does not also resize
+// every empty state in the app.
+const TITLE = { fontSize: 20, lineHeight: 26, letterSpacing: -0.35, fontFamily: FONT.bold };
+const DESCRIPTION = { ...TYPE.label, fontFamily: FONT.medium };
 
 export interface AppStateViewProps {
   icon: keyof typeof Ionicons.glyphMap;
@@ -42,15 +49,19 @@ export function AppStateView({
           <Ionicons name={icon} size={23} color={accent} />
         </View>
       </View>
-      <Text className="text-center text-xl font-extrabold tracking-[-0.35px] text-foreground">
+      <Text {...TEXT_FLEXIBLE} className="text-center text-foreground" style={TITLE}>
         {title}
       </Text>
-      <Text className="mt-2 max-w-[290px] text-center text-sm leading-5 text-muted-foreground">
+      <Text
+        {...TEXT_FLEXIBLE}
+        className="mt-2 max-w-[290px] text-center text-muted-foreground"
+        style={DESCRIPTION}
+      >
         {description}
       </Text>
       {actionLabel && onAction ? (
         <View className="mt-6 w-full max-w-[230px]">
-          <AppButton label={actionLabel} onPress={onAction} />
+          <SquircleButton label={actionLabel} color={accent} onPress={onAction} />
         </View>
       ) : null}
     </View>

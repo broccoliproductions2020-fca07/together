@@ -5,11 +5,25 @@ import { Alert, Modal, Pressable, ScrollView, Text, TextInput, View } from 'reac
 import { useFriends, type FriendProfile } from '@/features/friends';
 import { AppButton, AppText } from '@/shared/components';
 import { AnimatedToggleIcon } from '@/shared/components/AnimatedToggleIcon';
+import { FONT, TEXT_CAPPED, TEXT_FLEXIBLE, TYPE } from '@/shared/theme';
 
 import { useCircles } from '../CirclesProvider';
 import type { CircleDoc } from '../services/circleService.types';
 
 const ACCENT = '#3B82F6';
+
+/** See FriendsScreen: weight classes without a family render the system font. */
+const TEXT = {
+  sheetTitle: { ...TYPE.body, fontFamily: FONT.bold },
+  cardTitle: { ...TYPE.body, fontFamily: FONT.semibold },
+  body: { ...TYPE.label, fontFamily: FONT.medium },
+  note: { ...TYPE.label, fontFamily: FONT.semibold },
+  fine: { ...TYPE.caption, fontFamily: FONT.medium },
+  finePill: { ...TYPE.caption, fontFamily: FONT.semibold },
+  action: { ...TYPE.label, fontFamily: FONT.bold },
+  input: { ...TYPE.body, fontFamily: FONT.medium },
+  inputCompact: { ...TYPE.label, fontFamily: FONT.medium },
+};
 
 function Avatar({ friend, small = false }: { friend: FriendProfile; small?: boolean }) {
   const size = small ? 'h-8 w-8' : 'h-10 w-10';
@@ -151,7 +165,7 @@ function CircleEditor({
           <View className="mb-4 h-1.5 w-11 self-center rounded-full bg-white/20" />
           <View className="flex-row items-center justify-between">
             <View className="w-10" />
-            <Text className="text-lg font-extrabold text-white">
+            <Text {...TEXT_FLEXIBLE} className="text-white" style={TEXT.sheetTitle}>
               {circle?.emoji ? `${circle.emoji} ` : ''}
               {circle?.name}
             </Text>
@@ -164,13 +178,14 @@ function CircleEditor({
               <Ionicons name="close" size={20} color="#fff" />
             </Pressable>
           </View>
-          <Text className="mt-2 text-center text-sm leading-5 text-white/55">
+          <Text {...TEXT_FLEXIBLE} className="mt-2 text-center text-white/55" style={TEXT.body}>
             Nur du siehst diese Liste. Personen werden dadurch weder benachrichtigt noch miteinander
             verbunden.
           </Text>
 
           <TextInput
-            className="mt-5 min-h-12 rounded-2xl border border-white/10 bg-white/[0.07] px-4 text-base text-white"
+            className="mt-5 min-h-12 rounded-2xl border border-white/10 bg-white/[0.07] px-4 text-white"
+            style={TEXT.input}
             placeholder="Freunde durchsuchen"
             placeholderTextColor="rgba(255,255,255,0.45)"
             value={query}
@@ -197,7 +212,9 @@ function CircleEditor({
                   onPress={() => toggle(friend.uid)}
                 >
                   <Avatar friend={friend} />
-                  <Text className="flex-1 font-bold text-white">{friend.displayName}</Text>
+                  <Text {...TEXT_FLEXIBLE} className="flex-1 text-white" style={TEXT.cardTitle}>
+                    {friend.displayName}
+                  </Text>
                   <AnimatedToggleIcon
                     icon="checkmark-circle"
                     outlineIcon="ellipse-outline"
@@ -211,7 +228,7 @@ function CircleEditor({
             })}
             {friends.length === 0 ? (
               <View className="rounded-2xl bg-white/[0.06] p-4">
-                <Text className="text-sm leading-5 text-white/60">
+                <Text {...TEXT_FLEXIBLE} className="text-white/60" style={TEXT.body}>
                   Füge zuerst bestätigte Freunde hinzu. Erst dann kannst du sie in private Gruppen
                   einsortieren.
                 </Text>
@@ -219,7 +236,7 @@ function CircleEditor({
             ) : null}
           </ScrollView>
           <View className="mt-2 gap-3">
-            <Text className="text-center text-sm font-semibold text-white/55">
+            <Text {...TEXT_FLEXIBLE} className="text-center text-white/55" style={TEXT.note}>
               {selected.length} ausgewählt
             </Text>
             <AppButton label="Gruppe speichern" disabled={busy} onPress={() => void save()} />
@@ -228,7 +245,9 @@ function CircleEditor({
               className="min-h-11 items-center justify-center"
               onPress={remove}
             >
-              <Text className="text-sm font-bold text-[#F28888]">Gruppe löschen</Text>
+              <Text {...TEXT_CAPPED} className="text-[#F28888]" style={TEXT.action}>
+                Gruppe löschen
+              </Text>
             </Pressable>
           </View>
         </View>
@@ -251,9 +270,11 @@ function CircleCard({ circle, onEdit }: { circle: CircleDoc; onEdit: () => void 
           <Text className="text-xl">{circle.emoji ?? '◌'}</Text>
         </View>
         <View className="flex-1">
-          <Text className="text-base font-extrabold text-foreground">{circle.name}</Text>
-          <Text className="mt-0.5 text-sm text-muted-foreground">
-            {members.length === 1 ? '1 Freund' : `${members.length} Freunde`}
+          <Text {...TEXT_FLEXIBLE} className="text-foreground" style={TEXT.cardTitle}>
+            {circle.name}
+          </Text>
+          <Text {...TEXT_FLEXIBLE} className="mt-0.5 text-muted-foreground" style={TEXT.body}>
+            {members.length === 1 ? '1 Freund:in' : `${members.length} Freunde`}
           </Text>
         </View>
         <Ionicons name="chevron-forward" size={18} color="#94949D" />
@@ -270,13 +291,15 @@ function CircleCard({ circle, onEdit }: { circle: CircleDoc; onEdit: () => void 
             </View>
           ))}
           {members.length > 5 ? (
-            <Text className="ml-2 text-xs font-bold text-muted-foreground">
+            <Text {...TEXT_CAPPED} className="ml-2 text-muted-foreground" style={TEXT.finePill}>
               +{members.length - 5}
             </Text>
           ) : null}
         </View>
       ) : (
-        <Text className="mt-3 text-xs text-muted-foreground">Noch leer – Freunde hinzufügen</Text>
+        <Text {...TEXT_FLEXIBLE} className="mt-3 text-muted-foreground" style={TEXT.fine}>
+          Noch leer – Freunde hinzufügen
+        </Text>
       )}
     </Pressable>
   );
@@ -326,13 +349,14 @@ export function CirclesSection() {
     <View className="gap-3">
       <View>
         <AppText variant="label">Private Gruppen</AppText>
-        <Text className="mt-1 text-sm leading-5 text-muted-foreground">
+        <Text {...TEXT_FLEXIBLE} className="mt-1 text-muted-foreground" style={TEXT.body}>
           Deine persönlichen Sichtbarkeitsräume für Activities. Nur du siehst diese Listen.
         </Text>
       </View>
       <View className="flex-row items-center gap-2 rounded-[22px] border border-border bg-card p-2">
         <TextInput
-          className="min-h-11 flex-1 px-2 text-sm text-foreground"
+          className="min-h-11 flex-1 px-2 text-foreground"
+          style={TEXT.inputCompact}
           placeholder="Neue Gruppe, z. B. Sport"
           placeholderTextColor="rgba(150,150,160,0.75)"
           maxLength={40}
@@ -355,7 +379,11 @@ export function CirclesSection() {
         <CircleCard key={circle.id} circle={circle} onEdit={() => setEditing(circle)} />
       ))}
       {circles.length === 0 ? (
-        <Text className="rounded-2xl border border-dashed border-border bg-card px-4 py-5 text-center text-sm leading-5 text-muted-foreground">
+        <Text
+          {...TEXT_FLEXIBLE}
+          className="rounded-2xl border border-dashed border-border bg-card px-4 py-5 text-center text-muted-foreground"
+          style={TEXT.body}
+        >
           Lege eine Gruppe an, wenn du bestimmte Freunde öfter gemeinsam einlädst.
         </Text>
       ) : null}

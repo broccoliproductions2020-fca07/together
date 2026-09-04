@@ -1,103 +1,110 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useRef, useState, type RefObject } from 'react';
-import { Alert, Pressable, ScrollView, Text, View } from 'react-native';
-import type { SharedValue } from 'react-native-reanimated';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import Animated, {
+  Easing,
+  FadeIn,
+  FadeInDown,
+  LinearTransition,
+  interpolateColor,
+  useAnimatedStyle,
+  useReducedMotion,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 
 import { useActivityChat, type GroupMember, type GroupOpening } from '@/features/chat';
 import type { NearbyFriend } from '@/features/map/types/map.types';
+import { useOpenStatus } from '@/features/presence';
 import { RadiusSlider } from '@/features/settings';
-import { AnimatedToggleIcon } from '@/shared/components/AnimatedToggleIcon';
 import { PersonAvatar } from '@/shared/components/PersonAvatar';
 import { SquircleButton } from '@/shared/components/SquircleButton';
+import { FONT, TEXT_CAPPED, TEXT_FLEXIBLE, TYPE } from '@/shared/theme';
 import { openLocationSettings } from '@/shared/utils/locationPermission';
 
-import { FloatingSheet } from './FloatingSheet';
+import { FLOATING_SHEET_SURFACE, FloatingSheet } from './FloatingSheet';
+import { FloatingSheetHeader } from './FloatingSheetHeader';
 
 const OPEN_COLOR = '#3B82F6';
+const SHEET_BORDER_COLOR = 'rgba(104,166,255,0.28)';
+const SHEET_FRAME_INSET = 12;
+const MAX_WINK_RECIPIENTS = 20;
 
 function formatDistance(km: number): string {
   if (km < 1) return 'unter 1 km entfernt';
   return `ca. ${Math.max(1, Math.round(km))} km entfernt`;
 }
 
-function formatUntil(expiresAt?: number): string | null {
+function formatUntil(expiresAt?: number | null): string | null {
   if (!expiresAt || !Number.isFinite(expiresAt)) return null;
   const date = new Date(expiresAt);
-  return `offen bis ${date.getHours().toString().padStart(2, '0')}:${date
+  return `bis ${date.getHours().toString().padStart(2, '0')}:${date
     .getMinutes()
     .toString()
     .padStart(2, '0')}`;
 }
 
-function InitialsCircle({
-  initials,
-  avatarUrl,
-  large = false,
-}: {
-  initials: string;
-  avatarUrl?: string;
-  large?: boolean;
-}) {
-  return (
-    <PersonAvatar
-      avatarUrl={avatarUrl}
-      initials={initials}
-      size={large ? 56 : 40}
-      backgroundColor={`${OPEN_COLOR}22`}
-      initialsColor={OPEN_COLOR}
-    />
-  );
+function friendVibe(friend: NearbyFriend): string {
+  const label = friend.vibeLabel?.trim() || friend.activity.trim();
+  return !label || label.toLocaleLowerCase('de') === 'offen' ? 'Egal' : label;
 }
 
-function SelectCircle({ active }: { active: boolean }) {
+function pluralizeFriends(count: number): string {
+  return `${count} ${count === 1 ? 'Freund' : 'Freunde'}`;
+}
+
+function SectionLabel({ children }: { children: string }) {
   return (
-    <View
-      className="h-8 w-8 items-center justify-center rounded-full border"
-      style={{
-        borderColor: active ? OPEN_COLOR : 'rgba(255,255,255,0.22)',
-        backgroundColor: active ? OPEN_COLOR : 'rgba(255,255,255,0.04)',
-      }}
-    >
-      <Ionicons
-        name={active ? 'checkmark' : 'add'}
-        size={17}
-        color={active ? '#fff' : OPEN_COLOR}
-      />
-    </View>
+    <Text {...TEXT_FLEXIBLE} style={styles.sectionLabel}>
+      {children}
+    </Text>
   );
 }
 
 function FriendRow({
   friend,
   selected,
-  onOpen,
+  index,
   onToggle,
 }: {
   friend: NearbyFriend;
   selected: boolean;
-  onOpen: () => void;
+  index: number;
   onToggle: () => void;
 }) {
-  const distanceLabel = friend.distanceKm === undefined ? null : formatDistance(friend.distanceKm);
+  const reduceMotion = useReducedMotion();
+  const selectionProgress = useSharedValue(selected ? 1 : 0);
+  const untilLabel = formatUntil(friend.expiresAt);
+  const distanceLabel =
+    friend.distanceKm === undefined ? 'Ohne Näheangabe' : formatDistance(friend.distanceKm);
+
+  useEffect(() => {
+    const next = selected ? 1 : 0;
+    selectionProgress.value = reduceMotion
+      ? next
+      : withTiming(next, { duration: 180, easing: Easing.out(Easing.cubic) });
+  }, [reduceMotion, selected, selectionProgress]);
+
+  const animatedSurface = useAnimatedStyle(() => ({
+    backgroundColor: interpolateColor(
+      selectionProgress.value,
+      [0, 1],
+      ['rgba(255,255,255,0.045)', 'rgba(59,130,246,0.16)'],
+    ),
+    borderColor: interpolateColor(
+      selectionProgress.value,
+      [0, 1],
+      ['rgba(255,255,255,0.09)', 'rgba(88,151,255,0.58)'],
+    ),
+    transform: [{ scale: 1 - selectionProgress.value * 0.006 }],
+  }));
 
   return (
-    <View className="flex-row items-center gap-3 py-3">
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`${friend.displayName} ansehen`}
-        onPress={onOpen}
-        className="flex-1 flex-row items-center gap-3 active:opacity-70"
-      >
-        <InitialsCircle initials={friend.initials} avatarUrl={friend.avatarUrl} />
-        <View className="flex-1">
-          <Text className="text-base font-semibold text-white">{friend.displayName}</Text>
-          <Text className="mt-0.5 text-sm text-white/55" numberOfLines={1}>
-            {friend.activity}
-          </Text>
-          <Text className="mt-1 text-xs text-white/42">{distanceLabel ?? 'Keine Näheangabe'}</Text>
-        </View>
-        <Ionicons name="chevron-forward" size={17} color="rgba(244,245,247,0.36)" />
-      </Pressable>
+    <Animated.View
+      entering={reduceMotion ? undefined : FadeInDown.delay(Math.min(index, 6) * 35).duration(280)}
+      layout={reduceMotion ? undefined : LinearTransition.duration(180)}
+      style={[styles.friendSurface, animatedSurface]}
+    >
       <Pressable
         accessibilityRole="checkbox"
         accessibilityLabel={
@@ -105,166 +112,249 @@ function FriendRow({
             ? `${friend.displayName} aus Auswahl entfernen`
             : `${friend.displayName} auswählen`
         }
+        accessibilityHint="Wählt die Person für eine spontane Runde aus"
         accessibilityState={{ checked: selected }}
+        className="active:opacity-80"
         onPress={onToggle}
-        hitSlop={6}
+        style={styles.friendPressable}
       >
-        <SelectCircle active={selected} />
+        <PersonAvatar
+          avatarUrl={friend.avatarUrl}
+          initials={friend.initials}
+          size={44}
+          backgroundColor="rgba(59,130,246,0.2)"
+          initialsColor="#8BB8FF"
+        />
+
+        <View className="flex-1">
+          <Text {...TEXT_FLEXIBLE} numberOfLines={1} style={styles.friendName}>
+            {friend.displayName}
+          </Text>
+          <Text {...TEXT_FLEXIBLE} numberOfLines={1} style={styles.friendIntent}>
+            {friendVibe(friend)}
+            {untilLabel ? ` · ${untilLabel}` : ''}
+          </Text>
+          <View className="mt-1 flex-row items-center gap-1.5">
+            <Ionicons
+              name={friend.distanceKm === undefined ? 'location-outline' : 'navigate-outline'}
+              size={13}
+              color="rgba(225,231,240,0.54)"
+            />
+            <Text {...TEXT_FLEXIBLE} numberOfLines={1} style={styles.friendDistance}>
+              {distanceLabel}
+            </Text>
+          </View>
+        </View>
+
+        <View style={[styles.selectIndicator, selected && styles.selectIndicatorActive]}>
+          <Ionicons
+            name={selected ? 'checkmark' : 'add'}
+            size={18}
+            color={selected ? '#FFFFFF' : '#8BB8FF'}
+          />
+        </View>
       </Pressable>
-    </View>
+    </Animated.View>
   );
 }
 
-function OpenFriendDetail({
-  friend,
-  selected,
-  onBack,
-  onToggle,
-}: {
-  friend: NearbyFriend;
-  selected: boolean;
-  onBack: () => void;
-  onToggle: () => void;
-}) {
-  const untilLabel = formatUntil(friend.expiresAt);
-  const distanceLabel = friend.distanceKm === undefined ? null : formatDistance(friend.distanceKm);
+function OwnStatusStrip({ onPress }: { onPress: () => void }) {
+  const { isOpen, vibe, expiresAt, syncing, syncError } = useOpenStatus();
+  const reduceMotion = useReducedMotion();
+  const untilLabel = formatUntil(expiresAt);
+  const summary = isOpen
+    ? `${vibe?.label?.trim() || 'Egal'}${untilLabel ? ` · ${untilLabel}` : ''}`
+    : 'Für Freunde gerade nicht sichtbar';
 
   return (
-    <View className="gap-4 py-3">
+    <Animated.View
+      entering={reduceMotion ? undefined : FadeIn.duration(240)}
+      style={[styles.ownStatusSurface, isOpen && styles.ownStatusSurfaceActive]}
+    >
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="Zurück zu offenen Freunden"
-        onPress={onBack}
-        className="flex-row items-center gap-1 self-start py-1 active:opacity-70"
+        accessibilityLabel={isOpen ? 'Eigenen Offen-Status bearbeiten' : 'Mich offen stellen'}
+        accessibilityHint="Öffnet die Einstellungen für deinen Offen-Status"
+        className="active:opacity-80"
+        onPress={onPress}
+        style={styles.ownStatusPressable}
       >
-        <Ionicons name="arrow-back" size={17} color={OPEN_COLOR} />
-        <Text className="text-sm font-bold" style={{ color: OPEN_COLOR }}>
-          Alle offenen Freunde
-        </Text>
-      </Pressable>
-
-      <View
-        className="gap-4 rounded-3xl border p-4"
-        style={{ borderColor: `${OPEN_COLOR}55`, backgroundColor: `${OPEN_COLOR}12` }}
-      >
-        <View className="flex-row items-center gap-3">
-          <InitialsCircle initials={friend.initials} avatarUrl={friend.avatarUrl} large />
-          <View className="flex-1">
-            <Text className="text-xl font-extrabold tracking-[-0.25px] text-white">
-              {friend.displayName}
-            </Text>
-          </View>
-        </View>
-
-        <View className="gap-2 rounded-2xl bg-black/15 p-3">
-          <View className="flex-row items-center gap-2">
-            <Ionicons name="sparkles-outline" size={16} color={OPEN_COLOR} />
-            <Text className="flex-1 text-sm font-semibold text-white">{friend.activity}</Text>
-          </View>
-          <View className="flex-row items-center gap-2">
-            <Ionicons name="time-outline" size={16} color="rgba(244,245,247,0.58)" />
-            <Text className="text-sm text-white/60">{untilLabel ?? 'Gerade verfügbar'}</Text>
-          </View>
-          <View className="flex-row items-center gap-2">
-            <Ionicons
-              name={distanceLabel ? 'locate-outline' : 'locate'}
-              size={16}
-              color="rgba(244,245,247,0.58)"
-            />
-            <Text className="text-sm text-white/60">
-              {distanceLabel ?? 'Keine Näheangabe geteilt'}
-            </Text>
-          </View>
-        </View>
-
-        <Pressable
-          accessibilityRole="checkbox"
-          accessibilityState={{ checked: selected }}
-          accessibilityLabel={
-            selected
-              ? `${friend.displayName} aus Auswahl entfernen`
-              : `${friend.displayName} zur Planung auswählen`
-          }
-          onPress={onToggle}
-          className="min-h-12 flex-row items-center justify-center gap-2 rounded-2xl active:opacity-85"
-          style={{ backgroundColor: selected ? 'rgba(255,255,255,0.1)' : OPEN_COLOR }}
-        >
-          <AnimatedToggleIcon
-            icon="checkmark"
-            outlineIcon="add"
-            active={selected}
-            size={18}
-            activeColor="#fff"
-            inactiveColor="#fff"
+        <View style={[styles.statusIcon, isOpen && styles.statusIconActive]}>
+          <Ionicons
+            name={isOpen ? 'radio-button-on' : 'radio-button-off-outline'}
+            size={19}
+            color={isOpen ? '#FFFFFF' : '#8BB8FF'}
           />
-          <Text className="font-bold text-white">
-            {selected ? 'Ausgewählt' : 'Zur Planung hinzufügen'}
+        </View>
+        <View className="flex-1">
+          <Text {...TEXT_FLEXIBLE} style={styles.ownStatusTitle}>
+            {syncing
+              ? 'Status wird aktualisiert …'
+              : isOpen
+                ? 'Du bist offen'
+                : 'Du bist nicht offen'}
           </Text>
-        </Pressable>
-      </View>
-    </View>
+          <Text
+            {...TEXT_FLEXIBLE}
+            numberOfLines={1}
+            style={[styles.ownStatusSummary, syncError && styles.ownStatusError]}
+          >
+            {syncError ? 'Änderung fehlgeschlagen · erneut öffnen' : summary}
+          </Text>
+        </View>
+        <Text {...TEXT_CAPPED} style={styles.ownStatusAction}>
+          {isOpen ? 'Bearbeiten' : 'Offen stellen'}
+        </Text>
+        <Ionicons name="chevron-forward" size={16} color="rgba(219,229,244,0.42)" />
+      </Pressable>
+    </Animated.View>
   );
 }
 
-/** A planning group that opted into "Offen für Dazustoßer" — teaser + join. */
 function OpeningRow({
   opening,
   joining,
+  index,
   onJoin,
 }: {
   opening: GroupOpening;
   joining: boolean;
+  index: number;
   onJoin: () => void;
 }) {
+  const reduceMotion = useReducedMotion();
+
   return (
-    <View
-      className="gap-3 rounded-3xl border p-4"
-      style={{ borderColor: `${OPEN_COLOR}44`, backgroundColor: `${OPEN_COLOR}0F` }}
+    <Animated.View
+      entering={reduceMotion ? undefined : FadeInDown.delay(Math.min(index, 5) * 45).duration(300)}
+      layout={reduceMotion ? undefined : LinearTransition.duration(180)}
+      style={styles.openingSurface}
     >
       <View className="flex-row items-center gap-3">
         <View className="flex-row">
-          {opening.memberPreview.slice(0, 4).map((member, index) => (
-            <View key={`${member.initials}-${index}`} style={{ marginLeft: index === 0 ? 0 : -10 }}>
-              <View
-                className="h-10 w-10 items-center justify-center rounded-full border-2 border-[#0B1016]"
-                style={{ backgroundColor: `${OPEN_COLOR}30` }}
-              >
-                <Text className="text-xs font-extrabold" style={{ color: OPEN_COLOR }}>
-                  {member.initials}
-                </Text>
-              </View>
+          {opening.memberPreview.slice(0, 4).map((member, memberIndex) => (
+            <View
+              key={`${member.initials}-${memberIndex}`}
+              style={[styles.previewAvatar, { marginLeft: memberIndex === 0 ? 0 : -9 }]}
+            >
+              <Text {...TEXT_CAPPED} style={styles.previewInitials}>
+                {member.initials}
+              </Text>
             </View>
           ))}
         </View>
         <View className="flex-1">
-          <Text className="text-base font-bold text-white" numberOfLines={1}>
+          <Text {...TEXT_FLEXIBLE} numberOfLines={2} style={styles.openingTitle}>
             {opening.title}
           </Text>
-          <Text className="mt-0.5 text-xs text-white/50" numberOfLines={1}>
-            {opening.memberCount} dabei{opening.vibe ? ` · ${opening.vibe}` : ''} · sucht noch Leute
+          <Text {...TEXT_FLEXIBLE} numberOfLines={2} style={styles.openingMeta}>
+            {opening.memberCount} dabei{opening.vibe ? ` · ${opening.vibe}` : ''} · offen für dich
           </Text>
         </View>
       </View>
+
       <SquircleButton
-        label={joining ? 'Wird beigetreten …' : 'Dazustoßen'}
+        label={joining ? 'Runde wird geöffnet …' : 'Zur Runde dazustoßen'}
         color={OPEN_COLOR}
         size="md"
         disabled={joining}
         loading={joining}
         icon="enter-outline"
-        fullWidth={false}
         accessibilityLabel={`Bei ${opening.title} dazustoßen`}
         onPress={onJoin}
       />
-    </View>
+    </Animated.View>
   );
 }
 
-function SectionLabel({ children }: { children: string }) {
+function LocationHint() {
   return (
-    <Text className="mb-1 mt-2 text-xs font-semibold uppercase tracking-wide text-white">
-      {children}
-    </Text>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Standortzugriff in den Einstellungen erlauben"
+      onPress={openLocationSettings}
+      className="active:opacity-80"
+      style={styles.locationHint}
+    >
+      <View style={styles.locationHintIcon}>
+        <Ionicons name="location-outline" size={18} color="#F1B859" />
+      </View>
+      <View className="flex-1">
+        <Text {...TEXT_FLEXIBLE} style={styles.locationHintTitle}>
+          Entfernung nicht verfügbar
+        </Text>
+        <Text {...TEXT_FLEXIBLE} style={styles.locationHintBody}>
+          Standortzugriff in den Einstellungen erlauben
+        </Text>
+      </View>
+      <Ionicons name="open-outline" size={16} color="rgba(241,184,89,0.82)" />
+    </Pressable>
+  );
+}
+
+function EmptyFriendsState({
+  reason,
+  locationDenied,
+  onAddFriends,
+}: {
+  reason: NonNullable<NearbySheetProps['emptyReason']>;
+  locationDenied: boolean;
+  onAddFriends?: () => void;
+}) {
+  if (reason === 'quiet' || (reason === 'out-of-range' && locationDenied)) return null;
+
+  const icon =
+    reason === 'no-friends'
+      ? 'person-add-outline'
+      : reason === 'none-open'
+        ? 'moon-outline'
+        : 'scan-outline';
+  const title =
+    reason === 'no-friends'
+      ? 'Noch keine Freunde hier'
+      : reason === 'none-open'
+        ? 'Gerade ist niemand offen'
+        : 'Niemand in diesem Umkreis';
+  const body =
+    reason === 'no-friends'
+      ? 'Füge Freunde hinzu. Sobald jemand offen ist, erscheint die Person hier.'
+      : reason === 'none-open'
+        ? 'Sobald ein Freund Zeit hat, kannst du ihn hier direkt anwinken.'
+        : 'Vergrößere den Radius, um weiter entfernte offene Freunde zu sehen.';
+
+  return (
+    <Animated.View entering={FadeIn.duration(220)} style={styles.emptySurface}>
+      <View style={styles.emptyIcon}>
+        <Ionicons name={icon} size={22} color="#8BB8FF" />
+      </View>
+      <Text {...TEXT_FLEXIBLE} style={styles.emptyTitle}>
+        {title}
+      </Text>
+      <Text {...TEXT_FLEXIBLE} style={styles.emptyBody}>
+        {body}
+      </Text>
+      {reason === 'no-friends' && onAddFriends ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={onAddFriends}
+          className="active:opacity-80"
+          style={styles.addFriendsButton}
+        >
+          <Text {...TEXT_CAPPED} style={styles.addFriendsLabel}>
+            Freunde hinzufügen
+          </Text>
+        </Pressable>
+      ) : null}
+    </Animated.View>
+  );
+}
+
+function NearbySurfaceLayer() {
+  return (
+    <View style={StyleSheet.absoluteFill}>
+      <View style={styles.surfaceGlowTop} />
+      <View style={styles.surfaceGlowBottom} />
+    </View>
   );
 }
 
@@ -272,22 +362,13 @@ export interface NearbySheetProps {
   visible: boolean;
   friends: NearbyFriend[];
   friendsWithoutLocation: NearbyFriend[];
-  /** Why "In deiner Nähe" is empty — decides which honest hint (and fix) shows.
-   * 'quiet' = open friends exist but none has a distance basis; the
-   * "Ohne Näheangabe" section right below already explains itself. */
+  /** Open friends with a pin outside the current radius. */
+  outsideRadiusCount?: number;
   emptyReason?: 'no-friends' | 'none-open' | 'out-of-range' | 'quiet';
-  /** Foreground location permission is denied → distances cannot be computed. */
   locationDenied?: boolean;
-  /** Open straight onto this friend's detail — set when the sheet was opened by
-   * tapping their open-presence marker on the map, so the tap lands on "… ist
-   * offen" instead of the generic list. */
-  focusFriendId?: string;
   onAddFriends?: () => void;
+  onOpenStatus: () => void;
   onClose: () => void;
-  /** The nearby pill this sheet morphs out of. */
-  originRef?: RefObject<View | null>;
-  /** The morph value shared with that pill, so the two cross-fade on one number. */
-  morphProgress?: SharedValue<number>;
   onStartSpontaneousRound: (members: GroupMember[]) => Promise<boolean>;
   onJoinOpening: (opening: GroupOpening) => Promise<boolean>;
 }
@@ -296,36 +377,60 @@ export function NearbySheet({
   visible,
   friends,
   friendsWithoutLocation,
+  outsideRadiusCount = 0,
   emptyReason = 'out-of-range',
   locationDenied = false,
-  focusFriendId,
   onAddFriends,
+  onOpenStatus,
   onClose,
-  originRef,
-  morphProgress,
   onStartSpontaneousRound,
   onJoinOpening,
 }: NearbySheetProps) {
   const { groupOpenings, setOpeningsActive } = useActivityChat();
   const [selected, setSelected] = useState<Set<string>>(() => new Set());
-  const [detailFriend, setDetailFriend] = useState<NearbyFriend | null>(null);
   const startingRef = useRef(false);
   const [starting, setStarting] = useState(false);
   const [joiningOpeningId, setJoiningOpeningId] = useState<string | null>(null);
   const joiningOpeningRef = useRef<string | null>(null);
   const interactionRevisionRef = useRef(0);
 
-  // The openings listener runs only while this sheet is visible (listener budget).
+  const allFriends = useMemo(
+    () => [...friends, ...friendsWithoutLocation],
+    [friends, friendsWithoutLocation],
+  );
+  const validFriendIds = useMemo(
+    () => new Set(allFriends.map((friend) => friend.id)),
+    [allFriends],
+  );
+  const selectedCount = selected.size;
+  const nearbyCount = friends.length;
+  const withoutLocationCount = friendsWithoutLocation.length;
+  const hasSelectableFriends = allFriends.length > 0;
+  const showRadius = !locationDenied && (nearbyCount > 0 || outsideRadiusCount > 0);
+
+  const headerDetails = [
+    outsideRadiusCount > 0
+      ? `${outsideRadiusCount} ${outsideRadiusCount === 1 ? 'weiterer' : 'weitere'} außerhalb`
+      : null,
+    withoutLocationCount > 0 ? `${withoutLocationCount} ohne Standort` : null,
+  ].filter(Boolean);
+
   useEffect(() => {
     setOpeningsActive(visible);
     return () => setOpeningsActive(false);
   }, [visible, setOpeningsActive]);
 
   useEffect(() => {
+    setSelected((current) => {
+      const next = new Set([...current].filter((id) => validFriendIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [validFriendIds]);
+
+  useEffect(() => {
     if (!visible) {
       interactionRevisionRef.current += 1;
       setSelected(new Set());
-      setDetailFriend(null);
       setStarting(false);
       setJoiningOpeningId(null);
       joiningOpeningRef.current = null;
@@ -333,34 +438,20 @@ export function NearbySheet({
     startingRef.current = false;
   }, [visible]);
 
-  const allFriends = [...friends, ...friendsWithoutLocation];
-
-  // Arriving from a map marker: land on that person. Runs after `allFriends`
-  // exists so the lookup can resolve, and only while visible so closing the
-  // sheet still clears the detail above.
-  useEffect(() => {
-    if (!visible || !focusFriendId) return;
-    const match = allFriends.find((friend) => friend.id === focusFriendId);
-    if (match) setDetailFriend(match);
-    // `allFriends` is rebuilt every render; keying the effect on the id list
-    // keeps it from re-opening the detail on every presence tick.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible, focusFriendId, allFriends.map((friend) => friend.id).join(',')]);
-  const nearbyCount = friends.length;
-  const openCount = allFriends.length;
-  const count = selected.size;
-
   function toggle(id: string) {
     setSelected((current) => {
       const next = new Set(current);
-      if (next.has(id)) next.delete(id);
-      else if (next.size >= 20) {
+      if (next.has(id)) {
+        next.delete(id);
+      } else if (next.size >= MAX_WINK_RECIPIENTS) {
         Alert.alert(
-          'Bis zu 20 Personen',
-          'Eine spontane Runde kann hoechstens 20 Winks enthalten.',
+          'Bis zu 20 Freunde',
+          'Eine spontane Runde kann höchstens 20 Freunde enthalten.',
         );
         return current;
-      } else next.add(id);
+      } else {
+        next.add(id);
+      }
       return next;
     });
   }
@@ -375,11 +466,20 @@ export function NearbySheet({
   }
 
   async function handleStartPlanning() {
-    if (startingRef.current) return;
+    if (startingRef.current || selectedCount === 0) return;
     const members: GroupMember[] = allFriends
       .filter((friend) => selected.has(friend.id))
       .map((friend) => ({ id: friend.id, displayName: friend.displayName }));
-    if (!members.length) return;
+
+    if (members.length !== selectedCount) {
+      setSelected(new Set(members.map((member) => member.id)));
+      Alert.alert(
+        'Auswahl aktualisiert',
+        'Mindestens ein Freund ist nicht mehr offen. Bitte prüfe deine Auswahl noch einmal.',
+      );
+      return;
+    }
+
     const interactionRevision = interactionRevisionRef.current;
     startingRef.current = true;
     setStarting(true);
@@ -409,186 +509,445 @@ export function NearbySheet({
     }
   }
 
-  const footerLabel =
-    count === 0 ? 'Freunde auswählen' : count === 1 ? 'Chat öffnen' : `Gemeinsam planen (${count})`;
-  const winkFooterLabel = count === 0 ? footerLabel : `Winken senden (${count})`;
+  const actionLabel =
+    selectedCount === 0
+      ? 'Freunde auswählen'
+      : selectedCount === 1
+        ? '1 Freund anwinken'
+        : `${selectedCount} Freunde anwinken`;
 
   return (
     <FloatingSheet
       visible={visible}
       onRequestClose={dismiss}
-      originRef={originRef}
-      progress={morphProgress}
       originColor="rgba(59,130,246,0.16)"
-      originBorderColor="rgba(59,130,246,0.72)"
+      originBorderColor="rgba(88,151,255,0.78)"
+      borderColor={SHEET_BORDER_COLOR}
+      frameInset={SHEET_FRAME_INSET}
+      surfaceLayer={<NearbySurfaceLayer />}
       accessibilityLabel="Offene Freunde in deiner Nähe"
     >
-      {/* No `flex-1`: the sheet is as tall as this column turns out to be. */}
       <View>
-        <View className="flex-row items-center gap-3 px-5 pb-3 pt-2">
-          <View className="h-11 w-11 items-center justify-center rounded-[17px] bg-[#3B82F6]/15">
-            <Ionicons
-              name={detailFriend ? 'person-outline' : 'people-outline'}
-              size={20}
-              color={OPEN_COLOR}
-            />
-          </View>
-          <View className="flex-1">
-            <Text className="text-xl font-extrabold tracking-[-0.35px] text-white">
-              {detailFriend
-                ? detailFriend.displayName
-                : `${openCount} ${openCount === 1 ? 'Freund' : 'Freunde'} offen`}
-            </Text>
-            <Text className="mt-0.5 text-sm text-white/45">
-              {detailFriend
-                ? 'Zur Planung auswählen'
-                : nearbyCount
-                  ? `${nearbyCount} im gewählten Umkreis`
-                  : 'Sieh, wer gerade Zeit hat'}
-            </Text>
-          </View>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Offene Freunde schließen"
-            className="h-10 w-10 items-center justify-center rounded-full bg-white/8 active:opacity-70"
-            onPress={dismiss}
-          >
-            <Ionicons name="close" size={20} color="rgba(244,245,247,0.8)" />
-          </Pressable>
-        </View>
+        <FloatingSheetHeader
+          icon="people-outline"
+          accent={OPEN_COLOR}
+          surface={FLOATING_SHEET_SURFACE}
+          title={`${pluralizeFriends(nearbyCount)} in deiner Nähe`}
+          subtitle={headerDetails.length ? headerDetails.join(' · ') : 'Wer hat gerade Zeit?'}
+          closeLabel="Offene Freunde schließen"
+          onClose={dismiss}
+        />
 
-        <View className="mx-5 mb-2 mt-2">
-          <RadiusSlider compact />
-        </View>
-
-        {locationDenied ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Standortzugriff in den Einstellungen erlauben"
-            onPress={openLocationSettings}
-            className="mx-5 mb-2 flex-row items-center gap-2.5 rounded-xl border border-[#E0A23E]/40 bg-[#E0A23E]/10 px-3.5 py-2.5 active:opacity-80"
-          >
-            <Ionicons name="location-outline" size={16} color="#E0A23E" />
-            <Text className="flex-1 text-xs leading-4 text-white/70">
-              Standort ist aus — Entfernungen lassen sich nicht berechnen.{' '}
-              <Text className="font-semibold text-[#E0A23E]">Einstellungen öffnen</Text>
-            </Text>
-          </Pressable>
-        ) : null}
-
-        {/* `flexShrink` only: with few friends the list is short and the sheet
-            is short with it; it starts scrolling exactly when the sheet reaches
-            its ceiling and not one row earlier. */}
-        <ScrollView
-          className="px-5"
-          style={{ flexShrink: 1 }}
-          contentContainerStyle={{ paddingBottom: 12 }}
-          showsVerticalScrollIndicator={false}
-        >
-          {/* Friends' running Heimwege — safety beats every other section. */}
-
-          {detailFriend ? (
-            <OpenFriendDetail
-              friend={detailFriend}
-              selected={selected.has(detailFriend.id)}
-              onBack={() => setDetailFriend(null)}
-              onToggle={() => {
-                toggle(detailFriend.id);
-                setDetailFriend(null);
-              }}
-            />
-          ) : (
-            <>
-              {friends.length ? (
-                <>
-                  <SectionLabel>In deiner Nähe</SectionLabel>
-                  <View className="divide-y divide-white/8">
-                    {friends.map((friend) => (
-                      <FriendRow
-                        key={friend.id}
-                        friend={friend}
-                        selected={selected.has(friend.id)}
-                        onOpen={() => setDetailFriend(friend)}
-                        onToggle={() => toggle(friend.id)}
-                      />
-                    ))}
-                  </View>
-                </>
-              ) : emptyReason === 'no-friends' ? (
-                <View className="items-center gap-3 py-6">
-                  <Text className="text-center text-sm leading-5 text-white/40">
-                    Du hast noch niemanden bei Mica. Füge zuerst Freunde hinzu — erst dann siehst du
-                    hier, wer offen ist.
+        <View style={styles.contentInset}>
+          <OwnStatusStrip onPress={onOpenStatus} />
+          {showRadius ? (
+            <Animated.View entering={FadeIn.duration(220)} style={styles.radiusSurface}>
+              <View className="mb-1 flex-row items-center justify-between">
+                <Text {...TEXT_FLEXIBLE} style={styles.radiusTitle}>
+                  Dein Umkreis
+                </Text>
+                {outsideRadiusCount > 0 ? (
+                  <Text {...TEXT_FLEXIBLE} style={styles.radiusHint}>
+                    {outsideRadiusCount} außerhalb
                   </Text>
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={onAddFriends}
-                    className="rounded-full bg-white/10 px-5 py-2.5 active:opacity-80"
-                  >
-                    <Text className="text-sm font-semibold text-white">Freunde hinzufügen</Text>
-                  </Pressable>
-                </View>
-              ) : emptyReason === 'none-open' ? (
-                <Text className="py-6 text-center text-sm text-white/40">
-                  Gerade ist niemand offen. Stell dich offen — deine Freunde sehen es sofort.
-                </Text>
-              ) : emptyReason === 'out-of-range' ? (
-                <Text className="py-6 text-center text-sm text-white/40">
-                  Niemand offen in diesem Umkreis. Zieh den Nähe-Filter größer.
-                </Text>
-              ) : null}
+                ) : null}
+              </View>
+              <RadiusSlider compact />
+            </Animated.View>
+          ) : null}
+          {locationDenied ? <LocationHint /> : null}
+        </View>
 
-              {friendsWithoutLocation.length ? (
-                <>
-                  <SectionLabel>Ohne Näheangabe</SectionLabel>
-                  <View className="divide-y divide-white/8">
-                    {friendsWithoutLocation.map((friend) => (
-                      <FriendRow
-                        key={friend.id}
-                        friend={friend}
-                        selected={selected.has(friend.id)}
-                        onOpen={() => setDetailFriend(friend)}
-                        onToggle={() => toggle(friend.id)}
-                      />
-                    ))}
-                  </View>
-                </>
-              ) : null}
-
-              {/* Groups that explicitly opted into being joinable — an
-                      invitation, never an exclusion display. */}
-              {groupOpenings.length ? (
-                <>
-                  <SectionLabel>Am Planen — komm dazu</SectionLabel>
-                  <View className="gap-2 pb-2">
-                    {groupOpenings.map((opening) => (
-                      <OpeningRow
-                        key={opening.id}
-                        opening={opening}
-                        joining={joiningOpeningId === opening.id}
-                        onJoin={() => void handleJoinOpening(opening)}
-                      />
-                    ))}
-                  </View>
-                </>
-              ) : null}
-            </>
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          {friends.length ? (
+            <View className="gap-2">
+              <SectionLabel>In deiner Nähe</SectionLabel>
+              {friends.map((friend, index) => (
+                <FriendRow
+                  key={friend.id}
+                  friend={friend}
+                  selected={selected.has(friend.id)}
+                  index={index}
+                  onToggle={() => toggle(friend.id)}
+                />
+              ))}
+            </View>
+          ) : (
+            <EmptyFriendsState
+              reason={emptyReason}
+              locationDenied={locationDenied}
+              onAddFriends={onAddFriends}
+            />
           )}
+
+          {friendsWithoutLocation.length ? (
+            <View className="mt-4 gap-2">
+              <SectionLabel>Ohne Standort</SectionLabel>
+              <Text {...TEXT_FLEXIBLE} style={styles.sectionHint}>
+                Diese Freunde sind offen, teilen aber gerade keine Entfernung.
+              </Text>
+              {friendsWithoutLocation.map((friend, index) => (
+                <FriendRow
+                  key={friend.id}
+                  friend={friend}
+                  selected={selected.has(friend.id)}
+                  index={friends.length + index}
+                  onToggle={() => toggle(friend.id)}
+                />
+              ))}
+            </View>
+          ) : null}
+
+          {groupOpenings.length ? (
+            <View className="mt-5 gap-2.5">
+              <SectionLabel>Offene Runden</SectionLabel>
+              <Text {...TEXT_FLEXIBLE} style={styles.sectionHint}>
+                Diese Gruppen haben ausdrücklich Platz für weitere Freunde.
+              </Text>
+              {groupOpenings.map((opening, index) => (
+                <OpeningRow
+                  key={opening.id}
+                  opening={opening}
+                  joining={joiningOpeningId === opening.id}
+                  index={index}
+                  onJoin={() => void handleJoinOpening(opening)}
+                />
+              ))}
+            </View>
+          ) : null}
         </ScrollView>
 
-        {/* No safe-area padding: the sheet already floats clear of the bottom
-            inset, so adding it again would double the gap. */}
-        <View className="px-5 pb-4 pt-3">
-          <SquircleButton
-            label={winkFooterLabel}
-            color={OPEN_COLOR}
-            icon="hand-left-outline"
-            disabled={count === 0 || starting}
-            loading={starting}
-            onPress={handleStartPlanning}
-          />
-        </View>
+        {hasSelectableFriends ? (
+          <View style={styles.footer}>
+            <Text {...TEXT_FLEXIBLE} style={styles.footerHint}>
+              {selectedCount === 0
+                ? 'Tippe auf Freunde, die du spontan sehen möchtest.'
+                : 'Nur die ausgewählten Freunde erhalten deinen Wink.'}
+            </Text>
+            <SquircleButton
+              label={actionLabel}
+              color={OPEN_COLOR}
+              icon="hand-left-outline"
+              disabled={selectedCount === 0 || starting}
+              loading={starting}
+              onPress={handleStartPlanning}
+            />
+          </View>
+        ) : null}
       </View>
     </FloatingSheet>
   );
 }
+
+const styles = StyleSheet.create({
+  contentInset: {
+    gap: 10,
+    paddingBottom: 8,
+    paddingHorizontal: 20,
+  },
+  scrollView: {
+    flexShrink: 1,
+  },
+  scrollContent: {
+    paddingBottom: 12,
+    paddingHorizontal: 20,
+    paddingTop: 4,
+  },
+  sectionLabel: {
+    color: 'rgba(237,243,251,0.72)',
+    fontFamily: FONT.semibold,
+    fontSize: TYPE.caption.fontSize,
+    letterSpacing: 0.8,
+    lineHeight: TYPE.caption.lineHeight,
+    textTransform: 'uppercase',
+  },
+  sectionHint: {
+    color: 'rgba(222,230,241,0.58)',
+    fontFamily: FONT.medium,
+    fontSize: TYPE.caption.fontSize,
+    lineHeight: 17,
+    marginBottom: 2,
+  },
+  friendSurface: {
+    borderRadius: 18,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  friendPressable: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    minHeight: 78,
+    paddingHorizontal: 13,
+    paddingVertical: 11,
+  },
+  friendName: {
+    color: '#F4F7FB',
+    fontFamily: FONT.semibold,
+    fontSize: TYPE.body.fontSize,
+    lineHeight: TYPE.body.lineHeight,
+  },
+  friendIntent: {
+    color: 'rgba(229,236,246,0.7)',
+    fontFamily: FONT.medium,
+    fontSize: TYPE.label.fontSize,
+    lineHeight: TYPE.label.lineHeight,
+    marginTop: 1,
+  },
+  friendDistance: {
+    color: 'rgba(225,231,240,0.54)',
+    fontFamily: FONT.medium,
+    fontSize: TYPE.caption.fontSize,
+    lineHeight: TYPE.caption.lineHeight,
+  },
+  selectIndicator: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(59,130,246,0.08)',
+    borderColor: 'rgba(119,169,255,0.38)',
+    borderRadius: 18,
+    borderWidth: 1,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  selectIndicatorActive: {
+    backgroundColor: OPEN_COLOR,
+    borderColor: '#6CA4FF',
+  },
+  ownStatusSurface: {
+    backgroundColor: 'rgba(255,255,255,0.045)',
+    borderColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 20,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  ownStatusSurfaceActive: {
+    backgroundColor: 'rgba(59,130,246,0.12)',
+    borderColor: 'rgba(91,153,255,0.4)',
+  },
+  ownStatusPressable: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 64,
+    paddingHorizontal: 13,
+    paddingVertical: 10,
+  },
+  statusIcon: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(59,130,246,0.08)',
+    borderColor: 'rgba(105,164,255,0.3)',
+    borderRadius: 18,
+    borderWidth: 1,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
+  statusIconActive: {
+    backgroundColor: OPEN_COLOR,
+    borderColor: '#74AAFF',
+  },
+  ownStatusTitle: {
+    color: '#F4F7FB',
+    fontFamily: FONT.semibold,
+    fontSize: TYPE.label.fontSize,
+    lineHeight: TYPE.label.lineHeight,
+  },
+  ownStatusSummary: {
+    color: 'rgba(222,231,243,0.62)',
+    fontFamily: FONT.medium,
+    fontSize: TYPE.caption.fontSize,
+    lineHeight: TYPE.caption.lineHeight,
+    marginTop: 2,
+  },
+  ownStatusError: {
+    color: '#F1B859',
+  },
+  ownStatusAction: {
+    color: '#8BB8FF',
+    fontFamily: FONT.semibold,
+    fontSize: TYPE.caption.fontSize,
+    lineHeight: TYPE.caption.lineHeight,
+  },
+  radiusSurface: {
+    backgroundColor: 'rgba(255,255,255,0.035)',
+    borderColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 20,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+  },
+  radiusTitle: {
+    color: 'rgba(239,244,251,0.78)',
+    fontFamily: FONT.semibold,
+    fontSize: TYPE.caption.fontSize,
+    lineHeight: TYPE.caption.lineHeight,
+  },
+  radiusHint: {
+    color: '#8BB8FF',
+    fontFamily: FONT.semibold,
+    fontSize: TYPE.caption.fontSize,
+    lineHeight: TYPE.caption.lineHeight,
+  },
+  locationHint: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(224,162,62,0.09)',
+    borderColor: 'rgba(224,162,62,0.34)',
+    borderRadius: 18,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 62,
+    paddingHorizontal: 13,
+    paddingVertical: 10,
+  },
+  locationHintIcon: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(224,162,62,0.12)',
+    borderRadius: 17,
+    height: 34,
+    justifyContent: 'center',
+    width: 34,
+  },
+  locationHintTitle: {
+    color: '#F4F0E7',
+    fontFamily: FONT.semibold,
+    fontSize: TYPE.label.fontSize,
+    lineHeight: TYPE.label.lineHeight,
+  },
+  locationHintBody: {
+    color: 'rgba(237,226,208,0.62)',
+    fontFamily: FONT.medium,
+    fontSize: TYPE.caption.fontSize,
+    lineHeight: 17,
+    marginTop: 1,
+  },
+  emptySurface: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.035)',
+    borderColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 20,
+    borderWidth: 1,
+    marginTop: 4,
+    paddingHorizontal: 20,
+    paddingVertical: 22,
+  },
+  emptyIcon: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(59,130,246,0.12)',
+    borderColor: 'rgba(83,146,250,0.26)',
+    borderRadius: 22,
+    borderWidth: 1,
+    height: 44,
+    justifyContent: 'center',
+    marginBottom: 11,
+    width: 44,
+  },
+  emptyTitle: {
+    color: '#F3F6FB',
+    fontFamily: FONT.semibold,
+    fontSize: TYPE.body.fontSize,
+    lineHeight: TYPE.body.lineHeight,
+    textAlign: 'center',
+  },
+  emptyBody: {
+    color: 'rgba(223,231,242,0.58)',
+    fontFamily: FONT.medium,
+    fontSize: TYPE.label.fontSize,
+    lineHeight: 20,
+    marginTop: 5,
+    textAlign: 'center',
+  },
+  addFriendsButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(59,130,246,0.16)',
+    borderColor: 'rgba(95,157,255,0.42)',
+    borderRadius: 16,
+    borderWidth: 1,
+    justifyContent: 'center',
+    marginTop: 14,
+    minHeight: 44,
+    paddingHorizontal: 18,
+  },
+  addFriendsLabel: {
+    color: '#A7C8FF',
+    fontFamily: FONT.semibold,
+    fontSize: TYPE.label.fontSize,
+    lineHeight: TYPE.label.lineHeight,
+  },
+  openingSurface: {
+    backgroundColor: 'rgba(59,130,246,0.09)',
+    borderColor: 'rgba(91,153,255,0.28)',
+    borderRadius: 20,
+    borderWidth: 1,
+    gap: 13,
+    padding: 14,
+  },
+  previewAvatar: {
+    alignItems: 'center',
+    backgroundColor: '#15263E',
+    borderColor: '#101823',
+    borderRadius: 20,
+    borderWidth: 2,
+    height: 40,
+    justifyContent: 'center',
+    width: 40,
+  },
+  previewInitials: {
+    color: '#9EC1FA',
+    fontFamily: FONT.bold,
+    fontSize: TYPE.caption.fontSize,
+    lineHeight: TYPE.caption.lineHeight,
+  },
+  openingTitle: {
+    color: '#F4F7FB',
+    fontFamily: FONT.semibold,
+    fontSize: TYPE.body.fontSize,
+    lineHeight: TYPE.body.lineHeight,
+  },
+  openingMeta: {
+    color: 'rgba(225,233,244,0.62)',
+    fontFamily: FONT.medium,
+    fontSize: TYPE.caption.fontSize,
+    lineHeight: 17,
+    marginTop: 2,
+  },
+  footer: {
+    borderTopColor: 'rgba(255,255,255,0.08)',
+    borderTopWidth: 1,
+    gap: 9,
+    paddingBottom: 16,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+  },
+  footerHint: {
+    color: 'rgba(221,229,240,0.56)',
+    fontFamily: FONT.medium,
+    fontSize: TYPE.caption.fontSize,
+    lineHeight: 17,
+    textAlign: 'center',
+  },
+  surfaceGlowTop: {
+    backgroundColor: 'rgba(59,130,246,0.055)',
+    borderRadius: 180,
+    height: 280,
+    position: 'absolute',
+    right: -130,
+    top: -145,
+    width: 280,
+  },
+  surfaceGlowBottom: {
+    backgroundColor: 'rgba(83,122,196,0.035)',
+    borderRadius: 150,
+    bottom: -130,
+    height: 250,
+    left: -120,
+    position: 'absolute',
+    width: 250,
+  },
+});

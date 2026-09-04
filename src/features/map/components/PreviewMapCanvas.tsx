@@ -32,17 +32,20 @@ import type {
 } from '../types/map.types';
 import { countdownBucket } from '../utils/countdown';
 import { DEFAULT_MAP_REGION } from '../utils/defaultRegion';
+import type { FocusTargetInsets } from '../utils/focusFraming';
+import { visibleMarkerFaceCount } from '../utils/markerDetailLevel';
 import { colorWithAlpha, markerModeStyles } from '../utils/markerStyles';
 import { participantDisplay } from '../utils/markerParticipants';
 import {
   ACTIVITY_MARKER_ANCHOR,
   ACTIVITY_MARKER_CAPTURE_HEIGHT,
   ACTIVITY_MARKER_CAPTURE_WIDTH,
+  ACTIVITY_MARKER_GROUND_Y,
+  activityMarkerGroundWidth,
 } from './activityMarkerLayout';
 import { AvatarMarker } from './AvatarMarker';
 import { ClusterMarker } from './ClusterMarker';
 import { JourneyAvatarMarker } from './JourneyAvatarMarker';
-import { LIVE_AURA_SIZE, LiveAura } from './MapLiveAuraOverlay';
 import { MarkerLaunchOverlay, type MarkerLaunchRequest } from './MarkerLaunchOverlay';
 
 export interface HeimwegMapMarker {
@@ -97,6 +100,13 @@ export interface PreviewMapCanvasProps {
   selectionFocus?: {
     id: number;
     coordinate: MapCoordinate;
+    /** Final obstruction measured for this focus request. */
+    coveredHeight?: number;
+    /** Lowest screen y occupied by controls above the map. */
+    topCoveredHeight?: number;
+    /** Geometry around the coordinate that must remain visible. */
+    targetInsets?: FocusTargetInsets;
+    duration?: number;
     latitudeDelta?: number;
     longitudeDelta?: number;
   };
@@ -107,14 +117,12 @@ export interface PreviewMapCanvasProps {
   /** Live height of an open bottom sheet covering the map. Used ONLY to centre
    * a focused selection in the visible map strip rather than behind the sheet. */
   bottomSheetHeight?: number;
+  /** Lowest screen y occupied by persistent top controls. */
+  topOverlayHeight?: number;
   onMarkerPress?: (marker: MapMarker) => void;
-  /**
-   * Friends who are open AND deliberately share their location. Kept separate
-   * from the activity feed on purpose: presence is a status, it is never part of
-   * `mapMarkers`, and it must be trivial to see at the call site that turning
-   * sharing off removes the marker.
-   */
-  openPresenceMarkers?: MapMarker[];
+  /** Several independent activities whose rendered cards collide at the
+   * current camera projection. Opens a chooser; it never merges participants. */
+  onActivityStackPress?: (markers: MapMarker[], coordinate: MapCoordinate, stackId: string) => void;
   /**
    * Rounds still looking for a time. A separate prop for the same reason
    * presence is: a Terminfindung is NOT an activity, it has no fixed time and
@@ -417,6 +425,14 @@ export function PreviewMapCanvas({
                 joined,
                 currentUser,
               );
+              const groundWidth = activityMarkerGroundWidth(
+                visibleMarkerFaceCount(display.avatars, display.count),
+                display.count <= 1,
+                0.5,
+                joined,
+                cluster.label,
+                journeyUnderwayCounts?.[cluster.id] ?? 0,
+              );
               return (
                 <View
                   key={cluster.id}
@@ -426,21 +442,13 @@ export function PreviewMapCanvas({
                       : projectCoordinateToCanvas(cluster.coordinate),
                   )}
                 >
-                  {cluster.mode === 'now' ||
-                  selectedActivityId === cluster.id ||
-                  (journeyUnderwayCounts?.[cluster.id] ?? 0) > 0 ? (
-                    <LiveAura
-                      color={markerModeStyles[cluster.mode].color}
-                      selected={selectedActivityId === cluster.id}
-                      style={styles.activityAura}
-                    />
-                  ) : null}
                   <ClusterMarker
                     avatars={display.avatars}
                     count={display.count}
                     label={cluster.label}
                     mode={cluster.mode}
                     progress={webMorph}
+                    titlePriority={joined}
                     maxParticipants={cluster.maxParticipants}
                     category={cluster.category}
                     remainingFraction={countdownBucket(
@@ -482,6 +490,14 @@ export function PreviewMapCanvas({
                 joined,
                 currentUser,
               );
+              const groundWidth = activityMarkerGroundWidth(
+                visibleMarkerFaceCount(display.avatars, display.count),
+                display.count <= 1,
+                0.5,
+                joined,
+                marker.friendId ? marker.displayName : (marker.title ?? marker.displayName),
+                journeyUnderwayCounts?.[marker.id] ?? 0,
+              );
               return (
                 <View
                   key={marker.id}
@@ -491,15 +507,6 @@ export function PreviewMapCanvas({
                       : projectCoordinateToCanvas(marker.coordinate),
                   )}
                 >
-                  {marker.mode === 'now' ||
-                  selectedActivityId === marker.id ||
-                  (journeyUnderwayCounts?.[marker.id] ?? 0) > 0 ? (
-                    <LiveAura
-                      color={markerModeStyles[marker.mode].color}
-                      selected={selectedActivityId === marker.id}
-                      style={styles.activityAura}
-                    />
-                  ) : null}
                   <AvatarMarker
                     avatarUrl={marker.avatarUrl}
                     displayName={marker.displayName}
@@ -509,6 +516,7 @@ export function PreviewMapCanvas({
                       marker.friendId ? marker.displayName : (marker.title ?? marker.displayName)
                     }
                     progress={webMorph}
+                    titlePriority={joined}
                     mode={marker.mode}
                     unreadCount={joined ? getUnreadCount(marker.id) : 0}
                     participantCount={display.count}
@@ -579,10 +587,6 @@ export function PreviewMapCanvas({
 }
 
 const styles = StyleSheet.create({
-  activityAura: {
-    left: (ACTIVITY_MARKER_CAPTURE_WIDTH - LIVE_AURA_SIZE) / 2,
-    top: -8,
-  },
   activityMarker: {
     height: ACTIVITY_MARKER_CAPTURE_HEIGHT,
     position: 'absolute',

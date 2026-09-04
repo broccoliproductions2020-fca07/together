@@ -4,10 +4,10 @@
     "slug": "together",
     "platforms": ["ios", "android"],
     "owner": "broccoli-studios",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": ["mica", "together", "mica"],
+    "scheme": ["mica", "together"],
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": {
@@ -66,8 +66,16 @@
         "expo-image-picker",
         {
           "photosPermission": "Mica braucht Zugriff auf deine Fotos, damit du ein Profilbild auswählen kannst.",
-          "cameraPermission": "Mica braucht Zugriff auf deine Kamera, damit du ein Profilbild aufnehmen kannst.",
+          "cameraPermission": "Mica braucht Zugriff auf deine Kamera, damit du ein Profilbild aufnehmen und Freundescodes scannen kannst.",
           "microphonePermission": false
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Mica braucht Zugriff auf deine Kamera, damit du ein Profilbild aufnehmen und Freundescodes scannen kannst.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
         }
       ],
       [
@@ -89,7 +97,7 @@
       "eas": {
         "projectId": "d534c243-7485-4d28-b030-454eb651d5ec"
       },
-      "internalVersion": "0.4.07"
+      "internalVersion": "0.4.28"
     },
     "runtimeVersion": {
       "policy": "appVersion"

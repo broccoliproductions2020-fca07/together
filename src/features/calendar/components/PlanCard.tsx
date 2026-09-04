@@ -13,10 +13,17 @@ import { useAuth } from '@/features/auth';
 import { activityPhaseLabel } from '@/features/activities/utils/activityTiming';
 import { colorWithAlpha, markerModeStyles } from '@/features/map/utils/markerStyles';
 import { SquircleButton } from '@/shared/components/SquircleButton';
+import { useThemeColors } from '@/features/theme';
+import { PlanCardSummary } from '@/shared/product-ui/PlanCardSummary';
+import { NATIVE_FONTS } from '@/shared/product-ui/nativeFonts';
+import { shadow } from '@/shared/theme';
 
 import type { Plan } from '../types/calendar.types';
 import { formatTime } from '../utils/formatPlanTime';
 import { PlanPeopleAvatars } from './PlanPeopleAvatars';
+
+/** The card's own lift. Matches the `shadow-sm` it carried before the extraction. */
+const CARD_SHADOW = shadow({ color: '#000000', offsetY: 1, radius: 1, opacity: 0.05, elevation: 1 });
 
 export interface PlanCardProps {
   plan: Plan;
@@ -27,6 +34,7 @@ export interface PlanCardProps {
 }
 
 export function PlanCard({ plan, expanded, onToggle, onOpenChat, onEditActivity }: PlanCardProps) {
+  const colors = useThemeColors();
   const mutedColor = useColorScheme() === 'dark' ? 'rgb(154,163,157)' : 'rgb(107,98,88)';
   const reducedMotion = useReducedMotion();
   const { user } = useAuth();
@@ -95,66 +103,36 @@ export function PlanCard({ plan, expanded, onToggle, onOpenChat, onEditActivity 
       ],
     );
   }
-  // Scheduled plans show the remaining wait time instead of a redundant “Bald”.
+
   const isNow = plan.sourceMode === 'now';
   const accent = isNow ? markerModeStyles.now.color : markerModeStyles.soon.color;
   const modeLabel = activityPhaseLabel(plan.sourceMode ?? 'soon', plan.startsAt);
-
   const peopleNames = plan.people.map((person) => person.displayName).join(', ');
 
   return (
     <Animated.View layout={reducedMotion ? undefined : LinearTransition.duration(220)}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`Plan ${plan.title}`}
-        className="rounded-[26px] border bg-card p-4 shadow-sm active:opacity-95"
-        style={({ pressed }) => [
-          { borderColor: colorWithAlpha(accent, 0.22) },
-          pressed && !reducedMotion ? { transform: [{ scale: 0.985 }] } : undefined,
-        ]}
+      <PlanCardSummary
+        time={formatTime(plan.startsAt)}
+        endTime={plan.endsAt ? formatTime(plan.endsAt) : undefined}
+        title={plan.title}
+        stateLabel={modeLabel}
+        location={plan.locationName}
+        locationIcon={<Ionicons name="location-outline" size={14} color={mutedColor} />}
+        people={<PlanPeopleAvatars people={plan.people} />}
+        circleName={plan.circleName}
         onPress={onToggle}
+        animatePress={!reducedMotion}
+        elevation={CARD_SHADOW}
+        theme={{
+          background: colors.card,
+          text: colors.foreground,
+          muted: colors.mutedForeground,
+          accent,
+          accentSoft: colorWithAlpha(accent, 0.15),
+          accentBorder: colorWithAlpha(accent, 0.22),
+          fonts: NATIVE_FONTS,
+        }}
       >
-        <View className="flex-row gap-3">
-          <View className="w-14 pt-0.5">
-            <Text className="text-base font-extrabold" style={{ color: accent }}>
-              {formatTime(plan.startsAt)}
-            </Text>
-            {plan.endsAt ? (
-              <Text className="text-xs text-muted-foreground">{formatTime(plan.endsAt)}</Text>
-            ) : null}
-          </View>
-
-          <View className="flex-1 gap-2">
-            <View className="flex-row items-start justify-between gap-2">
-              <Text className="flex-1 text-base font-bold text-foreground">{plan.title}</Text>
-              <View
-                className="rounded-full px-2.5 py-1"
-                style={{ backgroundColor: colorWithAlpha(accent, 0.15) }}
-              >
-                <Text className="text-xs font-semibold" style={{ color: accent }}>
-                  {modeLabel}
-                </Text>
-              </View>
-            </View>
-
-            {plan.locationName ? (
-              <View className="flex-row items-center gap-1">
-                <Ionicons name="location-outline" size={14} color={mutedColor} />
-                <Text className="flex-1 text-sm text-muted-foreground">{plan.locationName}</Text>
-              </View>
-            ) : null}
-
-            <View className="flex-row items-center justify-between gap-2 pt-0.5">
-              <PlanPeopleAvatars people={plan.people} />
-              {plan.circleName ? (
-                <Text className="text-xs font-semibold text-muted-foreground">
-                  {plan.circleName}
-                </Text>
-              ) : null}
-            </View>
-          </View>
-        </View>
-
         {expanded ? (
           <Animated.View
             entering={reducedMotion ? undefined : FadeInDown.duration(200)}
@@ -188,6 +166,7 @@ export function PlanCard({ plan, expanded, onToggle, onOpenChat, onEditActivity 
                         label="Bearbeiten"
                         color={accent}
                         variant="tonal"
+                        surface={colors.card}
                         size="md"
                         icon="pencil"
                         accessibilityLabel="Aktivität bearbeiten"
@@ -239,7 +218,7 @@ export function PlanCard({ plan, expanded, onToggle, onOpenChat, onEditActivity 
             ) : null}
           </Animated.View>
         ) : null}
-      </Pressable>
+      </PlanCardSummary>
     </Animated.View>
   );
 }

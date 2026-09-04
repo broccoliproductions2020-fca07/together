@@ -10,10 +10,11 @@ import type { TimePlan } from '../types';
  * is not a limitation to work around — a pin invents a location, and inventing
  * one for a plan that has none would be worse than showing nothing.
  *
- * The badge carries the TITLE, not a status word. The missing ring and the
- * violet already say "no time fixed yet"; adding "Zeit gesucht" underneath
- * would state in words what the form states, which is the same redundancy the
- * answer cards had.
+ * The badge carries the title, not a status word. A round IS a `soon` activity
+ * whose concrete time is not settled yet, so it gets the ordinary amber marker;
+ * that the time is still being found is carried by the ring, which renders
+ * DASHED for `planning` (`PlanningRing`). Adding "Zeit gesucht" underneath would
+ * state in words what the ring already shows and cost width at every zoom.
  */
 export function timePlanToMapMarker(plan: TimePlan): MapMarker | null {
   // Only a `pin` place carries a coordinate at all — the type makes that
@@ -27,9 +28,8 @@ export function timePlanToMapMarker(plan: TimePlan): MapMarker | null {
     userId: plan.hostId,
     displayName: plan.hostName,
     initials: plan.hostInitials,
-    // `mode` is required on a marker but says nothing here: `planning` turns
-    // off every place it is used (ring, glow, countdown). `soon` is what the
-    // round becomes once a slot is locked, so it is the least wrong stand-in.
+    // A round is a future activity whose concrete slot is not settled yet, so
+    // `soon` is both its visual treatment and its eventual activity mode.
     mode: 'soon',
     planning: true,
     label: plan.title,

@@ -453,6 +453,49 @@ async function main() {
     longitude: 11.576124,
     visibility: 'pin',
   };
+  await expectError(
+    'activity creation requires a complete time window',
+    'INVALID_ARGUMENT',
+    () =>
+      callFunction(alice.token, 'createActivity', {
+        activityId: `missing-time-${now}`,
+        activity: {
+          mode: 'soon',
+          title: 'Ohne Zeit',
+          audienceContext: { kind: 'all_friends' },
+        },
+      }),
+  );
+  await expectError(
+    'a now activity cannot start in the future',
+    'INVALID_ARGUMENT',
+    () =>
+      callFunction(alice.token, 'createActivity', {
+        activityId: `future-now-${now}`,
+        activity: {
+          mode: 'now',
+          title: 'Noch nicht jetzt',
+          audienceContext: { kind: 'all_friends' },
+          startsAt: new Date(now + 30 * 60 * 1000).toISOString(),
+          endsAt: new Date(now + 90 * 60 * 1000).toISOString(),
+        },
+      }),
+  );
+  await expectError(
+    'an activity cannot exceed the composer duration range',
+    'INVALID_ARGUMENT',
+    () =>
+      callFunction(alice.token, 'createActivity', {
+        activityId: `duration-too-long-${now}`,
+        activity: {
+          mode: 'soon',
+          title: 'Zu lang',
+          audienceContext: { kind: 'all_friends' },
+          startsAt: new Date(now + 60 * 60 * 1000).toISOString(),
+          endsAt: new Date(now + 14 * 60 * 60 * 1000).toISOString(),
+        },
+      }),
+  );
   await expectOk('new activity writes feed visibility separate from chat retention', () =>
     callFunction(alice.token, 'createActivity', {
       activityId: createdActivityId,
@@ -522,6 +565,7 @@ async function main() {
         audienceContext: { kind: 'selection', uids: [dave.uid, charlie.uid] },
         startsAt: createdStartsAt,
         endsAt: createdEndsAt,
+        place: createdPlace,
       },
     }),
   );
@@ -566,10 +610,89 @@ async function main() {
       }),
   );
 
+  // An activity without a pin is created successfully and then reaches nobody:
+  // no marker, no distance, invisible on the map. The client checks it too, but
+  // only the server checks it for every client version.
+  await expectError('an activity cannot be created without a place', 'INVALID_ARGUMENT', () =>
+    callFunction(alice.token, 'createActivity', {
+      activityId: `no-place-${now}`,
+      activity: {
+        mode: 'soon',
+        title: 'Ohne Ort',
+        audienceContext: { kind: 'all_friends' },
+        startsAt: createdStartsAt,
+        endsAt: createdEndsAt,
+      },
+    }),
+  );
+  await expectError('an activity cannot be created without coordinates', 'INVALID_ARGUMENT', () =>
+    callFunction(alice.token, 'createActivity', {
+      activityId: `place-without-pin-${now}`,
+      activity: {
+        mode: 'soon',
+        title: 'Nur ein Name',
+        audienceContext: { kind: 'all_friends' },
+        startsAt: createdStartsAt,
+        endsAt: createdEndsAt,
+        place: { label: 'Irgendwo', visibility: 'none' },
+      },
+    }),
+  );
+  await expectError('an edit cannot take the place away', 'INVALID_ARGUMENT', () =>
+    callFunction(alice.token, 'updateActivity', {
+      activityId: selectionActivityId,
+      activity: { place: null },
+    }),
+  );
+  console.log('OK an activity can never exist without a pin');
+
+  // The audience is editable after creation, and the edit runs through the same
+  // trust boundary creation uses: a CONTEXT the server re-resolves against the
+  // host's own friendships, never a uid list it is trusted on.
+  await expectOk('host re-resolves the audience after creation', () =>
+    callFunction(alice.token, 'updateActivity', {
+      activityId: selectionActivityId,
+      // charlie is still not one of alice's friends.
+      activity: { audienceContext: { kind: 'selection', uids: [dave.uid, charlie.uid] } },
+    }),
+  );
+  const editedAudience =
+    (await db.doc(`activities/${selectionActivityId}`).get()).data()?.audienceUids ?? [];
+  if (!editedAudience.includes(alice.uid) || !editedAudience.includes(dave.uid)) {
+    throw new Error('Audience edit dropped the host or the chosen friend.');
+  }
+  if (editedAudience.includes(charlie.uid)) {
+    throw new Error('Audience edit let a non-friend into the activity.');
+  }
+
+  // Someone who already joined must survive an audience edit that no longer
+  // names them — otherwise a host fixing the audience would silently throw a
+  // participant out of the activity and its chat.
+  await expectOk('a friend in the audience can join', () =>
+    callFunction(dave.token, 'joinActivity', { activityId: selectionActivityId }),
+  );
+  await expectOk('narrowing the audience keeps existing participants', () =>
+    callFunction(alice.token, 'updateActivity', {
+      // Alice has nobody marked as a close friend, so this resolves to an empty
+      // friend audience — dave can only still be there as a PARTICIPANT.
+      activityId: selectionActivityId,
+      activity: { audienceContext: { kind: 'close_friends' } },
+    }),
+  );
+  const narrowedAudience =
+    (await db.doc(`activities/${selectionActivityId}`).get()).data()?.audienceUids ?? [];
+  if (!narrowedAudience.includes(dave.uid)) {
+    throw new Error('Audience edit removed a participant from the activity he had joined.');
+  }
+  console.log('OK the audience is editable and cannot drop participants or reach strangers');
+
   const journeyReminderGeneration = createdActivity?.journeyReminderGeneration;
   if (typeof journeyReminderGeneration !== 'string' || !journeyReminderGeneration) {
     throw new Error('New activity did not receive a reminder task generation.');
   }
+  await expectOk('participant joins before the scheduled journey reminder', () =>
+    callFunction(dave.token, 'joinActivity', { activityId: createdActivityId }),
+  );
   const firstJourneyTask = await callTask('dispatchJourneyReminder', {
     activityId: createdActivityId,
     generation: journeyReminderGeneration,
@@ -587,6 +710,9 @@ async function main() {
       .get();
     return snapshot.size === 1 ? snapshot : null;
   });
+  if (firstJourneyReminder.docs[0]?.data()?.recipientUid !== dave.uid) {
+    throw new Error('Scheduled journey reminder targeted the creator instead of the participant.');
+  }
   const repeatedJourneyTask = await callTask('dispatchJourneyReminder', {
     activityId: createdActivityId,
     generation: journeyReminderGeneration,
@@ -602,9 +728,33 @@ async function main() {
   if (repeatedJourneyReminder.size !== firstJourneyReminder.size) {
     throw new Error('Journey reminder task was not idempotent.');
   }
+  const journeyReminderId = firstJourneyReminder.docs[0].id;
+  await expectError('another user cannot resolve a journey reminder', 'PERMISSION_DENIED', () =>
+    callFunction(alice.token, 'resolveJourneyReminder', {
+      activityId: createdActivityId,
+      notificationId: journeyReminderId,
+    }),
+  );
+  await expectOk('recipient resolves the journey reminder decision', () =>
+    callFunction(dave.token, 'resolveJourneyReminder', {
+      activityId: createdActivityId,
+      notificationId: journeyReminderId,
+    }),
+  );
+  if ((await db.doc(`notifications/${journeyReminderId}`).get()).exists) {
+    throw new Error('Resolved journey reminder stayed in the inbox.');
+  }
   console.log('OK Journey reminder tasks are idempotent');
   console.log('OK activity feed returns only the explicit visibility window');
 
+  await expectError('a new open presence rejects less than 15 minutes', 'INVALID_ARGUMENT', () =>
+    callFunction(alice.token, 'publishPresence', {
+      presence: {
+        expiresAt: Date.now() + 10 * 60 * 1000,
+        shareLocation: false,
+      },
+    }),
+  );
   await expectOk('open presence accepts a duration below twelve hours', () =>
     callFunction(alice.token, 'publishPresence', {
       presence: {
@@ -615,9 +765,20 @@ async function main() {
   );
   const openedPresence = await db.doc(`presence/${alice.uid}`).get();
   const openedAudience = openedPresence.data()?.audienceUids ?? [];
+  if (openedPresence.data()?.expireAt?.toMillis?.() !== Date.parse(sharedStartsAt)) {
+    throw new Error('Open presence was not capped at the earliest confirmed activity start.');
+  }
   if (openedAudience.includes(alice.uid)) {
     throw new Error('Presence audience must not include its owner.');
   }
+  await expectOk('an existing open presence may be refined below 15 remaining minutes', () =>
+    callFunction(alice.token, 'publishPresence', {
+      presence: {
+        expiresAt: Date.now() + 5 * 60 * 1000,
+        shareLocation: false,
+      },
+    }),
+  );
   await expectOk('open presence refinement reuses its server-derived audience', () =>
     callFunction(alice.token, 'publishPresence', {
       presence: {
@@ -1038,6 +1199,7 @@ async function main() {
         audienceContext: { kind: 'all_friends' },
         startsAt: promotedStartsAt,
         endsAt: promotedEndsAt,
+        place: createdPlace,
       },
     }),
   );
@@ -1066,7 +1228,16 @@ async function main() {
   await db.doc(`friendships/${friendshipId(bob.uid, dave.uid)}`).delete();
   console.log('OK winks are private, exclusive, temporary, and promote safely');
 
-  const editedStartsAt = new Date(now + 45 * 60 * 1000).toISOString();
+  await db.doc(`presence/${alice.uid}`).set({
+    uid: alice.uid,
+    displayName: 'Alice Adams',
+    initials: 'AA',
+    audienceUids: [dave.uid],
+    shareLocation: false,
+    expireAt: admin.firestore.Timestamp.fromMillis(Date.parse(sharedStartsAt)),
+    updatedAt: timestamp,
+  });
+  const editedStartsAt = new Date(now + 20 * 60 * 1000).toISOString();
   const editedEndsAt = new Date(now + 3 * 60 * 60 * 1000).toISOString();
   await expectError('non-host cannot edit an activity', 'PERMISSION_DENIED', () =>
     callFunction(bob.token, 'updateActivity', {
@@ -1117,6 +1288,10 @@ async function main() {
     throw new Error('Activity edit did not keep visibility and chat lifecycle in sync.');
   }
   console.log('OK activity edit moves visibility and chat expiry together');
+  const presenceAfterEarlierEdit = await db.doc(`presence/${alice.uid}`).get();
+  if (presenceAfterEarlierEdit.data()?.expireAt?.toMillis?.() !== Date.parse(editedStartsAt)) {
+    throw new Error('Moving an activity earlier did not shorten the overlapping Open window.');
+  }
 
   const firstActivityUpdateNotifications = await waitFor(async () => {
     const snapshot = await db
@@ -1138,7 +1313,10 @@ async function main() {
   }
   console.log('OK relevant activity edits notify participants exactly once');
 
-  await expectError('activity edit cannot rewrite its audience', 'INVALID_ARGUMENT', () =>
+  // The audience IS editable — but only as a context the server re-resolves
+  // (asserted above). A raw uid list stays rejected: that is the difference
+  // between changing who may see it and being trusted on who they are.
+  await expectError('activity edit cannot set a raw audience list', 'INVALID_ARGUMENT', () =>
     callFunction(alice.token, 'updateActivity', {
       activityId: 'shared-activity',
       activity: { audienceUids: [alice.uid] },
@@ -1191,20 +1369,25 @@ async function main() {
     throw new Error('Journey counter churn created a misleading activity update notification.');
   }
   console.log('OK journey counter changes stay out of participant update notifications');
+  // `place` is deliberately NOT in this list any more: an activity cannot exist
+  // without a pin, so removing it is rejected rather than optional (asserted
+  // separately above).
   await expectOk('host can remove optional activity fields explicitly', () =>
     callFunction(alice.token, 'updateActivity', {
       activityId: 'shared-activity',
-      activity: { note: null, place: null, maxParticipants: null, category: null },
+      activity: { note: null, maxParticipants: null, category: null },
     }),
   );
   const clearedActivity = (await db.doc('activities/shared-activity').get()).data();
   if (
     Object.prototype.hasOwnProperty.call(clearedActivity, 'note') ||
-    Object.prototype.hasOwnProperty.call(clearedActivity, 'place') ||
     Object.prototype.hasOwnProperty.call(clearedActivity, 'maxParticipants') ||
     Object.prototype.hasOwnProperty.call(clearedActivity, 'category')
   ) {
     throw new Error('Activity edit did not remove optional fields cleanly.');
+  }
+  if (clearedActivity?.place?.visibility !== 'pin') {
+    throw new Error('Clearing optional fields must never cost the activity its pin.');
   }
   console.log('OK activity edit deletes optional fields without stale private data');
 
@@ -1347,34 +1530,75 @@ async function main() {
     callFunction(dave.token, 'joinActivity', { activityId: 'guest-activity' }),
   );
 
+  const journeyActivityId = 'journey-activity';
+  await db.doc(`activities/${journeyActivityId}`).set({
+    hostId: alice.uid,
+    mode: 'soon',
+    title: 'Treffen am See',
+    audienceUids: [alice.uid, bob.uid],
+    startsAt: sharedStartsAt,
+    endsAt: sharedEndsAt,
+    place: {
+      label: 'Seeufer',
+      latitude: 52.5,
+      longitude: 13.4,
+      visibility: 'pin',
+    },
+    participantUids: [alice.uid, bob.uid],
+    participants: [
+      { uid: alice.uid, displayName: 'Alice Adams', initials: 'AA' },
+      { uid: bob.uid, displayName: 'Bob Berger', initials: 'BB' },
+    ],
+    status: 'active',
+    createdAt: timestamp,
+    visibleUntil: admin.firestore.Timestamp.fromMillis(Date.parse(sharedEndsAt)),
+    expireAt: admin.firestore.Timestamp.fromMillis(now + 26 * 60 * 60 * 1000),
+  });
   await expectOk('participant gains guarded journey view access', () =>
-    callFunction(bob.token, 'ensureJourneyMember', { activityId: 'shared-activity' }),
+    callFunction(bob.token, 'ensureJourneyMember', { activityId: journeyActivityId }),
   );
   const journeyViewerMembership = await realtimeDb
-    .ref(`journeys/shared-activity/members/${bob.uid}`)
+    .ref(`journeys/${journeyActivityId}/members/${bob.uid}`)
     .get();
   if (journeyViewerMembership.val() !== true) {
     throw new Error('Accepted participant did not receive the guarded Journey viewer entitlement.');
   }
   console.log('OK accepted participant can receive guarded journey view access');
 
-  await realtimeDb.ref(`journeys/shared-activity/locations/${bob.uid}`).set({
+  const bobJourneySessionId = `bob-session-${now}`;
+  const charlieJourneySessionId = `charlie-session-${now}`;
+  await expectOk('participant prepares a device-scoped journey session', () =>
+    callFunction(bob.token, 'ensureJourneyMember', {
+      activityId: journeyActivityId,
+      sessionId: bobJourneySessionId,
+    }),
+  );
+  await realtimeDb.ref(`journeys/${journeyActivityId}/locations/${bobJourneySessionId}`).set({
+    uid: bob.uid,
+    sessionId: bobJourneySessionId,
+    lat: 52.5,
+    lng: 13.4,
     status: 'onTheWay',
     updatedAt: Date.now(),
-    expiresAt: Date.parse(editedEndsAt),
+    expiresAt: Date.now() + 2 * 60 * 1000,
   });
-  await realtimeDb.ref(`journeys/shared-activity/locations/${charlie.uid}`).set({
+  await realtimeDb.ref(`journeys/${journeyActivityId}/locations/${charlieJourneySessionId}`).set({
+    uid: charlie.uid,
+    sessionId: charlieJourneySessionId,
+    lat: 52.5,
+    lng: 13.4,
     status: 'onTheWay',
     updatedAt: Date.now(),
-    expiresAt: Date.parse(editedEndsAt),
+    expiresAt: Date.now() + 2 * 60 * 1000,
   });
   await expectOk('participant starts a location-free journey summary', () =>
     callFunction(bob.token, 'setJourneyLiveStatus', {
-      activityId: 'shared-activity',
+      activityId: journeyActivityId,
+      sessionId: bobJourneySessionId,
       underway: true,
     }),
   );
-  const underwayActivity = (await db.doc('activities/shared-activity').get()).data();
+  const underwayActivity = (await db.doc(`activities/${journeyActivityId}`).get()).data();
   if (underwayActivity?.journeyUnderwayCount !== 1) {
     throw new Error('Journey start did not update the compact activity summary.');
   }
@@ -1382,18 +1606,54 @@ async function main() {
 
   await expectError('non-participant cannot start a journey summary', 'PERMISSION_DENIED', () =>
     callFunction(charlie.token, 'setJourneyLiveStatus', {
-      activityId: 'shared-activity',
+      activityId: journeyActivityId,
+      sessionId: charlieJourneySessionId,
       underway: true,
     }),
   );
 
-  await expectOk('participant stops the journey summary', () =>
+  const bobSecondJourneySessionId = `bob-second-session-${now}`;
+  await expectOk('second device replaces the older journey session', () =>
+    callFunction(bob.token, 'ensureJourneyMember', {
+      activityId: journeyActivityId,
+      sessionId: bobSecondJourneySessionId,
+    }),
+  );
+  await realtimeDb.ref(`journeys/${journeyActivityId}/locations/${bobSecondJourneySessionId}`).set({
+    uid: bob.uid,
+    sessionId: bobSecondJourneySessionId,
+    lat: 52.5002,
+    lng: 13.4002,
+    status: 'onTheWay',
+    updatedAt: Date.now(),
+    expiresAt: Date.now() + 2 * 60 * 1000,
+  });
+  await expectOk('replacement device starts the journey summary', () =>
     callFunction(bob.token, 'setJourneyLiveStatus', {
-      activityId: 'shared-activity',
+      activityId: journeyActivityId,
+      sessionId: bobSecondJourneySessionId,
+      underway: true,
+    }),
+  );
+  await expectOk('stale device cannot stop the replacement session', () =>
+    callFunction(bob.token, 'setJourneyLiveStatus', {
+      activityId: journeyActivityId,
+      sessionId: bobJourneySessionId,
       underway: false,
     }),
   );
-  const stoppedActivity = (await db.doc('activities/shared-activity').get()).data();
+  if ((await db.doc(`activities/${journeyActivityId}`).get()).data()?.journeyUnderwayCount !== 1) {
+    throw new Error('A stale device cleared the newer journey summary.');
+  }
+
+  await expectOk('participant stops the journey summary', () =>
+    callFunction(bob.token, 'setJourneyLiveStatus', {
+      activityId: journeyActivityId,
+      sessionId: bobSecondJourneySessionId,
+      underway: false,
+    }),
+  );
+  const stoppedActivity = (await db.doc(`activities/${journeyActivityId}`).get()).data();
   if (stoppedActivity?.journeyUnderwayCount !== 0) {
     throw new Error('Journey stop did not clear the compact activity summary.');
   }
@@ -1485,9 +1745,21 @@ async function main() {
   await expectOk('user disables journey reminders', () =>
     callFunction(bob.token, 'setJourneyRemindersEnabled', { enabled: false }),
   );
+  await db.doc(`presence/${bob.uid}`).set({
+    uid: bob.uid,
+    displayName: 'Bob Brown',
+    initials: 'BB',
+    audienceUids: [alice.uid],
+    shareLocation: false,
+    expireAt: admin.firestore.Timestamp.fromMillis(now + 60 * 60 * 1000),
+    updatedAt: timestamp,
+  });
   await expectOk('opted-out user joins a running activity', () =>
     callFunction(bob.token, 'joinActivity', { activityId: nowJoinActivityId }),
   );
+  if ((await db.doc(`presence/${bob.uid}`).get()).exists) {
+    throw new Error('Joining a running activity did not end the overlapping Open status.');
+  }
   const optedOutJourneyReminders = await db
     .collection('notifications')
     .where('recipientUid', '==', bob.uid)
@@ -1506,8 +1778,8 @@ async function main() {
     .where('kind', '==', 'journey_reminder')
     .where('activityId', '==', nowJoinActivityId)
     .get();
-  if (defaultJourneyReminders.size !== 1) {
-    throw new Error('A default-enabled running-activity join did not create one journey reminder.');
+  if (!defaultJourneyReminders.empty) {
+    throw new Error('A running-activity join created a duplicate server reminder.');
   }
   await waitFor(async () => {
     const snapshot = await db
@@ -1526,7 +1798,7 @@ async function main() {
   if (!joinUpdateNotifications.empty) {
     throw new Error('Joining an activity produced a misleading activity update notification.');
   }
-  console.log('OK running-activity joins honor reminder opt-out without duplicate update notices');
+  console.log('OK running-activity joins leave the one-time Anreise prompt to the client');
 
   const leaveJourneyActivityId = 'leave-journey-activity';
   await Promise.all([
@@ -2310,6 +2582,159 @@ async function main() {
     callFunction(alice.token, 'sendFriendRequest', { username: 'charlie' }),
   );
 
+  // ---------- withdrawing a request you sent ----------
+  // A fresh pair on purpose: the assertions above count friendshipsVersion in
+  // absolute steps, so borrowing an existing relationship would silently move
+  // numbers other checks depend on.
+  const wendy = await createTestUser();
+  await db.doc(`users/${wendy.uid}`).set({
+    displayName: 'Wendy Withdraw',
+    username: 'wendy',
+    initials: 'WW',
+    profileVisibility: 'friends',
+    friendRequestPolicy: 'anyone',
+    createdAt: timestamp,
+  });
+  await db.doc('usernames/wendy').set({ uid: wendy.uid, createdAt: timestamp });
+
+  await expectOk('sends a request that will be withdrawn', () =>
+    callFunction(alice.token, 'sendFriendRequest', { username: 'wendy' }),
+  );
+  const wendyRelationshipRef = db.doc(`friendships/${friendshipId(alice.uid, wendy.uid)}`);
+  if (!(await wendyRelationshipRef.get()).exists) {
+    throw new Error('The request that should be withdrawn was never created.');
+  }
+  const wendyVersionBeforeWithdraw =
+    (await db.doc(`users/${wendy.uid}`).get()).data()?.friendshipsVersion ?? 0;
+
+  // The recipient answers, the sender withdraws. Swapping those would let a
+  // requester reach the accept path and grant themselves a friendship.
+  await expectError('recipient cannot withdraw a request sent to them', 'PERMISSION_DENIED', () =>
+    callFunction(wendy.token, 'withdrawFriendRequest', { uid: alice.uid }),
+  );
+
+  await expectOk('sender withdraws their own request', () =>
+    callFunction(alice.token, 'withdrawFriendRequest', { uid: wendy.uid }),
+  );
+  if ((await wendyRelationshipRef.get()).exists) {
+    throw new Error('Withdrawing left the friendship document behind.');
+  }
+  const wendyVersionAfterWithdraw =
+    (await db.doc(`users/${wendy.uid}`).get()).data()?.friendshipsVersion ?? 0;
+  if (wendyVersionAfterWithdraw !== wendyVersionBeforeWithdraw + 1) {
+    throw new Error('Withdrawing did not invalidate the recipient friendship cache.');
+  }
+
+  // Nothing left to withdraw is the state the caller asked for, not an error —
+  // a second tap from a slow list must not surface as a failure.
+  await expectOk('withdrawing twice is a no-op', () =>
+    callFunction(alice.token, 'withdrawFriendRequest', { uid: wendy.uid }),
+  );
+
+  await expectOk('a withdrawn request can be sent again', () =>
+    callFunction(alice.token, 'sendFriendRequest', { username: 'wendy' }),
+  );
+  await expectOk('recipient accepts the second request', () =>
+    callFunction(wendy.token, 'respondToFriendRequest', {
+      friendshipId: wendyRelationshipRef.id,
+      accept: true,
+    }),
+  );
+  // An existing friendship ends through removeFriend, never through this path.
+  await expectError('an accepted friendship cannot be withdrawn', 'PERMISSION_DENIED', () =>
+    callFunction(alice.token, 'withdrawFriendRequest', { uid: wendy.uid }),
+  );
+  // Hand alice's friend graph back exactly as it was found. The time-plan case
+  // below invites "all friends" with a capacity of two, so createTimePlan
+  // hands out a SINGLE invitation (`.slice(0, capacity - 1)`) — one extra
+  // friendship here silently changes who receives it, and that test then fails
+  // somewhere that looks unrelated.
+  await expectOk('test friendship is cleaned up again', () =>
+    callFunction(alice.token, 'removeFriend', { uid: wendy.uid }),
+  );
+  console.log('OK a sent friend request can be withdrawn, and only by its sender');
+
+  // ---- setHeimwegGroup -----------------------------------------------------
+  // The preselected audience for a live location. The client used to write this
+  // straight into `users/{uid}`, which the rules refuse (proven in the rules
+  // test); the callable is what makes it settable at all AND what re-checks
+  // every uid against a confirmed friendship, which a client write never could.
+  //
+  // Deliberately its own pair of users: the surrounding cases depend on alice's
+  // friend graph being handed back exactly as it was found (see the note above
+  // the wendy cleanup), so this must not add or remove a friendship of hers.
+  const [hugo, hanna, hostile] = await Promise.all([
+    createTestUser(),
+    createTestUser(),
+    createTestUser(),
+  ]);
+  const heimwegTimestamp = admin.firestore.Timestamp.now();
+  const hugoProfile = { uid: hugo.uid, displayName: 'Hugo Heimweg', initials: 'HH' };
+  const hannaProfile = { uid: hanna.uid, displayName: 'Hanna Heimweg', initials: 'HA' };
+  const heimwegBatch = db.batch();
+  [
+    [hugo, hugoProfile, 'hugoheimweg'],
+    [hanna, hannaProfile, 'hannaheimweg'],
+    [hostile, { uid: hostile.uid, displayName: 'Hostile Stranger', initials: 'HS' }, 'hostile'],
+  ].forEach(([person, profile, username]) => {
+    heimwegBatch.set(db.doc(`users/${person.uid}`), {
+      ...profile,
+      username,
+      profileVisibility: 'friends',
+      friendRequestPolicy: 'anyone',
+      friendshipsVersion: 0,
+      createdAt: heimwegTimestamp,
+    });
+  });
+  heimwegBatch.set(db.doc(`friendships/${friendshipId(hugo.uid, hanna.uid)}`), {
+    participantUids: [hugo.uid, hanna.uid].sort(),
+    requesterUid: hugo.uid,
+    status: 'accepted',
+    profiles: [hugoProfile, hannaProfile],
+    createdAt: heimwegTimestamp,
+    updatedAt: heimwegTimestamp,
+  });
+  await heimwegBatch.commit();
+
+  await expectError('a stranger cannot be put in the Heimweg group', 'FAILED_PRECONDITION', () =>
+    callFunction(hugo.token, 'setHeimwegGroup', { uids: [hostile.uid] }),
+  );
+  await expectError(
+    'one stranger in the list rejects the whole selection',
+    'FAILED_PRECONDITION',
+    () => callFunction(hugo.token, 'setHeimwegGroup', { uids: [hanna.uid, hostile.uid] }),
+  );
+  await expectError('the Heimweg group rejects a malformed uid', 'INVALID_ARGUMENT', () =>
+    callFunction(hugo.token, 'setHeimwegGroup', { uids: ['../escape'] }),
+  );
+  await expectError('the Heimweg group rejects yourself', 'INVALID_ARGUMENT', () =>
+    callFunction(hugo.token, 'setHeimwegGroup', { uids: [hugo.uid] }),
+  );
+  await expectError('the Heimweg group is capped at twenty', 'INVALID_ARGUMENT', () =>
+    callFunction(hugo.token, 'setHeimwegGroup', {
+      uids: Array.from({ length: 21 }, (_, index) => `heimwegpaduid${index}`),
+    }),
+  );
+
+  await expectOk('a confirmed friend can be put in the Heimweg group', () =>
+    callFunction(hugo.token, 'setHeimwegGroup', { uids: [hanna.uid] }),
+  );
+  const heimwegAfterSet = (await db.doc(`users/${hugo.uid}`).get()).data()?.heimwegGroupUids;
+  if (JSON.stringify(heimwegAfterSet) !== JSON.stringify([hanna.uid])) {
+    throw new Error(`The Heimweg group was not stored: ${JSON.stringify(heimwegAfterSet)}`);
+  }
+
+  // Whole-list semantics, not arrayUnion: an empty list has to CLEAR the group,
+  // or taking the last person out would be impossible.
+  await expectOk('an empty selection clears the Heimweg group', () =>
+    callFunction(hugo.token, 'setHeimwegGroup', { uids: [] }),
+  );
+  const heimwegAfterClear = (await db.doc(`users/${hugo.uid}`).get()).data()?.heimwegGroupUids;
+  if (JSON.stringify(heimwegAfterClear) !== JSON.stringify([])) {
+    throw new Error(`Clearing left the group behind: ${JSON.stringify(heimwegAfterClear)}`);
+  }
+  console.log('OK the Heimweg group is settable, friendship-checked and capped');
+
   const eve = await createTestUser();
   await db.doc(`users/${eve.uid}`).set({
     displayName: 'Eve Evans',
@@ -2577,28 +3002,50 @@ async function main() {
   const invitedTimePlanNotification = await db
     .doc(`notifications/time_plan_${timePlanId}_${invitedCandidate.uid}`)
     .get();
+  const createdPlanAudience = await db
+    .collection('timePlanAudience')
+    .where('planId', '==', timePlanId)
+    .get();
   if (
     !createdTimePlan.exists ||
-    createdTimePlan.data()?.audienceUids ||
+    createdTimePlan.data()?.audienceCount !== 2 ||
+    'audienceUids' in createdTimePlan.data() ||
+    createdPlanAudience.size !== 2 ||
+    createdPlanAudience.docs.some(
+      (entry) => 'memberUids' in entry.data() || 'audienceUids' in entry.data(),
+    ) ||
     createdTimePlan.data()?.memberUids?.join(',') !== alice.uid ||
     createdInvites.size > 1 ||
     hostPlanMember.data()?.responseStatus !== 'responded' ||
     invitedTimePlanNotification.data()?.timePlanId !== timePlanId
   ) {
     throw new Error(
-      'Time-plan creation leaked the invite audience or missed its private entry points.',
+      'Time-plan creation did not isolate host and invitee projections.',
     );
   }
+  const initialTimePlanResponses = {
+    cinema_tuesday: [{ startsAt: planStart.toISOString(), endsAt: planEnd.toISOString() }],
+  };
   await expectError(
     'an uninvited account cannot join a private time plan',
     'PERMISSION_DENIED',
-    () => callFunction(timePlanStranger.token, 'joinTimePlan', { planId: timePlanId }),
+    () =>
+      callFunction(timePlanStranger.token, 'joinTimePlan', {
+        planId: timePlanId,
+        responsesByWindow: initialTimePlanResponses,
+      }),
   );
   await expectOk('an invited account can join a private time plan', () =>
-    callFunction(invitedCandidate.token, 'joinTimePlan', { planId: timePlanId }),
+    callFunction(invitedCandidate.token, 'joinTimePlan', {
+      planId: timePlanId,
+      responsesByWindow: initialTimePlanResponses,
+    }),
   );
   await expectOk('joining a time plan is idempotent', () =>
-    callFunction(invitedCandidate.token, 'joinTimePlan', { planId: timePlanId }),
+    callFunction(invitedCandidate.token, 'joinTimePlan', {
+      planId: timePlanId,
+      responsesByWindow: initialTimePlanResponses,
+    }),
   );
   const joinedTimePlan = await db.doc(`timePlans/${timePlanId}`).get();
   if (
@@ -2613,7 +3060,7 @@ async function main() {
       responsesByWindow: {},
     }),
   );
-  await expectOk('an invited member can submit a bounded split availability', () =>
+  await expectError('split availability is rejected', 'INVALID_ARGUMENT', () =>
     callFunction(invitedCandidate.token, 'respondToTimePlan', {
       planId: timePlanId,
       revision: 1,
@@ -2631,32 +3078,36 @@ async function main() {
       },
     }),
   );
+  const updatedTimePlanResponses = {
+    cinema_tuesday: [
+      {
+        startsAt: planStart.toISOString(),
+        endsAt: new Date(planStart.getTime() + 60 * 60 * 1000).toISOString(),
+      },
+    ],
+  };
+  await expectOk('an invited member can submit one bounded availability range', () =>
+    callFunction(invitedCandidate.token, 'respondToTimePlan', {
+      planId: timePlanId,
+      revision: 1,
+      responsesByWindow: updatedTimePlanResponses,
+    }),
+  );
   const invitedPlanMember = await db
     .doc(`timePlans/${timePlanId}/timePlanMembers/${invitedCandidate.uid}`)
     .get();
   if (
     invitedPlanMember.data()?.responseStatus !== 'responded' ||
-    invitedPlanMember.data()?.responsesByWindow?.cinema_tuesday?.length !== 2
+    invitedPlanMember.data()?.responsesByWindow?.cinema_tuesday?.length !== 1
   ) {
-    throw new Error('Time-plan response did not preserve a split availability.');
+    throw new Error('Time-plan response did not preserve the selected availability range.');
   }
   const responseUpdatedAt = invitedPlanMember.data()?.updatedAt?.toMillis?.();
   await expectOk('an identical time-plan response is a no-op', () =>
     callFunction(invitedCandidate.token, 'respondToTimePlan', {
       planId: timePlanId,
       revision: 1,
-      responsesByWindow: {
-        cinema_tuesday: [
-          {
-            startsAt: planStart.toISOString(),
-            endsAt: new Date(planStart.getTime() + 60 * 60 * 1000).toISOString(),
-          },
-          {
-            startsAt: new Date(planStart.getTime() + 2 * 60 * 60 * 1000).toISOString(),
-            endsAt: planEnd.toISOString(),
-          },
-        ],
-      },
+      responsesByWindow: updatedTimePlanResponses,
     }),
   );
   const repeatedPlanMember = await db
@@ -2665,7 +3116,7 @@ async function main() {
   if (repeatedPlanMember.data()?.updatedAt?.toMillis?.() !== responseUpdatedAt) {
     throw new Error('An identical time-plan response caused an unnecessary member write.');
   }
-  console.log('OK time plans are invitation-private, idempotent, and interval-bounded');
+  console.log('OK time plans are projection-private, idempotent, and interval-bounded');
 
   const cleanupCutoff = admin.firestore.Timestamp.fromMillis(Date.now());
   await db

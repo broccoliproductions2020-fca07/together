@@ -1,10 +1,10 @@
 import { useMemo } from 'react';
+import type { SharedValue } from 'react-native-reanimated';
 
 import { TimeRangePicker } from '@/shared/components/time-range-picker';
 import type { TimeRangePickerDensity } from '@/shared/components/time-range-picker';
 
 import type { TimeBandDensity } from './timeBandGeometry';
-import type { TimeBandProps } from './TimeBand';
 
 /**
  * The composer's single time band: `TimeRangePicker` wearing the props the
@@ -37,6 +37,18 @@ const DENSITY: Record<TimeBandDensity, TimeRangePickerDensity> = {
   compact: 'compact',
 };
 
+interface ActivityTimeBandProps {
+  startMs: number;
+  endMs: number;
+  accent: string;
+  accentSequence?: readonly [string, string];
+  accentProgress?: SharedValue<number>;
+  nowMs: number;
+  minDurationMinutes?: number;
+  density?: TimeBandDensity;
+  onChange: (span: { startMs: number; endMs: number }) => void;
+}
+
 export function ActivityTimeBand({
   startMs,
   endMs,
@@ -47,7 +59,7 @@ export function ActivityTimeBand({
   minDurationMinutes,
   density = 'regular',
   onChange,
-}: TimeBandProps) {
+}: ActivityTimeBandProps) {
   // Rebuilt every render, which is safe on purpose: the picker keys its work on
   // the millisecond values, never on Date identity.
   const value = useMemo(
